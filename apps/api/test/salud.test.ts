@@ -1,32 +1,27 @@
-import type { Server } from 'node:http';
-import type { INestApplication } from '@nestjs/common';
-import { Test } from '@nestjs/testing';
-import request from 'supertest';
+import { respuestaSaludSchema } from '@conecta/shared';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { AppModule } from '../src/app.module.js';
-import { configurarApp } from '../src/app.js';
+import { crearPrueba, esperarError, segun, type Prueba } from './ayudas.js';
 
 describe('GET /api/v1/salud', () => {
-  let app: INestApplication;
+  let prueba: Prueba;
 
   beforeAll(async () => {
-    const modulo = await Test.createTestingModule({ imports: [AppModule] }).compile();
-    app = configurarApp(modulo.createNestApplication());
-    await app.init();
+    prueba = await crearPrueba();
   });
-
-  const servidor = (): Server => app.getHttpServer() as Server;
 
   afterAll(async () => {
-    await app.close();
+    await prueba.cerrar();
   });
 
-  it('responde { ok: true }', async () => {
-    const respuesta = await request(servidor()).get('/api/v1/salud').expect(200);
-    expect(respuesta.body).toEqual({ ok: true });
+  it('responde { ok: true } sin sesión', async () => {
+    const respuesta = await prueba.pedir('get', '/salud').expect(200);
+    expect(segun(respuestaSaludSchema, respuesta.body)).toEqual({ ok: true });
   });
 
-  it('no expone rutas fuera del prefijo', async () => {
-    await request(servidor()).get('/salud').expect(404);
+  it('no expone rutas fuera del prefijo, y el 404 tiene la forma del contrato', async () => {
+    const { default: request } = await import('supertest');
+    const respuesta = await request(prueba.servidor()).get('/salud').expect(404);
+    expect(respuesta.body).toMatchObject({ codigo: 'no_encontrado' });
+    await esperarError(prueba.pedir('get', '/no-existe'), 404, 'no_encontrado');
   });
 });

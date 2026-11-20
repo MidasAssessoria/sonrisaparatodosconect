@@ -25,5 +25,9 @@ export default defineConfig({
     include: ['test/**/*.test.ts', 'src/**/*.test.ts'],
     environment: 'node',
     setupFiles: ['reflect-metadata'],
+    // Postgres real (embebido en local, DATABASE_URL_TEST en CI), levantado una vez por corrida.
+    globalSetup: ['./test/global-setup.ts'],
+    testTimeout: 30_000,
+    hookTimeout: 120_000,
   },
 });
