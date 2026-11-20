@@ -1,0 +1,26 @@
+packages:
+  - apps/*
+  - packages/*
+
+# pnpm 11: dependencias autorizadas a correr scripts de instalación.
+# strictDepBuilds es true por defecto: cualquier otra que lo pida hace fallar `pnpm install`.
+allowBuilds:
+  esbuild: true
+  '@swc/core': true
+  embedded-postgres: true
+  '@embedded-postgres/windows-x64': true
+  '@embedded-postgres/linux-x64': true
+  '@embedded-postgres/linux-arm64': true
+  '@embedded-postgres/darwin-x64': true
+  '@embedded-postgres/darwin-arm64': true
+
+minimumReleaseAgeExclude:
+  - '@embedded-postgres/darwin-arm64@16.16.0-beta.19'
+  - '@embedded-postgres/darwin-x64@16.16.0-beta.19'
+  - '@embedded-postgres/linux-arm64@16.16.0-beta.19'
+  - '@embedded-postgres/linux-arm@16.16.0-beta.19'
+  - '@embedded-postgres/linux-ia32@16.16.0-beta.19'
+  - '@embedded-postgres/linux-ppc64@16.16.0-beta.19'
+  - '@embedded-postgres/linux-x64@16.16.0-beta.19'
+  - '@embedded-postgres/windows-x64@16.16.0-beta.19'
+  - embedded-postgres@16.16.0-beta.19
