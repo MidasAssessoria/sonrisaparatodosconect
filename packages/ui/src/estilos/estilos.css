@@ -1,0 +1,5 @@
+/* @conecta/ui — punto de entrada de estilos: fuentes + tokens + base + componentes + armazón. */
+@import './fuentes.css';
+@import './tokens.css';
+@import './componentes.css';
+@import './marco-app.css';

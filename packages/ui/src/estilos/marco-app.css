@@ -1,0 +1,138 @@
+/* ---------- MarcoApp: armazón responsivo (README «Layout») ----------
+ * Celular (< 768px): BarraSuperior compacta arriba, contenido, acción principal fija y BarraInferior fija.
+ * Escritorio y tablet (≥ 768px): BarraLateral (248px) + BarraSuperior + contenido hasta contenido-max.
+ */
+.cn-marco {
+  position: relative;
+  min-height: 100vh;
+  min-height: 100dvh;
+  background: var(--crema);
+  color: var(--tinta);
+  font-family: var(--font-sans);
+}
+.cn-marco__lateral {
+  display: none;
+}
+.cn-marco__principal {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+.cn-marco__superior {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+}
+.cn-marco__contenido {
+  flex: 1;
+  width: 100%;
+  padding: var(--espacio-4) var(--espacio-4)
+    calc(var(--barra-inferior) + env(safe-area-inset-bottom, 0px) + var(--espacio-6));
+}
+.cn-marco__contenido:focus {
+  outline: none;
+}
+.cn-marco--con-accion .cn-marco__contenido {
+  padding-bottom: calc(
+    var(--barra-inferior) + env(safe-area-inset-bottom, 0px) + var(--control-grande) +
+      var(--espacio-8)
+  );
+}
+.cn-marco__ancho {
+  width: 100%;
+  max-width: var(--contenido-max);
+  margin: 0 auto;
+}
+.cn-marco__accion-movil {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: calc(var(--barra-inferior) + env(safe-area-inset-bottom, 0px));
+  z-index: 29;
+  padding: var(--espacio-3) var(--espacio-4);
+  background: var(--crema);
+  border-top: 1px solid var(--borde);
+}
+
+/* En el celular la barra superior va compacta (sin ES · GN, que pasa a «Más»). */
+@media (max-width: 767.98px) {
+  .cn-marco .cn-superior {
+    gap: var(--espacio-2);
+    min-height: 64px;
+    padding: var(--espacio-2) var(--espacio-4);
+  }
+  .cn-marco .cn-superior__acciones {
+    gap: var(--espacio-1);
+  }
+  .cn-marco .cn-superior .cn-idioma {
+    display: none;
+  }
+  .cn-marco .cn-superior .cn-marca {
+    display: none;
+  }
+  .cn-marco .cn-superior__perfil {
+    padding: 0 var(--espacio-1);
+  }
+}
+
+@media (min-width: 768px) {
+  .cn-marco {
+    display: grid;
+    grid-template-columns: var(--barra-lateral) minmax(0, 1fr);
+  }
+  .cn-marco__lateral {
+    display: block;
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    height: 100dvh;
+    overflow-y: auto;
+  }
+  .cn-marco__lateral .cn-lateral {
+    min-height: 100%;
+  }
+  .cn-marco__contenido {
+    padding: var(--espacio-6) var(--espacio-6) var(--espacio-8);
+  }
+  .cn-marco--con-accion .cn-marco__contenido {
+    padding-bottom: var(--espacio-8);
+  }
+  .cn-marco__inferior,
+  .cn-marco__accion-movil {
+    display: none;
+  }
+}
+
+@media (min-width: 1280px) {
+  .cn-marco__contenido {
+    padding: var(--espacio-8);
+  }
+}
+
+/* Encabezado de página: título a la izquierda; MenuExportar y la acción primaria a la derecha. */
+.cn-encabezado {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--espacio-3) var(--espacio-4);
+  margin-bottom: var(--espacio-6);
+}
+.cn-encabezado__titulo {
+  margin: 0;
+  font: var(--tipo-titulo-pagina-movil);
+  color: var(--tinta);
+}
+.cn-encabezado__acciones {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--espacio-2);
+}
+@media (min-width: 768px) {
+  .cn-encabezado__titulo {
+    font: var(--tipo-titulo-pagina);
+  }
+}

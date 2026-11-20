@@ -3,11 +3,26 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "sideEffects": [
+    "**/*.css"
+  ],
   "exports": {
     ".": {
       "@conecta/source": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./estilos.css": {
+      "@conecta/source": "./src/estilos/estilos.css",
+      "default": "./dist/estilos/estilos.css"
+    },
+    "./tokens.css": {
+      "@conecta/source": "./src/estilos/tokens.css",
+      "default": "./dist/estilos/tokens.css"
+    },
+    "./fuentes.css": {
+      "@conecta/source": "./src/estilos/fuentes.css",
+      "default": "./dist/estilos/fuentes.css"
     }
   },
   "files": [
@@ -16,12 +31,19 @@
   "scripts": {
     "lint": "eslint .",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run --passWithNoTests",
-    "build": "tsc -p tsconfig.build.json"
+    "test": "vitest run",
+    "tokens": "node scripts/generar-tokens.mjs",
+    "build": "node scripts/generar-tokens.mjs --verificar && node scripts/build.mjs limpiar && tsc -p tsconfig.build.json && node scripts/build.mjs copiar"
   },
   "devDependencies": {
+    "@testing-library/dom": "^10.4.2",
+    "@testing-library/jest-dom": "^8.0.0",
+    "@testing-library/react": "^16.3.3",
     "@types/react": "^18.3.31",
+    "@types/react-dom": "^18.3.7",
+    "jsdom": "^31.0.1",
     "react": "18.3.1",
+    "react-dom": "18.3.1",
     "vitest": "^5.1.1"
   },
   "peerDependencies": {
