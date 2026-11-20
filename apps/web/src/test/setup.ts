@@ -4,4 +4,9 @@ import { afterEach } from 'vitest';
 
 afterEach(() => {
   cleanup();
+  try {
+    window.localStorage.clear();
+  } catch {
+    // sin almacenamiento
+  }
 });

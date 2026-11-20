@@ -1,0 +1,124 @@
+import { Boton, EstadoVacio } from '@conecta/ui';
+import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router';
+import { Armazon, RUTA_SEGURIDAD } from './armazon/Armazon.js';
+import { RutaModulo } from './armazon/RutaModulo.js';
+import { Candado } from './componentes/estados.js';
+import { useTextos } from './i18n/idioma.js';
+import { modulosVisibles } from './modulos.js';
+import { Acceso } from './paginas/acceso/Acceso.js';
+import { ElegirClinica } from './paginas/acceso/ElegirClinica.js';
+import { NuevaClave } from './paginas/acceso/NuevaClave.js';
+import { PantallaCarga, PantallaErrorSesion } from './paginas/acceso/PantallasEstado.js';
+import { Recuperar } from './paginas/acceso/Recuperar.js';
+import { SegundoFactor } from './paginas/acceso/SegundoFactor.js';
+import { Auditoria } from './paginas/auditoria/Auditoria.js';
+import { Inicio } from './paginas/Inicio.js';
+import { DetalleSede } from './paginas/sedes/DetalleSede.js';
+import { ListaSedes } from './paginas/sedes/ListaSedes.js';
+import { Seguridad } from './paginas/Seguridad.js';
+import { RUTA_NUEVA_CLAVE, useSesion, useSesionLista } from './sesion/ProveedorSesion.js';
+
+interface EstadoDesde {
+  desde?: string;
+}
+
+/** «/» : Inicio si el rol lo ve; si no, el primer módulo que pueda ver. */
+function RutaRaiz() {
+  const { puede } = useSesionLista();
+  if (puede('inicio', 'ver')) return <Inicio />;
+  const primero = modulosVisibles(puede)[0];
+  if (primero) return <Navigate to={primero.ruta} replace />;
+  return <Candado />;
+}
+
+function NoEncontrada() {
+  const t = useTextos();
+  const navegar = useNavigate();
+  return (
+    <EstadoVacio
+      titulo="No encontramos esta página."
+      texto="Puede que el enlace esté mal escrito o que la página ya no exista."
+      accion={
+        <Boton variante="primario" icono="inicio" onClick={() => void navegar('/')}>
+          {t.comun.irAlInicio}
+        </Boton>
+      }
+    />
+  );
+}
+
+/** Vuelve a donde quería ir la persona antes de ingresar. */
+function VolverTrasIngresar() {
+  const desde = (useLocation().state as EstadoDesde | null)?.desde;
+  return <Navigate to={desde && !desde.startsWith('/acceso') ? desde : '/'} replace />;
+}
+
+function IrAAcceso() {
+  const ubicacion = useLocation();
+  const estado: EstadoDesde = { desde: ubicacion.pathname + ubicacion.search };
+  return <Navigate to="/acceso" replace state={estado} />;
+}
+
+export function Rutas() {
+  const t = useTextos();
+  const { estado } = useSesion();
+
+  switch (estado.fase) {
+    case 'iniciando':
+      return <PantallaCarga texto={t.comun.cargando} />;
+    case 'cargando_sesion':
+      return <PantallaCarga texto={t.armazon.cargandoSesion} />;
+    case 'segundo_factor':
+      return <SegundoFactor />;
+    case 'elegir_clinica':
+      return <ElegirClinica />;
+    case 'recuperacion':
+      return <NuevaClave />;
+    case 'error':
+      return <PantallaErrorSesion mensaje={estado.mensaje} />;
+    case 'sin_sesion':
+      return (
+        <Routes>
+          <Route path="/acceso" element={<Acceso />} />
+          <Route path="/acceso/recuperar" element={<Recuperar />} />
+          <Route path={RUTA_NUEVA_CLAVE} element={<NuevaClave />} />
+          <Route path="*" element={<IrAAcceso />} />
+        </Routes>
+      );
+    case 'lista':
+      return (
+        <Armazon>
+          <Routes>
+            <Route path="/" element={<RutaRaiz />} />
+            <Route
+              path="/sedes"
+              element={
+                <RutaModulo modulo="sedes">
+                  <ListaSedes />
+                </RutaModulo>
+              }
+            />
+            <Route
+              path="/sedes/:id"
+              element={
+                <RutaModulo modulo="sedes">
+                  <DetalleSede />
+                </RutaModulo>
+              }
+            />
+            <Route
+              path="/auditoria"
+              element={
+                <RutaModulo modulo="auditoria">
+                  <Auditoria />
+                </RutaModulo>
+              }
+            />
+            <Route path={RUTA_SEGURIDAD} element={<Seguridad />} />
+            <Route path="/acceso/*" element={<VolverTrasIngresar />} />
+            <Route path="*" element={<NoEncontrada />} />
+          </Routes>
+        </Armazon>
+      );
+  }
+}

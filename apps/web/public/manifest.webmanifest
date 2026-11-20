@@ -1,0 +1,24 @@
+{
+  "name": "Sonrisa Para Todos Conecta",
+  "short_name": "Conecta",
+  "description": "Gestión de clínicas odontológicas",
+  "lang": "es-PY",
+  "dir": "ltr",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#fff7e9",
+  "theme_color": "#18bfb0",
+  "icons": [
+    { "src": "/iconos/icono-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/iconos/icono-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    {
+      "src": "/iconos/icono-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    { "src": "/iconos/icono.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}
