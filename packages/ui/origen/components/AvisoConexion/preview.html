@@ -1,0 +1,16 @@
+<!-- @dsCard group="Estado" height=200 -->
+<!doctype html>
+<html lang="es">
+<head><meta charset="utf-8"><title>AvisoConexion — preview</title></head>
+<body>
+<div id="root"></div>
+<script>
+var C = window.Conecta, h = React.createElement;
+ReactDOM.createRoot(document.getElementById('root')).render(
+  h('div', { className: 'cn-demo', style: { maxWidth: 560 } },
+    h(C.AvisoConexion, { estado: 'sin-conexion', pendientes: 4 }),
+    h(C.AvisoConexion, { estado: 'sincronizando' }),
+    h(C.AvisoConexion, { estado: 'sincronizado' })));
+</script>
+</body>
+</html>

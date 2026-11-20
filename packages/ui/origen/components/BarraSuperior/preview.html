@@ -1,0 +1,25 @@
+<!-- @dsCard group="Navegación" height=360 -->
+<!doctype html>
+<html lang="es">
+<head><meta charset="utf-8"><title>BarraSuperior — preview</title></head>
+<body>
+<div id="root"></div>
+<script>
+var C = window.Conecta, h = React.createElement;
+ReactDOM.createRoot(document.getElementById('root')).render(
+  h('div', { style: { minHeight: 340 } },
+    h(C.BarraSuperior, {
+      idioma: 'es', sede: 'Sede Centro', notificaciones: 3,
+      usuario: { nombre: 'Lorena Fretes', rol: 'Recepción' },
+      resultados: [
+  { nombre: 'Ana Giménez', documento: 'CI 0.000.001', telefono: '0981 000 001', alerta: 'Alergia' },
+  { nombre: 'Mateo Giménez', documento: 'CI 0.000.002', telefono: '0981 000 001', alerta: 'Látex' },
+  { nombre: 'Lucía Benítez', documento: 'CI 0.000.003', telefono: '0982 000 003' },
+  { nombre: 'Carlos Ayala', documento: 'CI 0.000.004', telefono: '0983 000 004' },
+  { nombre: 'Rosa Duarte', documento: 'CI 0.000.005', telefono: '0984 000 005' }
+]
+    }),
+    h('p', { style: { padding: '16px 24px', color: 'var(--tinta-suave)', fontSize: 14 } }, 'Escribí «Gim» en el buscador para ver resultados.')));
+</script>
+</body>
+</html>

@@ -1,0 +1,16 @@
+<!-- @dsCard group="Estado" height=240 -->
+<!doctype html>
+<html lang="es">
+<head><meta charset="utf-8"><title>AlertaClinica — preview</title></head>
+<body>
+<div id="root"></div>
+<script>
+var C = window.Conecta, h = React.createElement;
+ReactDOM.createRoot(document.getElementById('root')).render(
+  h('div', { className: 'cn-demo' },
+    h(C.AlertaClinica, { alertas: [{ tipo: 'alergia', texto: 'Alergia a la penicilina' }, { tipo: 'condicion', texto: 'Diabetes' }] }),
+    h(C.AlertaClinica, { compacta: true, alertas: [{ tipo: 'alergia', texto: 'Alergia al látex' }] }),
+    h(C.AlertaClinica, { alertas: [] })));
+</script>
+</body>
+</html>

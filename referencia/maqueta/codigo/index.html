@@ -1,0 +1,319 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Odontograma 3D · Sonrisa Para Todos Conecta</title>
+<meta name="description" content="Maqueta de concepto: odontograma 3D interactivo, adulto y pediátrico.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='30' fill='%232E9BEC'/%3E%3Cpath d='M20 20c6-4 9 0 12 0s6-4 12 0c5 4 2 12 0 18-1 5-2 12-5 12-4 0-3-10-7-10s-3 10-7 10c-3 0-4-7-5-12-2-6-5-14 0-18z' fill='%23fff'/%3E%3C/svg%3E">
+<style>
+@font-face{font-family:Fredoka;src:url(fonts/Fredoka.woff2) format('woff2');font-weight:300 700;font-display:swap}
+@font-face{font-family:Hanken;src:url(fonts/Hanken.woff2) format('woff2');font-weight:100 900;font-display:swap}
+:root{
+  --tinta:#232036;--tinta2:#5E5878;--borde:#D9D3E6;--suave:#F1EFF6;--cielo:#2E9BEC;
+  --caries:#16161A;--ext:#1A5FB4;--per:#D7262B;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%;overflow:hidden;font-family:Hanken,system-ui,sans-serif;color:var(--tinta);
+  background:radial-gradient(circle at 50% 50%,#2A3B5C 0%,#162038 55%,#0B1222 100%)}
+#app{position:fixed;inset:0;display:grid;grid-template-rows:auto auto minmax(0,1fr) auto;grid-template-columns:minmax(0,1fr)}
+[hidden]{display:none!important}
+header{display:flex;align-items:center;gap:16px;padding:14px 20px 12px;background:#fff;box-shadow:0 2px 0 #E6E2EF;flex-wrap:wrap}
+.kicker{font:800 11px Hanken;letter-spacing:.2em;color:var(--tinta2);text-transform:uppercase}
+h1{margin:2px 0 0;font:700 26px/1.05 Fredoka;letter-spacing:-.01em}
+h1 span{color:var(--tinta2);font-weight:500}
+.grow{flex:1}
+.seg{display:flex;gap:4px;background:var(--suave);border-radius:14px;padding:4px}
+.seg button{border:0;background:transparent;font:700 14px Hanken;color:#4A4666;padding:9px 14px;border-radius:10px;cursor:pointer;white-space:nowrap}
+.seg button small{font-weight:500;opacity:.9}
+.seg button.on{background:var(--tinta);color:#fff}
+#escena{position:relative;isolation:isolate;min-height:0;overflow:hidden}
+#escena canvas{display:block;touch-action:none;position:absolute;left:0;top:0}
+#rotulos{position:absolute;inset:0;pointer-events:none}
+.v-completo .num{min-width:23px;height:23px;font-size:11.5px;border-width:1.5px;padding:0 2px}
+.num{font:700 13px Hanken;color:var(--tinta);background:#fff;border:2px solid var(--borde);border-radius:999px;
+  min-width:30px;height:30px;display:flex;align-items:center;justify-content:center;padding:0 4px;transition:all .2s}
+.num.car{border-color:var(--caries)}
+.num.ext{border-color:var(--ext);color:var(--ext)}
+.num.per{border-color:var(--per)}
+.lado{font:800 12px Hanken;letter-spacing:.22em;color:#4A4666;background:rgba(255,255,255,.85);padding:6px 12px;border-radius:999px;border:2px solid var(--borde);white-space:nowrap}
+footer{background:#fff;box-shadow:0 -2px 0 #E6E2EF;padding:10px 16px calc(10px + env(safe-area-inset-bottom))}
+.herr{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.herr .t{font:800 11px Hanken;letter-spacing:.18em;color:var(--tinta2);margin-right:2px}
+.tool{display:flex;align-items:center;gap:8px;padding:9px 14px;border-radius:12px;background:#fff;border:0;
+  box-shadow:inset 0 0 0 2px var(--borde);font:700 15px Hanken;color:var(--tinta);cursor:pointer}
+.tool.on{box-shadow:inset 0 0 0 3px var(--cielo);background:#EEF6FD}
+.tool svg{flex:none}
+.clases{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:8px}
+.clases button{border:0;background:var(--suave);border-radius:10px;font:800 13px Hanken;color:#4A4666;padding:7px 11px;cursor:pointer;min-width:38px}
+.clases button.on{background:var(--caries);color:#fff}
+.clases .exp{font:500 13px Hanken;color:var(--tinta2);margin-left:4px}
+.clases.oculto{display:none}
+.res{display:flex;gap:14px;flex-wrap:wrap;margin-top:8px;font:500 13px Hanken;color:var(--tinta2);align-items:center}
+.res b{color:var(--tinta)}
+.res .dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:5px;vertical-align:-1px}
+.mini{border:0;background:transparent;font:700 13px Hanken;color:var(--cielo);cursor:pointer;padding:4px 6px}
+.nota{font:500 11px Hanken;color:var(--tinta2)}
+#ayuda{position:absolute;left:12px;top:12px;font:600 13px Hanken;color:#4A4666;background:rgba(255,255,255,.92);
+  border:2px solid var(--borde);border-radius:999px;padding:7px 14px;white-space:nowrap;pointer-events:none;transition:opacity .6s}
+#toast{position:absolute;left:50%;bottom:14px;transform:translate(-50%,20px);opacity:0;background:var(--tinta);color:#fff;font:600 14px Hanken;
+  padding:10px 16px;border-radius:12px;transition:all .25s;pointer-events:none;white-space:nowrap;max-width:94vw;overflow:hidden;text-overflow:ellipsis}
+#toast.ver{opacity:1;transform:translate(-50%,0)}
+#tip{position:fixed;pointer-events:none;background:#fff;border:2px solid var(--borde);border-radius:10px;padding:6px 10px;font:600 13px Hanken;color:var(--tinta);display:none;z-index:5}
+#acc{position:absolute;right:12px;top:12px;pointer-events:auto;display:flex;gap:6px;z-index:3}
+.btnc{border:2px solid var(--borde);background:#fff;border-radius:999px;font:700 13px Hanken;color:#4A4666;padding:7px 12px;cursor:pointer}
+@media (min-width:761px){
+  .v-completo .lado{font-size:11px;padding:3px 11px;border-width:1.5px;letter-spacing:.2em}
+  .v-completo #ayuda{top:6px;left:10px;font-size:12px;padding:4px 12px;border-width:1.5px}
+  .v-completo #acc{top:6px;right:10px}
+  .v-completo #acc .btnc{font-size:12px;padding:4px 11px;border-width:1.5px}
+}
+@media screen and (max-width:760px){
+  .clases button{padding:6px 9px;min-width:34px}
+  .clases .exp{width:100%;margin:2px 0 0;font-size:12px}
+  header{padding:10px 12px 8px;gap:8px}
+  h1{font-size:21px}
+  .kicker{font-size:10px}
+  .seg{width:100%}
+  .seg button{padding:7px 6px;font-size:12.5px;flex:1}
+  .herr{flex-wrap:nowrap;overflow-x:auto}
+  .tool{flex:none}
+  .grow{display:none}
+  .head-txt{width:100%}
+  .tool{padding:8px 10px;font-size:14px;gap:6px}
+  .herr .t{display:none}
+  #ayuda{display:none}
+  .res{max-height:52px;overflow-y:auto}
+  .res{gap:10px;font-size:12px}
+  .num{min-width:24px;height:24px;font-size:11px;border-width:1.5px}
+  .lado{font-size:10px;padding:4px 9px}
+}
+
+/* ---------- v3: barra de paciente, ficha, ventanas, comparar, hoja impresa ---------- */
+#barra{display:flex;gap:8px;align-items:center;padding:7px 16px;background:#F8F7FB;box-shadow:0 1px 0 #E6E2EF;overflow-x:auto;white-space:nowrap;scrollbar-width:thin}
+#barra .sep{flex:none;width:1px;height:22px;background:var(--borde);margin:0 2px}
+#barra label{display:flex;align-items:center;gap:6px;font:800 11px Hanken;letter-spacing:.14em;color:var(--tinta2);text-transform:uppercase;flex:none}
+#barra select{font:700 14px Hanken;color:var(--tinta);border:2px solid var(--borde);border-radius:10px;padding:6px 8px;background:#fff;max-width:230px;min-width:0}
+.btnb{flex:none;border:2px solid var(--borde);background:#fff;border-radius:10px;font:700 13.5px Hanken;color:#3B3756;padding:6px 11px;cursor:pointer;white-space:nowrap}
+.btnb:hover{border-color:#B9B1D2}
+.btnb.pri{background:var(--tinta);border-color:var(--tinta);color:#fff}
+.btnb b{background:var(--cielo);color:#fff;border-radius:999px;padding:0 6px;margin-left:4px;font-size:12px}
+.btnb.peligro{color:#B3121B}
+#medio{position:relative;display:flex;min-height:0;min-width:0}
+#medio #escena{flex:1 1 auto;min-width:0}
+#panel{flex:none;width:370px;background:#fff;box-shadow:-2px 0 0 #E6E2EF;display:flex;flex-direction:column;min-height:0;z-index:6;position:relative}
+.p-cab{display:flex;align-items:center;gap:12px;padding:12px 14px;border-bottom:2px solid var(--suave)}
+.p-num{font:700 28px Fredoka;background:var(--tinta);color:#fff;border-radius:14px;min-width:56px;height:52px;display:flex;align-items:center;justify-content:center}
+.p-tit{flex:1;min-width:0;display:flex;flex-direction:column;line-height:1.25}
+.p-tit b{font:700 17px Fredoka}
+.p-tit span{font:500 12.5px Hanken;color:var(--tinta2)}
+.p-x{border:0;background:var(--suave);width:40px;height:40px;border-radius:12px;font:500 26px/1 Hanken;color:var(--tinta);cursor:pointer}
+.p-cuerpo{overflow-y:auto;padding:4px 14px 18px;flex:1;-webkit-overflow-scrolling:touch}
+#panel h3,.m-form h3,.cmp-lista h3{font:800 11px Hanken;letter-spacing:.16em;color:var(--tinta2);text-transform:uppercase;margin:16px 0 8px}
+.p-marcas{margin:0;padding-left:18px;font:600 14px Hanken}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.chip{display:flex;align-items:center;gap:6px;border:0;box-shadow:inset 0 0 0 2px var(--borde);background:#fff;border-radius:999px;padding:6px 11px;font:700 12.5px Hanken;color:var(--tinta);cursor:pointer}
+.chip.on{box-shadow:inset 0 0 0 3px var(--cielo);background:#EEF6FD}
+.dot{display:inline-block;width:10px;height:10px;border-radius:50%;flex:none}
+.hist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+.hist li{background:var(--suave);border-radius:12px;padding:9px 11px;font:500 13.5px/1.35 Hanken}
+.hist .hf{display:flex;justify-content:space-between;align-items:center}
+.hist .et{display:inline-block;min-width:86px;font:800 10px Hanken;letter-spacing:.1em;text-transform:uppercase;color:var(--tinta2)}
+.hist .hn{color:#4A4666}
+.p-form{border-top:2px solid var(--suave);margin-top:14px}
+.m-campo{display:flex;flex-direction:column;gap:4px;margin:0 0 10px;min-width:0}
+.m-campo>span{font:800 11px Hanken;letter-spacing:.1em;text-transform:uppercase;color:var(--tinta2)}
+input[type=text],input[type=date],input[type=datetime-local],textarea,.m-campo select{font:500 15px Hanken;color:var(--tinta);border:2px solid var(--borde);border-radius:10px;padding:9px 10px;background:#fff;width:100%;min-width:0;max-width:100%}
+textarea{resize:vertical}
+input:focus,textarea:focus,select:focus{outline:3px solid #BFE0FA;border-color:var(--cielo)}
+.btnp{border:0;background:var(--cielo);color:#fff;font:700 15px Hanken;border-radius:12px;padding:11px 16px;cursor:pointer}
+.btnp.peligro{background:#C4161F}
+.p-form .btnp{width:100%}
+.p-err{color:#B3121B;font:600 13px Hanken;min-height:0}
+.p-err:empty{display:none}
+.num{position:relative}
+.num.sel{box-shadow:0 0 0 3px var(--cielo)}
+.num.aus{border-color:#6B7280;color:#6B7280;border-style:dashed}
+.num .pts{position:absolute;left:50%;bottom:-6px;transform:translateX(-50%);display:flex;gap:2px}
+.num .pts i{width:7px;height:7px;border-radius:50%;border:1px solid #fff;display:block}
+#volver{position:absolute;left:50%;top:12px;transform:translateX(-50%);z-index:4;background:var(--tinta);color:#fff;border:0;box-shadow:0 4px 14px rgba(0,0,0,.35)}
+#bFicha{display:flex;align-items:center;gap:6px;background:var(--cielo);color:#fff;border-color:var(--cielo)}
+#modal{position:fixed;inset:0;z-index:40;display:flex;align-items:center;justify-content:center;padding:12px}
+#mfondo{position:absolute;inset:0;background:rgba(11,18,34,.62)}
+#mcaja{position:relative;background:#fff;border-radius:18px;width:min(520px,100%);max-height:calc(100% - 8px);display:flex;flex-direction:column;box-shadow:0 18px 60px rgba(0,0,0,.45)}
+#modal[data-ancho=ancho] #mcaja{width:min(1180px,100%)}
+.mcab{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:2px solid var(--suave)}
+.mcab h2{margin:0;font:700 20px Fredoka}
+#mcerrar{border:0;background:var(--suave);width:40px;height:40px;border-radius:12px;font:500 26px/1 Hanken;cursor:pointer;color:var(--tinta)}
+#mcuerpo{padding:14px 16px 18px;overflow:auto;-webkit-overflow-scrolling:touch}
+#mcuerpo p{margin:0 0 12px;font:500 14.5px/1.45 Hanken}
+.m-fila{display:flex;gap:10px;justify-content:flex-end;margin-top:6px}
+.cons{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+.cons li{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;background:var(--suave);border-radius:12px;padding:10px 12px;font:500 14px Hanken}
+.cons .mot{color:var(--tinta2)}
+.cons-b{display:flex;gap:6px;flex-wrap:wrap}
+.ley{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:8px 14px}
+.ley-item{display:flex;gap:10px;align-items:flex-start;font:500 13.5px/1.3 Hanken}
+.ley-ic{flex:none;width:34px;height:34px;border-radius:10px;background:var(--suave);display:flex;align-items:center;justify-content:center}
+.ley-d{color:var(--tinta2);font-size:12.5px;margin-top:1px}
+.cmp-ctrl{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:4px 12px;align-items:end}
+.cmp-ctrl .btnc{margin-bottom:10px}
+.mini-seg{align-self:start}
+.mini-seg button{padding:7px 10px;font-size:13px}
+.cmp-figs{display:grid;gap:12px;margin:6px 0 4px}
+.cmp-figs.lado{grid-template-columns:1fr 1fr}
+.cmp-figs.alt{grid-template-columns:1fr}
+.cmp-figs.alt.ver-a .b,.cmp-figs.alt.ver-b .a{display:none}
+.cmp-f{margin:0;background:#0B1222;border-radius:12px;overflow:hidden}
+.cmp-f figcaption{background:var(--tinta);color:#fff;font:700 12.5px Hanken;padding:6px 10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cmp-f img{display:block;width:100%;height:auto}
+.cmp-ul{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:8px}
+.cmp-ul li{background:var(--suave);border-radius:10px;padding:8px 10px;font:500 13.5px/1.35 Hanken}
+.ant{color:#6B6585;text-decoration:line-through}
+.des{font-weight:700}
+#previa{position:fixed;inset:0;z-index:50;background:#4B5060;overflow:auto;-webkit-overflow-scrolling:touch}
+.pv-barra{position:sticky;top:0;z-index:2;display:flex;gap:10px;align-items:center;padding:10px 16px;background:var(--tinta);color:#fff;font:700 14px Hanken}
+.pv-barra span{flex:1}
+.hoja{background:#fff;color:#16161A;width:min(210mm,100%);margin:16px auto;padding:12mm;box-shadow:0 8px 40px rgba(0,0,0,.4);font:400 12px/1.4 Hanken}
+.hoja h2{font:800 11px Hanken;letter-spacing:.18em;text-transform:uppercase;color:#4A4666;margin:14px 0 6px;border-bottom:1px solid #D9D3E6;padding-bottom:3px}
+.h-cab{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:3px solid #2E9BEC;padding-bottom:8px}
+.h-marca{font:700 26px/1.05 Fredoka;color:#232036}
+.h-sub{font:600 12px Hanken;color:#5E5878;letter-spacing:.04em}
+.h-fecha{font:600 12px Hanken;color:#5E5878;text-align:right}
+.h-pac{display:grid;grid-template-columns:repeat(3,1fr);gap:6px 14px;margin-top:10px}
+.h-d span{display:block;font:800 9.5px Hanken;letter-spacing:.12em;text-transform:uppercase;color:#6B6585}
+.h-d b{font:600 13px Hanken}
+.h-fig{margin:0}
+.h-fig img{display:block;width:100%;height:auto;border-radius:6px}
+.h-fig figcaption{font:500 10.5px Hanken;color:#6B6585;margin-top:3px}
+.h-dos{display:grid;grid-template-columns:1.05fr 1fr;gap:14px;align-items:start}
+.hoja .ley{grid-template-columns:1fr;gap:5px}
+.hoja .ley-item{font-size:11.5px;gap:8px}
+.hoja .ley-ic{width:26px;height:26px;border-radius:7px;background:#F1EFF6}
+.hoja .ley-ic svg{width:20px;height:20px}
+.hoja .ley-d{font-size:10.5px}
+.h-tab{width:100%;border-collapse:collapse;font-size:11.5px}
+.h-tab th{text-align:left;font:800 9.5px Hanken;letter-spacing:.1em;text-transform:uppercase;color:#6B6585;border-bottom:2px solid #232036;padding:4px 6px}
+.h-tab td{vertical-align:top;border-bottom:1px solid #E6E2EF;padding:5px 6px}
+.h-tab .t-f{width:26%}
+.h-tab .t-f b{font:700 15px Fredoka}
+.h-tab .t-f div{font-size:10.5px;color:#5E5878}
+.h-tab .t-h{margin-bottom:2px}
+.h-tab .gris{color:#8B87A0}
+.h-pie{margin-top:14px;padding-top:6px;border-top:1px solid #D9D3E6;font:500 10px Hanken;color:#6B6585}
+.hoja *{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+@page{size:A4 portrait;margin:10mm}
+@media print{
+  html,body{height:auto!important;overflow:visible!important;background:#fff!important}
+  #app,#modal,#tip,.pv-barra{display:none!important}
+  #previa{position:static!important;display:block!important;background:#fff!important;overflow:visible!important}
+  .hoja{box-shadow:none;margin:0;padding:0;width:100%}
+  .h-tab tr,.h-fig,.h-dos,.h-pac{break-inside:avoid}
+  .h-tab thead{display:table-header-group}
+  .hoja h2{break-after:avoid}
+}
+#herr{position:relative}
+.herr[hidden]{display:none}
+.est-btn{display:inline-flex;align-items:center;gap:6px;flex:none;background:#fff;color:#4A4666}
+.est-btn b{color:#D7262B}.est-btn.rea b{color:#1A5FB4}.est-btn.rea{background:#EEF4FD}
+.est{font:800 11.5px Hanken;padding:1px 8px;border-radius:999px;margin-left:6px;white-space:nowrap}
+.est.pend{color:#D7262B;background:#FDECEC}.est.rea{color:#1A5FB4;background:#E8F0FB}
+.p-m{display:flex;flex-wrap:wrap;align-items:center;gap:4px 0;margin:3px 0}.p-est{margin-left:auto}
+.est-res{font-weight:600}
+.hoja .est{margin-left:0;display:inline-block;font-size:10.5px}
+.h-tab .t-e{white-space:nowrap}
+.herr.pat{margin-top:6px;padding-top:6px;border-top:1px dashed #E1DCEC}
+.tool-g{flex:none;border:0;background:#F1ECFA;border-radius:12px;padding:9px 12px;font:800 13px Hanken;letter-spacing:.04em;color:#4A4666;cursor:pointer;box-shadow:inset 0 0 0 2px var(--borde)}
+.tool-g.abierto{background:#E7DDF8}.tool-g .fl{display:inline-block;transition:transform .2s}.tool-g.abierto .fl{transform:rotate(180deg)}
+@media screen and (max-width:760px){
+  #barra{padding:6px 10px;gap:6px}
+  #barra label span{display:none}
+  #barra select{max-width:150px;font-size:13.5px}
+  .btnb{padding:6px 9px;font-size:13px}
+  #panel{position:absolute;left:0;right:0;bottom:0;width:auto;max-height:64%;border-radius:18px 18px 0 0;box-shadow:0 -6px 30px rgba(0,0,0,.4)}
+  .p-cab{padding:8px 12px}
+  .p-num{min-width:48px;height:44px;font-size:24px}
+  #acc{right:8px;top:8px}
+  #acc .btnc{padding:6px 10px;font-size:12.5px}
+  #volver{top:auto;bottom:10px}
+  .cmp-figs.lado{grid-template-columns:1fr}
+  #mcaja{border-radius:14px}
+  .hoja{padding:12px;margin:0 auto;font-size:11px}
+  .h-pac{grid-template-columns:1fr 1fr}
+  .h-dos{grid-template-columns:1fr}
+  .h-marca{font-size:21px}
+  .herr.pat{flex-wrap:wrap;overflow:visible;padding-right:0;-webkit-mask-image:none;mask-image:none}
+  .tool-g{padding:8px 10px;font-size:12.5px}
+  .herr{-webkit-mask-image:linear-gradient(90deg,#000 90%,transparent);mask-image:linear-gradient(90deg,#000 90%,transparent);padding-right:18px}
+}
+</style>
+<script type="importmap">
+{"imports":{"three":"./vendor/three.module.js","three/addons/":"./vendor/addons/"}}
+</script>
+</head>
+<body>
+<div id="app">
+  <header>
+    <div class="head-txt">
+      <div class="kicker">Sonrisa Para Todos Conecta · paciente de ejemplo</div>
+      <h1>Odontograma 3D <span id="subt">· Adulto, 11 al 48</span></h1>
+    </div>
+    <div class="grow"></div>
+    <div class="seg" id="segDent">
+      <button data-d="adulto" class="on">Adulto <small>11–48</small></button>
+      <button data-d="nino">Pediátrico <small>51–85</small></button>
+    </div>
+    <div class="seg" id="segVista">
+      <button data-v="completo">Completo</button>
+      <button data-v="vest">Vestibular</button>
+      <button data-v="ling">Palatina · Lingual</button>
+      <button data-v="arcada">Oclusal</button>
+    </div>
+  </header>
+  <div id="barra" role="toolbar" aria-label="Paciente y consultas">
+    <label><span>Paciente</span><select id="selPac" aria-label="Paciente"></select></label>
+    <button class="btnb" id="bNuevo" type="button">+ Nuevo</button>
+    <button class="btnb" id="bEditar" type="button">Editar</button>
+    <button class="btnb" id="bBorrar" type="button">Eliminar</button>
+    <span class="sep"></span>
+    <button class="btnb pri" id="bGuardarCons" type="button">Guardar consulta</button>
+    <button class="btnb" id="bCons" type="button">Consultas<b id="nCons">0</b></button>
+    <button class="btnb" id="bComparar" type="button">Comparar</button>
+    <button class="btnb" id="bImprimir" type="button">Imprimir / PDF</button>
+  </div>
+  <div id="medio">
+  <div id="escena">
+    <div id="rotulos"></div>
+    <div id="ayuda">Toque: marcar · pulsación larga: ficha · doble toque: zoom</div>
+    <div id="acc">
+      <button id="bFicha" class="btnc" type="button" hidden><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="none" stroke="#fff" stroke-width="1.6"/><circle cx="8" cy="4.6" r="1.1" fill="#fff"/><path d="M8 7v4.6" stroke="#fff" stroke-width="1.8" stroke-linecap="round"/></svg><span id="bFichaN">Ficha</span></button>
+      <button id="bLeyenda" class="btnc" type="button">Leyenda</button>
+      <button id="reset" class="btnc" type="button">Centrar</button>
+    </div>
+    <button id="volver" class="btnc" type="button" hidden>← Volver a la vista general (Esc)</button>
+    <div id="toast"></div>
+  </div>
+  <aside id="panel" hidden aria-label="Ficha del diente"></aside>
+  </div>
+  <footer>
+    <div class="herr" id="herr">
+      <span class="t">MARCAR</span>
+      <button class="tool on" data-t="car"><svg width="20" height="20" viewBox="-10 -10 20 20"><path d="M-7,0 C-7,-6 -1,-8 3,-6 C8,-4 8,4 2,6 C-4,8 -7,4 -7,0Z" fill="#16161A"/></svg>Caries</button>
+      <button class="tool" data-t="ext"><svg width="20" height="20" viewBox="-10 -10 20 20"><g stroke="#1A5FB4" stroke-width="3.6" stroke-linecap="round"><path d="M-7,-7 L7,7"/><path d="M7,-7 L-7,7"/></g></svg>Extracción</button>
+      <button class="tool" data-t="per"><svg width="22" height="20" viewBox="-11 -10 22 20"><path d="M-9,4 Q0,-8 9,4" fill="none" stroke="#D7262B" stroke-width="4" stroke-linecap="round"/></svg>Periodontal</button>
+      <button class="tool" data-t="sano"><svg width="20" height="20" viewBox="-10 -10 20 20"><circle r="7" fill="#fff" stroke="#B3A68C" stroke-width="2"/></svg>Sano</button>
+      <button class="tool" data-t="ficha" title="Toque un diente para abrir su ficha"><svg width="20" height="20" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.6" fill="none" stroke="#2E9BEC" stroke-width="1.8"/><circle cx="8" cy="4.8" r="1.1" fill="#2E9BEC"/><path d="M8 7.2v4.4" stroke="#2E9BEC" stroke-width="1.9" stroke-linecap="round"/></svg>Ficha</button>
+    </div>
+    <div class="clases" id="clases">
+      <button data-c="auto" class="on">Por cara</button><button data-c="I">I</button><button data-c="II">II</button><button data-c="III">III</button><button data-c="IV">IV</button><button data-c="V">V</button>
+      <span class="exp" id="exp">Toque la cara del diente: la clase de Black sale sola.</span>
+    </div>
+    <div class="res" id="res"></div>
+  </footer>
+</div>
+<div id="tip"></div>
+<div id="modal" hidden><div id="mfondo"></div><div id="mcaja" role="dialog" aria-modal="true" aria-labelledby="mtit"><div class="mcab"><h2 id="mtit"></h2><button id="mcerrar" type="button" aria-label="Cerrar">×</button></div><div id="mcuerpo"></div></div></div>
+<div id="previa" hidden><div class="pv-barra"><span>Vista previa de impresión · A4</span><button id="pvImp" class="btnp" type="button">Imprimir / guardar PDF</button><button id="pvCerrar" class="btnc" type="button">Cerrar</button></div><article id="hoja" class="hoja"></article></div>
+<script type="module" src="app.js"></script>
+</body>
+</html>

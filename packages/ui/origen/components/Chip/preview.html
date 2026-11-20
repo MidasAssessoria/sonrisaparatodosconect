@@ -1,0 +1,21 @@
+<!-- @dsCard group="Estado" height=200 -->
+<!doctype html>
+<html lang="es">
+<head><meta charset="utf-8"><title>Chip — preview</title></head>
+<body>
+<div id="root"></div>
+<script>
+var C = window.Conecta, h = React.createElement;
+var T = [['exito','Confirmado'],['atencion','Pendiente'],['progreso','En sala'],['info','Agendado'],['categoria','Endodoncia'],['familia','Pediátrico'],['neutro','Ausente']];
+ReactDOM.createRoot(document.getElementById('root')).render(
+  h('div', { className: 'cn-demo' },
+    h('div', { className: 'cn-demo-fila' }, T.map(function (t) { return h(C.Chip, { key: t[0], tono: t[0] }, t[1]); })),
+    h('div', { className: 'cn-demo-fila' },
+      h(C.Chip, { tono: 'exito', icono: 'mensaje' }, 'WhatsApp confirmado'),
+      h(C.Chip, { tono: 'info', icono: 'mensaje' }, 'Enviado'),
+      h(C.Chip, { tono: 'neutro', icono: 'mensaje' }, 'Sin enviar'),
+      h(C.Chip, { tono: 'atencion' }, 'Nivel bajo'),
+      h(C.Chip, { tono: 'progreso' }, 'Pago parcial'))));
+</script>
+</body>
+</html>

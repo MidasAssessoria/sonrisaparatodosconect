@@ -1,0 +1,17 @@
+{
+  "v": 3,
+  "layout": "files",
+  "createdOnFiles": { "v": 1, "at": "2026-11-20T02:33:12Z" },
+  "title": "Sonrisa Para Todos Conecta",
+  "namespace": "Conecta",
+  "libraries": [
+    { "name": "react", "version": "18.3.1" },
+    { "name": "react-dom", "version": "18.3.1" }
+  ],
+  "sections": {},
+  "groups": [],
+  "assetGroups": {},
+  "blobs": {},
+  "docs": { "readme": "project/README.md", "sections": [] },
+  "lastChange": { "by": "Claude", "at": "2026-11-20T02:33:12Z", "via": "Claude Code", "note": "Sistema inicial a partir de PROMPT-CLAUDE-DESIGN.md" }
+}

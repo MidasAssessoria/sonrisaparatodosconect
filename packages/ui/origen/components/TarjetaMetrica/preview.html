@@ -1,0 +1,16 @@
+<!-- @dsCard group="Datos" height=200 -->
+<!doctype html>
+<html lang="es">
+<head><meta charset="utf-8"><title>TarjetaMetrica — preview</title></head>
+<body>
+<div id="root"></div>
+<script>
+var C = window.Conecta, h = React.createElement;
+ReactDOM.createRoot(document.getElementById('root')).render(
+  h('div', { className: 'cn-demo cn-demo-rejilla' },
+    h(C.TarjetaMetrica, { etiqueta: 'Pacientes atendidos', icono: 'pacientes', valor: '128', cambio: '+12 %', tendencia: 'sube', tono: 'exito', nota: 'vs. mes anterior' }),
+    h(C.TarjetaMetrica, { etiqueta: 'Ingresos del mes', icono: 'caja', valor: 'Gs. 18,4 M', cambio: '+4 %', tendencia: 'sube', tono: 'exito', nota: 'ejemplo' }),
+    h(C.TarjetaMetrica, { etiqueta: 'Turnos ausentes', icono: 'agenda', valor: '9', cambio: '+3', tendencia: 'sube', tono: 'atencion', nota: 'vs. mes anterior' })));
+</script>
+</body>
+</html>

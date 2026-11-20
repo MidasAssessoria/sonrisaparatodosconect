@@ -1,0 +1,19 @@
+<!-- @dsCard group="Pacientes" height=340 -->
+<!doctype html>
+<html lang="es">
+<head><meta charset="utf-8"><title>TarjetaPaciente — preview</title></head>
+<body>
+<div id="root"></div>
+<script>
+var C = window.Conecta, h = React.createElement;
+ReactDOM.createRoot(document.getElementById('root')).render(
+  h('div', { className: 'cn-demo cn-demo-rejilla', style: { gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))' } },
+    h(C.TarjetaPaciente, { nombre: 'Ana Giménez', edad: 34, telefono: '0981 000 001', proximoTurno: 'jue 9:00',
+      chips: [{ tono: 'atencion', texto: 'Penicilina' }, { tono: 'progreso', texto: 'Diabetes', icono: 'info' }] }),
+    h(C.TarjetaPaciente, { nombre: 'Mateo Giménez', edad: 7, telefono: '0981 000 001',
+      chips: [{ tono: 'atencion', texto: 'Látex' }, { tono: 'familia', texto: 'Pediátrico' }] }),
+    h(C.TarjetaPaciente, { nombre: 'Rosa Duarte', edad: 61, telefono: '0984 000 005', chips: [{ tono: 'info', texto: 'Llamar en 2 semanas', icono: 'telefono' }] }),
+    h(C.TarjetaPaciente, { nombre: 'Tomás Villalba', edad: 8, desactivado: true, chips: [{ tono: 'neutro', texto: 'Deshabilitado' }] })));
+</script>
+</body>
+</html>

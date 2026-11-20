@@ -1,0 +1,25 @@
+<!-- @dsCard group="Contenedores" height=480 -->
+<!doctype html>
+<html lang="es">
+<head><meta charset="utf-8"><title>TablaLista — preview</title></head>
+<body>
+<div id="root"></div>
+<script>
+var C = window.Conecta, h = React.createElement;
+var cols = [
+  { clave: 'concepto', titulo: 'Paciente o concepto' },
+  { clave: 'hora', titulo: 'Hora' },
+  { clave: 'forma', titulo: 'Forma de pago' },
+  { clave: 'estado', titulo: 'Estado', render: function (f) { return h(C.Chip, { tono: f.tono }, f.estado); } },
+  { clave: 'monto', titulo: 'Monto (ejemplo)', alinear: 'fin' }];
+var filas = [
+  { id: 1, concepto: 'Ana Giménez', hora: '9:40', forma: 'Transferencia', estado: 'Pago parcial', tono: 'progreso', monto: 'Gs. 300.000' },
+  { id: 2, concepto: 'Carlos Ayala', hora: '10:15', forma: 'Efectivo', estado: 'Pagado', tono: 'exito', monto: 'Gs. 150.000' },
+  { id: 3, concepto: 'Compra de guantes', hora: '11:00', forma: 'Efectivo', estado: 'Egreso', tono: 'neutro', monto: '− Gs. 80.000' }];
+ReactDOM.createRoot(document.getElementById('root')).render(
+  h('div', { className: 'cn-demo' },
+    h(C.TablaLista, { titulo: 'Movimientos de hoy', columnas: cols, filas: filas }),
+    h('div', { style: { maxWidth: 360 } }, h(C.TablaLista, { titulo: 'Movimientos de hoy (móvil)', columnas: cols, filas: filas.slice(0, 1) }))));
+</script>
+</body>
+</html>

@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Reservá tu turno · Sonrisa Para Todos</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='30' fill='%2318BFB0'/%3E%3C/svg%3E">
+<style>
+@font-face{font-family:Fredoka;src:url(fonts/Fredoka.woff2) format('woff2');font-weight:300 700}
+@font-face{font-family:Hanken;src:url(fonts/Hanken.woff2) format('woff2');font-weight:100 900}
+:root{--t:#18BFB0;--tinta:#232036;--crema:#FFF7E9;--sol:#FFC23C;--coral:#FF5D5D;--mut:#6b6880;--line:#ece7dd}
+*{box-sizing:border-box}body{margin:0;background:var(--crema);font-family:Hanken,system-ui,sans-serif;color:var(--tinta)}
+.rv{max-width:480px;margin:0 auto;padding:18px 16px 40px}
+.rv-top{display:flex;align-items:center;gap:10px;margin-bottom:14px}.rv-top .lg{width:40px;height:40px;border-radius:50%;background:var(--t);display:grid;place-items:center}
+.rv-top b{font-family:Fredoka;font-size:20px;display:block}.rv-top span{font-size:13px;color:var(--mut)}
+h1{font-family:Fredoka;font-weight:600;font-size:24px;margin:6px 0 4px}.sub{color:var(--mut);margin:0 0 14px;font-size:15px}
+.steps{display:flex;gap:6px;margin:0 0 16px}.steps i{flex:1;height:5px;border-radius:9px;background:var(--line)}.steps i.on{background:var(--t)}
+.opt{display:flex;align-items:center;gap:12px;width:100%;text-align:left;background:#fff;border:2px solid var(--line);border-radius:16px;padding:14px;margin:0 0 10px;font:inherit;color:inherit;cursor:pointer}
+.opt.sel{border-color:var(--t);background:#e9fbf9}.opt b{display:block;font-size:16px}.opt small{color:var(--mut)}
+.dot{width:14px;height:14px;border-radius:50%;flex:none}
+.days{display:flex;gap:8px;overflow-x:auto;padding-bottom:6px;margin-bottom:12px}
+.day{flex:none;width:62px;background:#fff;border:2px solid var(--line);border-radius:14px;padding:8px 0;text-align:center;font:inherit;cursor:pointer;color:inherit}
+.day b{display:block;font-family:Fredoka;font-size:20px}.day small{font-size:12px;color:var(--mut)}.day.sel{border-color:var(--t);background:var(--t);color:#fff}.day.sel small{color:#fff}.day:disabled{opacity:.35}
+.hrs{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.hr{background:#fff;border:2px solid var(--line);border-radius:12px;padding:10px 0;font:inherit;font-weight:700;cursor:pointer;color:inherit}.hr.sel{background:var(--t);border-color:var(--t);color:#fff}
+.lbl{font-weight:700;font-size:14px;margin:12px 0 6px;display:block}
+.inp{width:100%;padding:13px;border:2px solid var(--line);border-radius:12px;font:inherit;font-size:16px;background:#fff}
+.btn{width:100%;margin-top:16px;padding:15px;border:0;border-radius:14px;background:var(--t);color:#fff;font:inherit;font-weight:800;font-size:16px;cursor:pointer}
+.btn:disabled{opacity:.4}.btn.gh{background:transparent;color:var(--tinta);border:2px solid var(--line);margin-top:8px}
+.note{background:#fff;border-radius:14px;padding:12px 14px;font-size:14px;margin-top:12px;border-left:5px solid var(--sol)}
+.err{color:#b4451f;font-weight:700;font-size:14px;margin-top:8px}
+.ok{text-align:center}.ok .big{width:74px;height:74px;border-radius:50%;background:var(--t);display:grid;place-items:center;margin:10px auto}
+.card{background:#fff;border-radius:18px;padding:16px;text-align:left;margin-top:14px}.card div{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--line);gap:10px}.card div:last-child{border:0}.card span{color:var(--mut)}
+.wa{display:flex;gap:10px;align-items:flex-start;background:#dcf8c6;border-radius:14px;padding:12px;margin-top:14px;text-align:left;font-size:14px}
+.empty{color:var(--mut);padding:14px;background:#fff;border-radius:12px;text-align:center}
+</style>
+</head>
+<body>
+<div class="rv" id="rv"></div>
+<script src="data.js"></script>
+<script src="reservar.js"></script>
+</body>
+</html>

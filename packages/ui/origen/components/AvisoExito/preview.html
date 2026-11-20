@@ -1,0 +1,16 @@
+<!-- @dsCard group="Estado" height=260 -->
+<!doctype html>
+<html lang="es">
+<head><meta charset="utf-8"><title>AvisoExito — preview</title></head>
+<body>
+<div id="root"></div>
+<script>
+var C = window.Conecta, h = React.createElement;
+ReactDOM.createRoot(document.getElementById('root')).render(
+  h('div', { className: 'cn-demo' },
+    h(C.AvisoExito, { titulo: 'Cobro registrado', texto: 'Ana Giménez · cuota 1 de 3 · Gs. 300.000 (ejemplo)', onCerrar: function () {},
+      accion: [h(C.Boton, { key: 1, icono: 'imprimir' }, 'Comprobante'), h(C.Boton, { key: 2, variante: 'fantasma', icono: 'mensaje' }, 'Enviar')] }),
+    h(C.AvisoExito, { titulo: 'Atención guardada', texto: 'Dra. Marta Acosta · 14:20' })));
+</script>
+</body>
+</html>

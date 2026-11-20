@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gestión · Sonrisa Para Todos Conecta</title>
+<meta name="description" content="Maqueta de demostración: gestión de clínica odontológica (agenda, pacientes, caja, SIFEN, contabilidad).">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='30' fill='%2318BFB0'/%3E%3Cpath d='M20 20c6-4 9 0 12 0s6-4 12 0c5 4 2 12 0 18-1 5-2 12-5 12-4 0-3-10-7-10s-3 10-7 10c-3 0-4-7-5-12-2-6-5-14 0-18z' fill='%23fff'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="gestion.css">
+</head>
+<body>
+<div class="app">
+  <aside class="side" id="side" aria-label="Navegación principal">
+    <div class="brand">
+      <svg width="42" height="42" viewBox="0 0 64 64" aria-hidden="true"><circle cx="32" cy="32" r="31" fill="#18BFB0"/><path d="M19 21c6-4 9 0 13 0s7-4 13 0c5 4 2 12 0 18-1 5-2 12-5 12-4 0-3-10-8-10s-4 10-8 10c-3 0-4-7-5-12-2-6-5-14 0-18z" fill="#fff"/><path d="M26 31q6 5 12 0" stroke="#232036" stroke-width="2.4" fill="none" stroke-linecap="round"/></svg>
+      <div><b>Sonrisa Para Todos</b><span>Conecta · Gestión</span></div>
+    </div>
+    <nav class="nav" id="nav"></nav>
+    <div class="side-foot">
+      <div class="user"><div class="avatar c-t">LF</div><div><b>Lorena Fretes</b><span class="tiny" style="color:#BDB6D6">Recepción y caja</span></div></div>
+      <button class="btn-ghost-d" id="btn-reset" data-act="reset"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>Reiniciar demo</button>
+      <button class="lnk-d" id="btn-reset-cerrada" data-act="reset-closed">Reiniciar con la caja cerrada</button>
+    </div>
+  </aside>
+  <div class="main">
+    <header class="top">
+      <button class="burger" id="burger" data-act="toggle-side" aria-label="Abrir menú"><svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
+      <div class="datechip" id="datechip"></div>
+      <div class="gs">
+        <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+        <input id="gsearch" data-in="gsearch" type="search" placeholder="Buscar paciente por nombre, CI o teléfono" autocomplete="off" aria-label="Buscar paciente">
+        <div class="gs-res" id="gs-res" hidden></div>
+      </div>
+    </header>
+    <main class="content"><div id="view" class="view"></div></main>
+  </div>
+</div>
+<div id="modal-root"></div>
+<div id="toasts" aria-live="polite"></div>
+<div id="demo-badge">Maqueta de demostración</div>
+<script src="data.js"></script>
+<script src="app.js"></script>
+<script src="anam.js"></script>
+<script src="rx.js"></script>
+<script src="perio.js"></script>
+<script src="wa.js"></script>
+<script src="rec.js"></script>
+<script src="cons.js"></script>
+<script src="fotos.js"></script>
+<script src="sedes.js"></script>
+<script src="app2.js"></script>
+</body>
+</html>

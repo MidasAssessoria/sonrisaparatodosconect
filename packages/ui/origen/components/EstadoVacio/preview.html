@@ -1,0 +1,15 @@
+<!-- @dsCard group="Estado" height=420 -->
+<!doctype html>
+<html lang="es">
+<head><meta charset="utf-8"><title>EstadoVacio — preview</title></head>
+<body>
+<div id="root"></div>
+<script>
+var C = window.Conecta, h = React.createElement;
+ReactDOM.createRoot(document.getElementById('root')).render(
+  h('div', { className: 'cn-demo' },
+    h(C.EstadoVacio, { titulo: 'Todavía no hay pacientes', texto: 'Cuando cargues el primero, vas a verlo acá con su próximo turno.',
+      accion: h(C.Boton, { variante: 'primario', icono: 'mas' }, 'Agregá el primero') })));
+</script>
+</body>
+</html>

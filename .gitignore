@@ -1,0 +1,23 @@
+node_modules/
+dist/
+build/
+coverage/
+.turbo/
+.vite/
+*.tsbuildinfo
+*.log
+
+# secretos
+.env
+.env.*
+!.env.example
+
+# capturas de la maqueta (22 MB, quedan solo en local)
+referencia/capturas/
+
+# datos de Postgres embebido para pruebas
+.pg-test/
+tmp/
+
+.DS_Store
+Thumbs.db

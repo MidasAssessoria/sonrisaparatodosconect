@@ -1,0 +1,18 @@
+<!-- @dsCard group="Contenedores" height=520 -->
+<!doctype html>
+<html lang="es">
+<head><meta charset="utf-8"><title>HojaInferior — preview</title></head>
+<body>
+<div id="root"></div>
+<script>
+var C = window.Conecta, h = React.createElement;
+ReactDOM.createRoot(document.getElementById('root')).render(
+  h('div', { style: { maxWidth: 420, margin: '16px auto', padding: '0 8px' } },
+    h(C.HojaInferior, { abierta: true, enLinea: true, titulo: 'Nuevo turno', onCerrar: function () {},
+      acciones: [h(C.Boton, { key: 1 }, 'Cancelar'), h(C.Boton, { key: 2, variante: 'primario' }, 'Agendar')] },
+      h(C.Buscador, { valorInicial: '', resultados: [] }),
+      h(C.Campo, { etiqueta: 'Tratamiento', tipo: 'select', opciones: ['Control', 'Limpieza', 'Endodoncia', 'Ortodoncia', 'Evaluación'] }),
+      h(C.Campo, { etiqueta: 'Hora', tipo: 'time', defaultValue: '09:00' }))));
+</script>
+</body>
+</html>
