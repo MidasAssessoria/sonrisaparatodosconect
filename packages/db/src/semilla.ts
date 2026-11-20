@@ -65,7 +65,11 @@ const SEDES: SedeDemo[] = [
   },
 ];
 
-/** Da de alta la clínica de demostración. `admin` es un pool del rol de migraciones/administración. */
+/**
+ * Da de alta la clínica de demostración. `admin` es un pool del rol de migraciones/administración
+ * (dueño de las tablas): las reglas de `app.proteger_acceso()` no se le aplican, por eso puede
+ * activar la membresía y asignar las sedes de la dueña en su nombre.
+ */
 export async function sembrarDemo(
   admin: pg.Pool,
   opciones: OpcionesSemilla = {},
@@ -74,7 +78,7 @@ export async function sembrarDemo(
   const duenoEmail = opciones.duenoEmail ?? DEMO.duenoEmail;
   const contexto = { clinicaId: DEMO.clinicaId, usuarioId: duenoId };
 
-  return conContextoCliente(admin, contexto, async (cliente) => {
+  const sembrar = async (cliente: pg.PoolClient): Promise<ResultadoSemilla> => {
     const existente = await cliente.query('select 1 from app.clinica where id = $1', [
       DEMO.clinicaId,
     ]);
@@ -131,5 +135,8 @@ export async function sembrarDemo(
     }
 
     return { clinicaId: DEMO.clinicaId, duenoId, creada: true };
-  });
+  };
+
+  // Sin comprobar membresía: la clínica (y la membresía de la dueña) todavía no existen.
+  return conContextoCliente(admin, contexto, sembrar, { verificarMembresia: false });
 }

@@ -3,12 +3,17 @@
  *
  * Toda consulta de negocio corre dentro de `conContexto`: abre una transacción, fija
  * `app.clinica_id`, `app.usuario_id` y `app.ip` con `set_config(..., true)` (equivale a SET LOCAL,
- * se borra al terminar la transacción) usando parámetros, ejecuta `fn` y hace commit o rollback.
+ * se borra al terminar la transacción) usando parámetros, vuelve a comprobar la membresía (ver
+ * abajo), ejecuta `fn` y hace commit o rollback.
  *
  * Seguridad: las políticas RLS confían en ese contexto. Quien llama tiene que haber verificado
- * antes el JWT y que el usuario tiene una membresía activa en esa clínica: la base no lo puede
- * comprobar (app_api puede fijar cualquier clínica). Nunca uses `set_config(..., false)`: con un
- * pool, el valor quedaría pegado a la conexión y lo vería la próxima petición.
+ * antes el JWT (el `sub` es el usuario): app_api puede fijar cualquier clínica. Por defecto,
+ * `conContexto` comprueba además, dentro de la misma transacción y con bloqueo compartido de la
+ * fila, que la membresía del usuario en esa clínica está activa y la clínica también; si no, lanza
+ * `ErrorDeMembresia` antes de ejecutar `fn`. El bloqueo hace que una desactivación concurrente
+ * espere a que la operación termine (o que la operación falle si la desactivación llegó antes).
+ * Nunca uses `set_config(..., false)`: con un pool, el valor quedaría pegado a la conexión y lo
+ * vería la próxima petición.
  */
 import { isIP } from 'node:net';
 import { sql } from 'drizzle-orm';
@@ -32,6 +37,63 @@ export interface ContextoSesion {
 
 export class ErrorDeContexto extends Error {
   override name = 'ErrorDeContexto';
+}
+
+/**
+ * Por qué `conContexto` no dejó operar:
+ * - `sin_membresia`: el usuario no tiene membresía en esa clínica (o la clínica no existe).
+ * - `membresia_inactiva`: la tiene, pero no está activa (pendiente o inactiva).
+ * - `clinica_inactiva`: la clínica está dada de baja.
+ */
+export type MotivoErrorDeMembresia = 'sin_membresia' | 'membresia_inactiva' | 'clinica_inactiva';
+
+/**
+ * La comprobación de membresía de `conContexto`/`conContextoCliente` falló. La transacción ya se
+ * revirtió y `fn` no llegó a ejecutarse. Para la API es un 403 `sin_membresia`.
+ */
+export class ErrorDeMembresia extends Error {
+  override name = 'ErrorDeMembresia';
+  constructor(readonly motivo: MotivoErrorDeMembresia) {
+    super(
+      motivo === 'clinica_inactiva'
+        ? 'La clínica del contexto está dada de baja.'
+        : motivo === 'membresia_inactiva'
+          ? 'La membresía del usuario en la clínica del contexto no está activa.'
+          : 'El usuario no tiene membresía en la clínica del contexto.',
+    );
+  }
+}
+
+export interface OpcionesContexto {
+  /** Nivel de aislamiento, modo de acceso, etc. de la transacción. */
+  config?: PgTransactionConfig | undefined;
+  /**
+   * Por defecto `true`: antes de `fn`, comprueba con `FOR SHARE` que la membresía del usuario en la
+   * clínica está activa y la clínica también, y si no lanza `ErrorDeMembresia`.
+   * `false` solo para scripts de administración y fábricas de prueba que fijan un contexto sin
+   * membresía (p. ej. antes de que exista la clínica). La API nunca lo apaga.
+   */
+  verificarMembresia?: boolean | undefined;
+}
+
+/**
+ * Comprobación de membresía dentro de la transacción. `FOR SHARE OF m`: hasta el final de la
+ * transacción, nadie puede cambiar esa membresía (una desactivación concurrente espera).
+ */
+const SQL_VERIFICAR_MEMBRESIA = `select m.estado, c.activo as clinica_activa
+  from app.membresia m join app.clinica c on c.id = m.clinica_id
+  where m.clinica_id = app.clinica_actual() and m.usuario_id = app.usuario_actual()
+  for share of m`;
+
+type FilaVerificacion = {
+  estado: string;
+  clinica_activa: boolean;
+};
+
+function exigirMembresiaActiva(fila: FilaVerificacion | undefined): void {
+  if (!fila) throw new ErrorDeMembresia('sin_membresia');
+  if (!fila.clinica_activa) throw new ErrorDeMembresia('clinica_inactiva');
+  if (fila.estado !== 'activo') throw new ErrorDeMembresia('membresia_inactiva');
 }
 
 export interface OpcionesPool extends Omit<pg.PoolConfig, 'connectionString'> {
@@ -92,14 +154,15 @@ function valoresDe(contexto: ContextoSesion): ValoresContexto {
 
 /**
  * Ejecuta `fn` en una transacción con el contexto de clínica y usuario fijado.
- * Commit si `fn` termina bien; rollback si lanza. Las transacciones anidadas (`tx.transaction`)
- * usan savepoints y conservan el contexto.
+ * Por defecto, antes de `fn` comprueba la membresía activa (ver `OpcionesContexto`) y si no lanza
+ * `ErrorDeMembresia`. Commit si `fn` termina bien; rollback si lanza. Las transacciones anidadas
+ * (`tx.transaction`) usan savepoints y conservan el contexto.
  */
 export async function conContexto<T>(
   pool: pg.Pool,
   contexto: ContextoSesion,
   fn: (tx: TransaccionConecta) => Promise<T>,
-  config?: PgTransactionConfig,
+  opciones: OpcionesContexto = {},
 ): Promise<T> {
   const valores = valoresDe(contexto);
   return baseDeDatos(pool).transaction(async (tx) => {
@@ -107,8 +170,12 @@ export async function conContexto<T>(
       set_config('app.clinica_id', ${valores.clinicaId}, true),
       set_config('app.usuario_id', ${valores.usuarioId}, true),
       set_config('app.ip', ${valores.ip}, true)`);
+    if (opciones.verificarMembresia !== false) {
+      const resultado = await tx.execute<FilaVerificacion>(sql.raw(SQL_VERIFICAR_MEMBRESIA));
+      exigirMembresiaActiva(resultado.rows[0]);
+    }
     return fn(tx);
-  }, config);
+  }, opciones.config);
 }
 
 /**
@@ -169,12 +236,14 @@ export async function buscarMembresiaActiva(
 
 /**
  * Variante con el cliente de `pg` crudo (para pg-boss, scripts y pruebas). Mismo contrato que
- * `conContexto`: transacción, contexto con parámetros, commit o rollback.
+ * `conContexto`: transacción, contexto con parámetros, comprobación de membresía (salvo
+ * `verificarMembresia: false`), commit o rollback.
  */
 export async function conContextoCliente<T>(
   pool: pg.Pool,
   contexto: ContextoSesion,
   fn: (cliente: pg.PoolClient) => Promise<T>,
+  opciones: Pick<OpcionesContexto, 'verificarMembresia'> = {},
 ): Promise<T> {
   const valores = valoresDe(contexto);
   const cliente = await pool.connect();
@@ -187,6 +256,10 @@ export async function conContextoCliente<T>(
               set_config('app.ip', $3, true)`,
       [valores.clinicaId, valores.usuarioId, valores.ip],
     );
+    if (opciones.verificarMembresia !== false) {
+      const verificacion = await cliente.query<FilaVerificacion>(SQL_VERIFICAR_MEMBRESIA);
+      exigirMembresiaActiva(verificacion.rows[0]);
+    }
     const resultado = await fn(cliente);
     await cliente.query('COMMIT');
     return resultado;

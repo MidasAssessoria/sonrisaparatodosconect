@@ -32,9 +32,11 @@ let x: string;
 let xEnA: string;
 let xEnB: string;
 let xEnC: string;
-/** Y: solo en B. P: pendiente en A. */
+/** Y: solo en B. P: pendiente en A. Q: inactivo en A (fue miembro). */
 let y: string;
 let p: string;
+let pEnA: string;
+let q: string;
 
 beforeAll(async () => {
   [A, B, C, D] = await Promise.all([
@@ -53,8 +55,13 @@ beforeAll(async () => {
     await crearUsuarioDePrueba(admin, { clinicaId: C.clinicaId, usuarioId: x, estado: 'inactivo' })
   ).membresiaId;
   y = (await crearUsuarioDePrueba(admin, { clinicaId: B.clinicaId })).usuarioId;
-  p = (await crearUsuarioDePrueba(admin, { clinicaId: A.clinicaId, estado: 'pendiente' }))
-    .usuarioId;
+  const pendiente = await crearUsuarioDePrueba(admin, {
+    clinicaId: A.clinicaId,
+    estado: 'pendiente',
+  });
+  p = pendiente.usuarioId;
+  pEnA = pendiente.membresiaId;
+  q = (await crearUsuarioDePrueba(admin, { clinicaId: A.clinicaId, estado: 'inactivo' })).usuarioId;
   return () => poolApi.end();
 });
 
@@ -71,16 +78,34 @@ describe('usuario (identidad global)', () => {
     expect(filas).toEqual([{ id: x }]);
   });
 
-  it('con clínica A se ven quienes tienen membresía en A (en cualquier estado) y nadie más', async () => {
+  it('con clínica A se ven quienes son o fueron miembros de A (activos e inactivos), no los pendientes ni nadie más', async () => {
     await enTransaccion(api, { clinica: A.clinicaId, usuario: x }, async (c) => {
-      expect(await ids(c, 'select id from app.usuario')).toEqual(ordenar([A.duenoId, x, p]));
+      expect(await ids(c, 'select id from app.usuario')).toEqual(ordenar([A.duenoId, x, q]));
+      // P tiene una invitación pendiente en A: no se ve nada de su perfil.
+      expect(await valor(c, 'select count(*)::int from app.usuario where id = $1', [p])).toBe(0);
+      expect(
+        await valor(
+          c,
+          'select count(*)::int from app.usuario where email is not null and id = $1',
+          [p],
+        ),
+      ).toBe(0);
     });
+    // P sí se ve a sí mismo.
+    const propia = await conUsuario(poolApi, p, (tx) =>
+      tx.select({ id: usuario.id }).from(usuario),
+    );
+    expect(propia).toEqual([{ id: p }]);
   });
 
-  it('solo se edita la fila propia', async () => {
+  it('solo se edita la fila propia, y solo nombre, teléfono y último acceso', async () => {
     await enTransaccion(api, { clinica: A.clinicaId, usuario: x }, async (c) => {
       expect(
-        await intentar(c, "update app.usuario set telefono = '0981 000 000' where id = $1", [x]),
+        await intentar(
+          c,
+          "update app.usuario set telefono = '0981 000 000', nombre = 'X', ultimo_acceso = now() where id = $1",
+          [x],
+        ),
       ).toMatchObject({ ok: true, cantidad: 1 });
       for (const otro of [A.duenoId, p, y]) {
         expect(
@@ -94,6 +119,19 @@ describe('usuario (identidad global)', () => {
         ok: true,
         cantidad: 1,
       });
+      // email, mfa_activo, mfa_desactivado_en, id y las columnas de auditoría: sin privilegio.
+      for (const set of [
+        "email = 'otro@prueba.test'",
+        'mfa_activo = true',
+        'mfa_activo = false',
+        'mfa_desactivado_en = null',
+        'id = id',
+        'created_by = null',
+        'updated_at = now()',
+      ]) {
+        const r = await intentar(c, `update app.usuario set ${set} where id = $1`, [x]);
+        expect({ set, r }).toMatchObject({ set, r: { ok: false, codigo: '42501' } });
+      }
     });
   });
 
@@ -151,7 +189,8 @@ describe('membresia', () => {
       for (const fila of visibles.rows) {
         expect(fila.clinica_id === A.clinicaId || fila.usuario_id === x).toBe(true);
       }
-      expect(visibles.rows.filter((f) => f.clinica_id === A.clinicaId)).toHaveLength(3);
+      // Dueño, X, P (pendiente) y Q (inactivo): la fila de membresía sí se ve, el perfil de P no.
+      expect(visibles.rows.filter((f) => f.clinica_id === A.clinicaId)).toHaveLength(4);
       expect(
         await valor(c, 'select count(*)::int from app.membresia where usuario_id = $1', [y]),
       ).toBe(0);
@@ -179,14 +218,6 @@ describe('membresia', () => {
         ok: true,
         cantidad: 0,
       });
-      // Una de A, sí.
-      expect(
-        await intentar(
-          c,
-          "update app.membresia set estado = 'activo' where clinica_id = $1 and usuario_id = $2",
-          [A.clinicaId, p],
-        ),
-      ).toMatchObject({ ok: true, cantidad: 1 });
       // Afiliarse a B desde A: no.
       expect(
         await intentar(
@@ -195,7 +226,24 @@ describe('membresia', () => {
           [B.clinicaId, y, B.roles.dueno],
         ),
       ).toMatchObject({ ok: false, codigo: '42501' });
-      // Darse rol de dueño de B en la membresía de A: la FK compuesta lo impide.
+      // Darse rol de dueño (de A o de B) en la propia membresía de A: no se toca la propia.
+      for (const rolId of [A.roles.dueno, B.roles.dueno]) {
+        expect(
+          await intentar(c, 'update app.membresia set rol_id = $1 where id = $2', [rolId, xEnA]),
+        ).toMatchObject({ ok: false, codigo: '42501' });
+      }
+    });
+    // El dueño de A sí edita las de A; con un rol de B, la FK compuesta lo impide.
+    await enTransaccion(api, { clinica: A.clinicaId, usuario: A.duenoId }, async (c) => {
+      expect(
+        await intentar(c, "update app.membresia set estado = 'inactivo' where id = $1", [xEnA]),
+      ).toMatchObject({ ok: true, cantidad: 1 });
+      // La de P está pendiente: solo cambia cuando P acepta (ni a activa ni a inactiva).
+      for (const estado of ['activo', 'inactivo']) {
+        expect(
+          await intentar(c, 'update app.membresia set estado = $2 where id = $1', [pEnA, estado]),
+        ).toMatchObject({ ok: false, codigo: '42501' });
+      }
       expect(
         await intentar(c, 'update app.membresia set rol_id = $1 where id = $2', [
           B.roles.dueno,

@@ -22,11 +22,18 @@ export interface DatosClinica extends ClinicaDePrueba {
   auditId: string;
   /** Usuario que solo pertenece a esta clínica (rol recepcion). */
   usuarioId: string;
+  /** Otra persona de la clínica (rol asistente), sin sedes asignadas. */
+  otroUsuarioId: string;
+  otraMembresiaId: string;
 }
 
 export async function poblarClinica(admin: pg.Pool): Promise<DatosClinica> {
   const clinica = await crearClinicaDePrueba(admin);
   const miembro = await crearUsuarioDePrueba(admin, { clinicaId: clinica.clinicaId });
+  const otro = await crearUsuarioDePrueba(admin, {
+    clinicaId: clinica.clinicaId,
+    rol: 'asistente',
+  });
   const { sedeId, sillonId } = await crearSedeDePrueba(admin, clinica.clinicaId);
   return enTransaccion(
     admin,
@@ -77,6 +84,8 @@ export async function poblarClinica(admin: pg.Pool): Promise<DatosClinica> {
         numeradorId,
         auditId,
         usuarioId: miembro.usuarioId,
+        otroUsuarioId: otro.usuarioId,
+        otraMembresiaId: otro.membresiaId,
       };
     },
     { confirmar: true },
@@ -171,7 +180,7 @@ export const CASOS: CasoTabla[] = [
   {
     tabla: 'membresia',
     id: (d) => d.membresiaId,
-    editar: "estado = 'pendiente'",
+    editar: 'sede_defecto_id = null',
     baja: "estado = 'inactivo'",
     insertar: (d) => [
       `insert into app.membresia (clinica_id, usuario_id, rol_id) values ($1, $2, $3)`,
@@ -187,9 +196,10 @@ export const CASOS: CasoTabla[] = [
     id: (d) => d.usuarioSedeId,
     editar: null,
     baja: 'activo = false',
+    // La de otra persona: las propias sedes no se asignan (app.proteger_acceso).
     insertar: (d) => [
       'insert into app.usuario_sede (clinica_id, membresia_id, sede_id) values ($1, $2, $3)',
-      [d.clinicaId, d.membresiaDuenoId, d.sedeId],
+      [d.clinicaId, d.otraMembresiaId, d.sedeId],
     ],
     referenciarAjena: (p, a) => [
       'insert into app.usuario_sede (clinica_id, membresia_id, sede_id) values ($1, $2, $3)',

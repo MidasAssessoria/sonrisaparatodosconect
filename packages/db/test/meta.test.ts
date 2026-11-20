@@ -3,12 +3,12 @@
  * tabla sin RLS forzado, concede algo a PUBLIC/anon/authenticated, olvida los triggers de
  * auditoría o arma una FK que puede cruzar de clínica, alguna de estas pruebas falla.
  */
-import { ACCIONES, MODULOS } from '@conecta/shared';
+import { ACCIONES, ACCIONES_AUDITORIA, ESTADOS_SEDE, MODULOS } from '@conecta/shared';
 import { describe, expect, it } from 'vitest';
 import {
-  ACCIONES_AUDITORIA,
+  ACCIONES_EVENTO,
   ESTADOS_MEMBRESIA,
-  ESTADOS_SEDE,
+  MOTIVOS_CIERRE_SESION,
   TIPOS_NUMERADOR,
 } from '../src/esquema.js';
 import { enTransaccion, nuevoPool, urls } from './ayudas.js';
@@ -64,7 +64,7 @@ const SQL_CONCESIONES_EXPUESTAS = `
 
 describe('RLS en todo el schema app', () => {
   it('toda tabla tiene RLS habilitado y forzado y al menos una política', async () => {
-    expect(await tablasDeApp()).toHaveLength(11);
+    expect(await tablasDeApp()).toHaveLength(12);
     expect(await consultar(SQL_TABLAS_SIN_RLS)).toEqual([]);
   });
 
@@ -203,7 +203,7 @@ describe('privilegios', () => {
     expect(base?.crear).toBe(false);
   });
 
-  it('app_api tiene exactamente los privilegios de tabla esperados', async () => {
+  it('app_api tiene exactamente los privilegios de tabla y de columna esperados', async () => {
     const esperados: Record<string, string[]> = {
       audit_log: ['SELECT'],
       clinica: ['SELECT', 'UPDATE'],
@@ -214,8 +214,10 @@ describe('privilegios', () => {
       rol_permiso: ['INSERT', 'SELECT', 'UPDATE'],
       sede: ['INSERT', 'SELECT', 'UPDATE'],
       sede_horario: ['INSERT', 'SELECT', 'UPDATE'],
+      sesion: ['SELECT'],
       sillon: ['INSERT', 'SELECT', 'UPDATE'],
-      usuario: ['SELECT', 'UPDATE'],
+      // UPDATE solo por columna (abajo): email y mfa_activo no son escribibles por app_api.
+      usuario: ['SELECT'],
       usuario_sede: ['INSERT', 'SELECT', 'UPDATE'],
     };
     const filas = await consultar<{ tabla: string; privilegios: string[] }>(
@@ -227,11 +229,22 @@ describe('privilegios', () => {
        group by c.relname`,
     );
     expect(Object.fromEntries(filas.map((f) => [f.tabla, f.privilegios]))).toEqual(esperados);
-    const columnas = await consultar(
-      `select c.relname, a.attname from pg_attribute a join pg_class c on c.oid = a.attrelid
-       join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'app' and a.attacl is not null`,
+    // Privilegios por columna concedidos explícitamente (ACL de columna), de cualquier rol.
+    const columnas = await consultar<{ columna: string; rol: string; privilegio: string }>(
+      `select c.relname || '.' || a.attname as columna, coalesce(r.rolname, 'PUBLIC') as rol,
+              (x.acl).privilege_type as privilegio
+       from pg_attribute a join pg_class c on c.oid = a.attrelid
+       join pg_namespace n on n.oid = c.relnamespace
+       cross join lateral (select aclexplode(a.attacl) as acl) x
+       left join pg_roles r on r.oid = (x.acl).grantee
+       where n.nspname = 'app' and a.attacl is not null
+       order by 1, 2, 3`,
     );
-    expect(columnas).toEqual([]);
+    expect(columnas).toEqual([
+      { columna: 'usuario.nombre', rol: 'app_api', privilegio: 'UPDATE' },
+      { columna: 'usuario.telefono', rol: 'app_api', privilegio: 'UPDATE' },
+      { columna: 'usuario.ultimo_acceso', rol: 'app_api', privilegio: 'UPDATE' },
+    ]);
   });
 
   it('app_api solo puede ejecutar las funciones previstas', async () => {
@@ -242,11 +255,32 @@ describe('privilegios', () => {
        order by 1`,
     );
     expect(filas.map((f) => f.funcion)).toEqual([
+      'app.activar_mfa(timestamp with time zone)',
+      'app.cerrar_sesion(uuid)',
       'app.clinica_actual()',
-      'app.registrar_evento(text,text,uuid,jsonb)',
+      'app.desactivar_mfa()',
+      'app.registrar_evento(text,text,uuid,jsonb,uuid)',
       'app.siguiente_numero(text,uuid)',
+      'app.tocar_sesion(uuid,integer)',
       'app.usuario_actual()',
     ]);
+  });
+
+  it('ninguna función SECURITY DEFINER escribe en membresia, usuario_sede, rol o rol_permiso', async () => {
+    // Corren como el dueño de las tablas, al que app.proteger_acceso() exceptúa: si una (llamada por
+    // app_api o disparada como trigger) escribiera ahí, sería un camino para saltarse las reglas.
+    const filas = await consultar<{ funcion: string }>(
+      `select p.oid::regprocedure::text as funcion from pg_proc p
+       join pg_namespace n on n.oid = p.pronamespace
+       where n.nspname = 'app' and p.prosecdef
+         and p.prosrc ~* '(insert\\s+into|update|merge\\s+into)\\s+app\\.(membresia|usuario_sede|rol|rol_permiso)\\M'`,
+    );
+    expect(filas).toEqual([]);
+    // Prueba de la prueba: el patrón encuentra una escritura así.
+    const [control] = await consultar<{ ok: boolean }>(
+      `select 'update app.rol_permiso set activo = true' ~* '(insert\\s+into|update|merge\\s+into)\\s+app\\.(membresia|usuario_sede|rol|rol_permiso)\\M' as ok`,
+    );
+    expect(control?.ok).toBe(true);
   });
 });
 
@@ -258,9 +292,13 @@ describe('funciones', () => {
        where n.nspname = 'app' and p.prosecdef order by 1`,
     );
     expect(filas.map((f) => f.funcion)).toEqual([
+      'app.activar_mfa(timestamp with time zone)',
       'app.auditar()',
-      'app.registrar_evento(text,text,uuid,jsonb)',
+      'app.cerrar_sesion(uuid)',
+      'app.desactivar_mfa()',
+      'app.registrar_evento(text,text,uuid,jsonb,uuid)',
       'app.siguiente_numero(text,uuid)',
+      'app.tocar_sesion(uuid,integer)',
     ]);
     for (const fila of filas) {
       expect({ funcion: fila.funcion, config: fila.config }).toEqual({
@@ -283,16 +321,91 @@ describe('funciones', () => {
 
 describe('triggers de auditoría y de no borrado', () => {
   // tgtype: 1 fila, 2 BEFORE, 4 INSERT, 8 DELETE, 16 UPDATE, 32 TRUNCATE.
-  const SIN_AUDITAR = ['audit_log', 'numerador'];
+  // numerador y sesion cambian en cada pedido: su registro es otro (el documento numerado, 'ingresar').
+  const SIN_AUDITAR = ['audit_log', 'numerador', 'sesion'];
 
-  async function triggers(): Promise<{ tabla: string; funcion: string; tipo: number }[]> {
+  async function triggers(): Promise<
+    { tabla: string; funcion: string; tipo: number; argumentos: string[] }[]
+  > {
     return consultar(
-      `select c.relname as tabla, p.proname as funcion, t.tgtype::int as tipo
+      `select c.relname as tabla, p.proname as funcion, t.tgtype::int as tipo,
+              array_remove(string_to_array(encode(t.tgargs, 'escape'), E'\\\\000'), '') as argumentos
        from pg_trigger t join pg_class c on c.oid = t.tgrelid
        join pg_namespace n on n.oid = c.relnamespace join pg_proc p on p.oid = t.tgfoid
        where n.nspname = 'app' and not t.tgisinternal and t.tgenabled <> 'D'`,
     );
   }
+
+  it('toda tabla auditada declara como primer argumento de app.auditar() un módulo de MODULOS', async () => {
+    const auditadas = (await triggers()).filter((t) => t.funcion === 'auditar');
+    expect(auditadas.length).toBeGreaterThanOrEqual(9);
+    const sinModuloValido = auditadas.filter(
+      (t) => !(MODULOS as readonly string[]).includes(t.argumentos[0] ?? ''),
+    );
+    expect(sinModuloValido.map((t) => ({ tabla: t.tabla, argumentos: t.argumentos }))).toEqual([]);
+    // El mapa de hoy, explícito: cambiar el módulo de una tabla cambia quién ve sus eventos.
+    expect(
+      Object.fromEntries(auditadas.map((t) => [t.tabla, t.argumentos[0]] as const).sort()),
+    ).toEqual({
+      clinica: 'configuracion',
+      membresia: 'personal',
+      rol: 'configuracion',
+      rol_permiso: 'configuracion',
+      sede: 'sedes',
+      sede_horario: 'sedes',
+      sillon: 'sedes',
+      usuario: 'personal',
+      usuario_sede: 'personal',
+    });
+  });
+
+  it('app.modulo_de_entidad() lee el módulo del trigger (y sesion es de personal)', async () => {
+    const filas = await consultar<{ entidad: string; modulo: string | null }>(
+      `select e as entidad, app.modulo_de_entidad(e) as modulo
+       from unnest(array['sede', 'usuario', 'rol_permiso', 'sesion', 'numerador', 'audit_log',
+                         'migracion', 'paciente', 'Sede', 'sede"; select 1; --']) e`,
+    );
+    expect(Object.fromEntries(filas.map((f) => [f.entidad, f.modulo]))).toEqual({
+      sede: 'sedes',
+      usuario: 'personal',
+      rol_permiso: 'configuracion',
+      sesion: 'personal',
+      numerador: null,
+      audit_log: null,
+      migracion: null,
+      paciente: null,
+      Sede: null,
+      'sede"; select 1; --': null,
+    });
+  });
+
+  it('app.auditar() sin módulo rechaza el cambio (prueba de la prueba)', async () => {
+    await enTransaccion(admin, {}, async (c) => {
+      await c.query('create table app.sin_modulo (id uuid primary key)');
+      await c.query(
+        'create trigger t after insert on app.sin_modulo for each row execute function app.auditar()',
+      );
+      await expect(
+        c.query('insert into app.sin_modulo values (gen_random_uuid())'),
+      ).rejects.toThrow('tiene que declarar su módulo');
+    });
+  });
+
+  it('membresia, usuario_sede, rol y rol_permiso tienen el trigger de defensa; membresia, el del último dueño', async () => {
+    const todas = await triggers();
+    for (const tabla of ['membresia', 'usuario_sede', 'rol', 'rol_permiso']) {
+      const ok = todas.some(
+        (t) => t.tabla === tabla && t.funcion === 'proteger_acceso' && t.tipo === (1 | 2 | 4 | 16),
+      );
+      expect({ tabla, ok }).toEqual({ tabla, ok: true });
+    }
+    expect(
+      todas.some(
+        (t) =>
+          t.tabla === 'membresia' && t.funcion === 'proteger_ultimo_dueno' && t.tipo === (1 | 16),
+      ),
+    ).toBe(true);
+  });
 
   it('toda tabla (salvo audit_log) fija la auditoría de fila antes de insertar y actualizar', async () => {
     const todas = await triggers();
@@ -392,14 +505,43 @@ describe('valores de los CHECK sincronizados con el código', () => {
     return [...(fila?.definicion ?? '').matchAll(/'([^']+)'::text/g)].map((m) => m[1] ?? '');
   }
 
+  // Los de @conecta/shared son el contrato de la API: la base tiene que aceptar exactamente eso.
   it.each([
     ['rol_permiso_modulo_check', MODULOS],
     ['rol_permiso_accion_check', ACCIONES],
+    ['audit_log_modulo_check', MODULOS],
+    ['audit_log_accion_check', ACCIONES_AUDITORIA],
     ['sede_estado_check', ESTADOS_SEDE],
     ['membresia_estado_check', ESTADOS_MEMBRESIA],
     ['numerador_tipo_check', TIPOS_NUMERADOR],
-    ['audit_log_accion_check', ACCIONES_AUDITORIA],
+    ['sesion_motivo_cierre_check', MOTIVOS_CIERRE_SESION],
   ] as const)('%s coincide con el código', async (restriccion, valores) => {
     expect((await valoresDelCheck(restriccion)).sort()).toEqual([...valores].sort());
+  });
+
+  it('las acciones que acepta registrar_evento son de ACCIONES_AUDITORIA y coinciden con ACCIONES_EVENTO', async () => {
+    expect(
+      ACCIONES_EVENTO.every((a) => (ACCIONES_AUDITORIA as readonly string[]).includes(a)),
+    ).toBe(true);
+    const [fila] = await consultar<{ fuente: string }>(
+      `select prosrc as fuente from pg_proc
+       where oid = 'app.registrar_evento(text,text,uuid,jsonb,uuid)'::regprocedure`,
+    );
+    const lista = /p_accion NOT IN \(([^)]*)\)/.exec(fila?.fuente ?? '')?.[1] ?? '';
+    const enLaBase = [...lista.matchAll(/'([^']+)'/g)].map((m) => m[1]);
+    expect(enLaBase.sort()).toEqual([...ACCIONES_EVENTO].sort());
+  });
+
+  it('las matrices de alta_clinica y los roles de sistema usan los módulos y acciones de shared', async () => {
+    const [fila] = await consultar<{ fuente: string }>(
+      `select prosrc as fuente from pg_proc
+       where oid = 'app.alta_clinica(text,uuid,text,text,text,text,uuid)'::regprocedure`,
+    );
+    const fuente = fila?.fuente ?? '';
+    const modulosDelDueno =
+      /FROM unnest\(ARRAY\[([^\]]*)\]\) AS m\(modulo\)/.exec(fuente)?.[1] ?? '';
+    expect([...modulosDelDueno.matchAll(/'([^']+)'/g)].map((m) => m[1]).sort()).toEqual(
+      [...MODULOS].sort(),
+    );
   });
 });

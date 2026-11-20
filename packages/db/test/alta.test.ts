@@ -1,8 +1,8 @@
 /** app.alta_clinica() y la semilla de desarrollo. */
 import { randomUUID } from 'node:crypto';
-import { ACCIONES, MODULOS } from '@conecta/shared';
+import { ACCIONES, MODULOS, ROLES_SISTEMA } from '@conecta/shared';
 import { describe, expect, it } from 'vitest';
-import { CODIGOS_ROL_SISTEMA, DEMO, sembrarDemo } from '../src/index.js';
+import { DEMO, sembrarDemo } from '../src/index.js';
 import { crearClinicaDePrueba } from '../src/pruebas/index.js';
 import { enTransaccion, intentar, nuevoPool, urls, valor } from './ayudas.js';
 
@@ -45,12 +45,34 @@ describe('app.alta_clinica()', () => {
           tope_descuento_pct: 50,
           activo: true,
         });
-        const roles = await c.query<{ codigo: string; es_sistema: boolean }>(
-          'select codigo, es_sistema from app.rol where clinica_id = $1 order by codigo',
+        const roles = await c.query<{
+          codigo: string;
+          es_sistema: boolean;
+          todas_las_sedes: boolean;
+          exige_mfa: boolean;
+          inactividad_min: number;
+        }>(
+          `select codigo, es_sistema, todas_las_sedes, exige_mfa, inactividad_min
+           from app.rol where clinica_id = $1 order by codigo`,
           [clinica.clinicaId],
         );
-        expect(roles.rows.map((r) => r.codigo)).toEqual([...CODIGOS_ROL_SISTEMA].sort());
+        expect(roles.rows.map((r) => r.codigo)).toEqual([...ROLES_SISTEMA].sort());
         expect(roles.rows.every((r) => r.es_sistema)).toBe(true);
+        // Dueño y administración ven todas las sedes y exigen doble factor; recepción vence a los 15.
+        expect(
+          Object.fromEntries(
+            roles.rows.map((r) => [
+              r.codigo,
+              [r.todas_las_sedes, r.exige_mfa, r.inactividad_min] as const,
+            ]),
+          ),
+        ).toEqual({
+          administracion: [true, true, 30],
+          asistente: [false, false, 30],
+          dueno: [true, true, 30],
+          odontologo: [false, false, 30],
+          recepcion: [false, false, 15],
+        });
         const membresia = await c.query(
           `select m.estado, r.codigo from app.membresia m join app.rol r on r.id = m.rol_id
          where m.clinica_id = $1`,

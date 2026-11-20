@@ -133,6 +133,9 @@ describe('app_api no puede apagar RLS ni saltarse el contexto', () => {
       'select app.fijar_auditoria_fila()',
       'select app.rechazar_borrado()',
       'select app.ip_actual()',
+      'select app.proteger_acceso()',
+      'select app.proteger_ultimo_dueno()',
+      "select app.modulo_de_entidad('sede')",
       'call app.asegurar_permisos()',
     ]) {
       await rechazada(texto);
@@ -177,6 +180,7 @@ describe('app_api no puede apagar RLS ni saltarse el contexto', () => {
         'rol_permiso',
         'numerador',
         'audit_log',
+        'sesion',
       ]) {
         expect({ tabla, r: await intentar(c, `delete from app.${tabla}`) }).toMatchObject({
           tabla,
@@ -196,6 +200,7 @@ describe('app_api no puede apagar RLS ni saltarse el contexto', () => {
         'usuario',
         'clinica',
         'numerador',
+        'sesion',
       ]) {
         const r = await intentar(c, `delete from app.${tabla} where false`);
         expect({ tabla, r }).toMatchObject({ tabla, r: { ok: false, codigo: '42501' } });

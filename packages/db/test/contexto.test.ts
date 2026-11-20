@@ -1,4 +1,5 @@
 /** API de TypeScript: crearPool, conContexto, conUsuario y conContextoCliente. */
+import { randomUUID } from 'node:crypto';
 import { eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
@@ -8,12 +9,18 @@ import {
   conUsuario,
   crearPool,
   ErrorDeContexto,
+  ErrorDeMembresia,
   numerador,
+  registrarEvento,
   sede,
   sedeHorario,
 } from '../src/index.js';
-import { crearClinicaDePrueba, type ClinicaDePrueba } from '../src/pruebas/index.js';
-import { nuevoPool, urls } from './ayudas.js';
+import {
+  crearClinicaDePrueba,
+  crearUsuarioDePrueba,
+  type ClinicaDePrueba,
+} from '../src/pruebas/index.js';
+import { enTransaccion, nuevoPool, urls } from './ayudas.js';
 
 const admin = nuevoPool(urls().urlAdmin);
 // Una sola conexión: así se ve si algo del contexto queda pegado entre transacciones.
@@ -141,6 +148,133 @@ describe('conContexto', () => {
       intervaloMin: 30,
     });
     expect(leido.contador?.ultimo).toBe(1);
+  });
+});
+
+describe('conContexto vuelve a comprobar la membresía en la misma transacción', () => {
+  it('sin membresía activa, o con la clínica dada de baja, lanza ErrorDeMembresia y no ejecuta fn', async () => {
+    const clinica = await crearClinicaDePrueba(admin);
+    const otra = await crearClinicaDePrueba(admin);
+    const inactivo = await crearUsuarioDePrueba(admin, {
+      clinicaId: clinica.clinicaId,
+      estado: 'inactivo',
+    });
+    const pendiente = await crearUsuarioDePrueba(admin, {
+      clinicaId: clinica.clinicaId,
+      estado: 'pendiente',
+    });
+    const casos: [string, string, string][] = [
+      ['dueño de otra clínica', otra.duenoId, 'sin_membresia'],
+      ['usuario inexistente', randomUUID(), 'sin_membresia'],
+      ['inactivo', inactivo.usuarioId, 'membresia_inactiva'],
+      ['pendiente', pendiente.usuarioId, 'membresia_inactiva'],
+    ];
+    for (const [nombre, usuarioId, motivo] of casos) {
+      let ejecutada = false;
+      const error = await conContexto(pool, { clinicaId: clinica.clinicaId, usuarioId }, () => {
+        ejecutada = true;
+        return Promise.resolve();
+      }).catch((e: unknown) => e);
+      expect({ nombre, error, ejecutada }).toMatchObject({
+        nombre,
+        error: { name: 'ErrorDeMembresia', motivo },
+        ejecutada: false,
+      });
+      expect(error).toBeInstanceOf(ErrorDeMembresia);
+      // conContextoCliente, igual.
+      await expect(
+        conContextoCliente(pool, { clinicaId: clinica.clinicaId, usuarioId }, () =>
+          Promise.resolve(1),
+        ),
+      ).rejects.toMatchObject({ motivo });
+    }
+
+    await enTransaccion(
+      admin,
+      { clinica: clinica.clinicaId, usuario: clinica.duenoId },
+      (c) => c.query('update app.clinica set activo = false where id = $1', [clinica.clinicaId]),
+      { confirmar: true },
+    );
+    await expect(
+      conContexto(pool, { clinicaId: clinica.clinicaId, usuarioId: clinica.duenoId }, () =>
+        Promise.resolve(1),
+      ),
+    ).rejects.toMatchObject({ name: 'ErrorDeMembresia', motivo: 'clinica_inactiva' });
+  });
+
+  it('verificarMembresia: false es la salida explícita para scripts de administración', async () => {
+    const sinMembresia = randomUUID();
+    const visto = await conContexto(
+      pool,
+      { clinicaId: A.clinicaId, usuarioId: sinMembresia },
+      async (tx) => {
+        const r = await tx.execute<{ usuario: string }>(
+          sql`select app.usuario_actual() as usuario`,
+        );
+        return r.rows[0]?.usuario;
+      },
+      { verificarMembresia: false },
+    );
+    expect(visto).toBe(sinMembresia);
+    expect(
+      await conContextoCliente(
+        pool,
+        { clinicaId: A.clinicaId, usuarioId: sinMembresia },
+        () => Promise.resolve('ok'),
+        { verificarMembresia: false },
+      ),
+    ).toBe('ok');
+  });
+
+  it('carrera: una baja de la membresía durante la operación espera a que termine; la siguiente operación falla', async () => {
+    const persona = await crearUsuarioDePrueba(admin, { clinicaId: A.clinicaId });
+    const ctx = { clinicaId: A.clinicaId, usuarioId: persona.usuarioId };
+    const otro = crearPool(urls().urlApi, { max: 1 });
+    try {
+      const resultado = await conContexto(otro, ctx, async (tx) => {
+        // Mientras esta transacción sigue abierta, la baja no puede pasar (bloqueo compartido).
+        const baja = await enTransaccion(
+          admin,
+          { clinica: A.clinicaId, usuario: '' },
+          async (c) => {
+            await c.query("set local lock_timeout = '300ms'");
+            return c
+              .query("update app.membresia set estado = 'inactivo' where id = $1", [
+                persona.membresiaId,
+              ])
+              .then(
+                () => 'pasó',
+                (e: { code?: string }) => e.code,
+              );
+          },
+        );
+        expect(baja).toBe('55P03');
+        return registrarEvento(tx, { accion: 'ver', entidad: 'sede' });
+      });
+      expect(resultado).toMatch(/^[0-9a-f-]{36}$/);
+
+      // Terminada la operación, la baja pasa…
+      await enTransaccion(
+        admin,
+        { clinica: A.clinicaId, usuario: '' },
+        (c) =>
+          c.query("update app.membresia set estado = 'inactivo' where id = $1", [
+            persona.membresiaId,
+          ]),
+        { confirmar: true },
+      );
+      // …y la operación siguiente ya no corre, aunque la API la hubiera verificado antes.
+      let ejecutada = false;
+      await expect(
+        conContexto(otro, ctx, () => {
+          ejecutada = true;
+          return Promise.resolve();
+        }),
+      ).rejects.toMatchObject({ motivo: 'membresia_inactiva' });
+      expect(ejecutada).toBe(false);
+    } finally {
+      await otro.end();
+    }
   });
 });
 

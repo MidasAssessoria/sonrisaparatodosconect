@@ -23,7 +23,8 @@ afterAll(async () => {
 
 export type Resultado =
   | { ok: true; filas: Record<string, unknown>[]; cantidad: number }
-  | { ok: false; codigo: string; mensaje: string };
+  /** `restriccion`: el campo `constraint` del error (restricción real o nombre de regla). */
+  | { ok: false; codigo: string; mensaje: string; restriccion: string | null };
 
 /**
  * Ejecuta una sentencia dentro de un SAVEPOINT: si falla, devuelve el código de error y la
@@ -41,9 +42,19 @@ export async function intentar(
     return { ok: true, filas: resultado.rows, cantidad: resultado.rowCount ?? 0 };
   } catch (error) {
     await cliente.query('ROLLBACK TO SAVEPOINT intento');
-    const e = error as { code?: string; message?: string };
-    return { ok: false, codigo: e.code ?? '?', mensaje: e.message ?? String(error) };
+    const e = error as { code?: string; message?: string; constraint?: string };
+    return {
+      ok: false,
+      codigo: e.code ?? '?',
+      mensaje: e.message ?? String(error),
+      restriccion: e.constraint ?? null,
+    };
   }
+}
+
+/** Espera un rechazo con ese código y, si se indica, ese nombre de regla o restricción. */
+export function rechazo(codigo: string, restriccion?: string): Record<string, unknown> {
+  return restriccion === undefined ? { ok: false, codigo } : { ok: false, codigo, restriccion };
 }
 
 /** Valores crudos para app.clinica_id / app.usuario_id / app.ip (null = no se fija). */

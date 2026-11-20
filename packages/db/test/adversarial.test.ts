@@ -131,7 +131,7 @@ describe('lecturas indirectas', () => {
     });
     expect(vistos.length).toBeGreaterThan(0);
     expect(vistos.some((v) => v.includes(nombreSedeB))).toBe(false);
-    expect(correosDeB.length).toBe(2);
+    expect(correosDeB.length).toBe(3);
     expect(vistos.some((v) => correosDeB.some((correo) => v.includes(correo)))).toBe(false);
   });
 
@@ -260,18 +260,66 @@ describe('escrituras indirectas', () => {
       },
     );
     await comoA(async (c) => {
+      // La única incluye clinica_id: (A, rol de B, …) nunca choca con una fila de B. Lo frena el FK.
       const r = await intentar(
         c,
         `insert into app.rol_permiso (clinica_id, rol_id, modulo, accion) values ($1, $2, $3, $4)
-         on conflict (rol_id, modulo, accion) do update set activo = false`,
+         on conflict (clinica_id, rol_id, modulo, accion) do update set activo = false`,
         [a.clinicaId, b.rolId, permisoB.modulo, permisoB.accion],
       );
-      expect(r).toMatchObject({ ok: false, codigo: '42501' });
+      expect(r).toMatchObject({ ok: false, codigo: '23503' });
+      // Con la clínica de B en la fila, lo frena RLS (o la defensa: el actor no es miembro de B).
+      const conB = await intentar(
+        c,
+        `insert into app.rol_permiso (clinica_id, rol_id, modulo, accion) values ($1, $2, $3, $4)
+         on conflict (clinica_id, rol_id, modulo, accion) do update set activo = false`,
+        [b.clinicaId, b.rolId, permisoB.modulo, permisoB.accion],
+      );
+      expect(conB).toMatchObject({ ok: false, codigo: '42501' });
     });
     const despues = await enTransaccion(admin, { clinica: b.clinicaId, usuario: b.duenoId }, (c) =>
       valor<boolean>(c, 'select activo from app.rol_permiso where id = $1', [b.rolPermisoId]),
     );
     expect(despues).toBe(permisoB.activo);
+  });
+
+  it('con el UUID de un rol o una membresía de B, el error no revela qué permisos ni qué sedes tiene', async () => {
+    // Antes la única era (rol_id, modulo, accion): un permiso que B tenía daba 23505 y uno que no
+    // tenía, 23503. Ahora las dos dan 23503.
+    const [tiene, noTiene] = await enTransaccion(
+      admin,
+      { clinica: b.clinicaId, usuario: b.duenoId },
+      async (c) => {
+        const { rows } = await c.query<{ modulo: string; accion: string; tiene: boolean }>(
+          `select m.modulo, a.accion,
+                  exists (select 1 from app.rol_permiso p where p.rol_id = $1
+                          and p.modulo = m.modulo and p.accion = a.accion) as tiene
+           from unnest(array['agenda', 'ficha_clinica']) m(modulo)
+           cross join unnest(array['ver', 'anular']) a(accion)`,
+          [b.rolId],
+        );
+        return [rows.find((f) => f.tiene)!, rows.find((f) => !f.tiene)!];
+      },
+    );
+    await comoA(async (c) => {
+      for (const permiso of [tiene, noTiene]) {
+        const r = await intentar(
+          c,
+          'insert into app.rol_permiso (clinica_id, rol_id, modulo, accion) values ($1, $2, $3, $4)',
+          [a.clinicaId, b.rolId, permiso.modulo, permiso.accion],
+        );
+        expect({ permiso, r }).toMatchObject({ permiso, r: { ok: false, codigo: '23503' } });
+      }
+      // usuario_sede: la membresía de B con su sede asignada y con una que no tiene, igual.
+      for (const sede of [b.sedeId, a.sedeId]) {
+        const r = await intentar(
+          c,
+          'insert into app.usuario_sede (clinica_id, membresia_id, sede_id) values ($1, $2, $3)',
+          [a.clinicaId, b.membresiaId, sede],
+        );
+        expect({ sede, r }).toMatchObject({ sede, r: { ok: false, codigo: '23503' } });
+      }
+    });
   });
 
   it('SELECT … FOR UPDATE no puede bloquear filas de B', async () => {
@@ -298,16 +346,37 @@ describe('escrituras indirectas', () => {
 
   it('las funciones SECURITY DEFINER no se dejan engañar con tablas temporales del mismo nombre', async () => {
     await comoA(async (c) => {
-      for (const tabla of ['audit_log', 'membresia', 'numerador', 'clinica', 'usuario']) {
+      for (const tabla of [
+        'audit_log',
+        'membresia',
+        'numerador',
+        'clinica',
+        'usuario',
+        'sesion',
+        'sede',
+        'rol',
+        'rol_permiso',
+      ]) {
         await c.query(`create temp table ${tabla} (like app.${tabla})`);
       }
+      const nombreReal = await valor<string>(c, 'select nombre from app.usuario where id = $1', [
+        a.duenoId,
+      ]);
+      // Un «usuario» temporal con el mismo id y otro nombre, para falsificar el autor congelado.
+      await c.query(
+        `insert into pg_temp.usuario (id, nombre, email, mfa_activo, created_at)
+         values ($1, 'Autor falso', 'falso@prueba.test', false, now())`,
+        [a.duenoId],
+      );
       await c.query('set local search_path = pg_temp, app, public');
       const evento = await valor<string>(c, "select app.registrar_evento('ver', 'sede', $1)", [
         a.sedeId,
       ]);
       expect(
-        await valor(c, 'select count(*)::int from app.audit_log where id = $1', [evento]),
-      ).toBe(1);
+        await valor(c, "select usuario_nombre || '|' || modulo from app.audit_log where id = $1", [
+          evento,
+        ]),
+      ).toBe(`${nombreReal}|sedes`);
       expect(await valor(c, 'select count(*)::int from pg_temp.audit_log')).toBe(0);
       const antes = Number(
         await valor<string>(c, "select ultimo from app.numerador where tipo = 'recibo'"),

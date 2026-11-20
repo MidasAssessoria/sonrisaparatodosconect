@@ -1,7 +1,8 @@
 /**
- * `@conecta/db`: esquema Drizzle, conexión con contexto de clínica, ejecutor de migraciones y
- * semilla de desarrollo. Las migraciones SQL (`migraciones/`) son la fuente de verdad del esquema.
- * El banco de pruebas está en `@conecta/db/pruebas`.
+ * `@conecta/db`: esquema Drizzle, conexión con contexto de clínica, funciones SQL tipadas, ejecutor
+ * de migraciones y semilla de desarrollo. Las migraciones SQL (`migraciones/`) son la fuente de
+ * verdad del esquema; las constantes del contrato (módulos, acciones, estados de sede, roles de
+ * sistema) están en `@conecta/shared`. El banco de pruebas está en `@conecta/db/pruebas`.
  */
 export * from './esquema.js';
 export {
@@ -12,12 +13,23 @@ export {
   conUsuario,
   crearPool,
   ErrorDeContexto,
+  ErrorDeMembresia,
   type BaseDeDatos,
   type ContextoSesion,
   type MembresiaActiva,
+  type MotivoErrorDeMembresia,
+  type OpcionesContexto,
   type OpcionesPool,
   type TransaccionConecta,
 } from './contexto.js';
+export {
+  activarMfa,
+  cerrarSesion,
+  desactivarMfa,
+  registrarEvento,
+  tocarSesion,
+  type EventoAuditable,
+} from './funciones.js';
 export {
   calcularChecksum,
   DIRECTORIO_MIGRACIONES,

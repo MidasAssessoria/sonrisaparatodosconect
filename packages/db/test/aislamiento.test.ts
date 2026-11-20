@@ -213,6 +213,7 @@ describe('sin contexto o con contexto inválido', () => {
     'rol_permiso',
     'numerador',
     'audit_log',
+    'sesion',
   ];
 
   it.each(contextos)('%s: cero filas en todas las tablas', async (_nombre, contexto) => {
@@ -247,7 +248,9 @@ describe('sin contexto o con contexto inválido', () => {
         expect(await intentar(c, texto, parametros)).toMatchObject({ ok: false, codigo: '42501' });
       }
       for (const tabla of ['sede', 'sillon', 'rol', 'membresia', 'clinica', 'usuario']) {
-        const r = await intentar(c, `update app.${tabla} set created_at = created_at`);
+        // En usuario, app_api solo puede escribir nombre, telefono y ultimo_acceso.
+        const columna = tabla === 'usuario' ? 'nombre' : 'created_at';
+        const r = await intentar(c, `update app.${tabla} set ${columna} = ${columna}`);
         expect(r).toMatchObject({ ok: true, cantidad: 0 });
       }
       // 42501 sin clínica en el contexto; 23503 (FK a clinica) si el contexto apunta a una que no existe.
