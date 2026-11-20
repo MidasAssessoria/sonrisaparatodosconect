@@ -26,7 +26,10 @@ export default defineConfig({
     environment: 'node',
     setupFiles: ['reflect-metadata'],
     // Postgres real (embebido en local, DATABASE_URL_TEST en CI), levantado una vez por corrida.
-    globalSetup: ['./test/global-setup.ts'],
+    // Va por ruta al fuente de @conecta/db a propósito: Vitest carga el globalSetup fuera del entorno
+    // donde vale la condición @conecta/source, así que por nombre de paquete resolvería a dist, que
+    // no existe en una copia limpia (el CI corre las pruebas antes del build) y en local puede estar viejo.
+    globalSetup: ['../../packages/db/src/pruebas/global-setup.ts'],
     testTimeout: 30_000,
     hookTimeout: 120_000,
   },
