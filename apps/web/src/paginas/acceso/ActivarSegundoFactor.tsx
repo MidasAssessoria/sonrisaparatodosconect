@@ -15,7 +15,7 @@ export function ActivarSegundoFactor() {
     <MarcoAcceso titulo={t.segundoFactor.activarTitulo}>
       <p className="w-acceso__texto">{t.segundoFactor.activarTexto}</p>
       <div className="w-formulario">
-        <ActivarTotp cancelable={false} onActivado={terminarActivacion} />
+        <ActivarTotp cancelable={false} iniciarSolo onActivado={terminarActivacion} />
         <Boton variante="fantasma" bloque icono="salir" onClick={() => void cerrarSesion()}>
           {t.armazon.cerrarSesion}
         </Boton>

@@ -1,5 +1,5 @@
 import { Boton } from '@conecta/ui';
-import { useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import type { InscripcionTotp } from '../auth/servicioAuth.js';
 import { useTextos } from '../i18n/idioma.js';
 import { mensajeAuth, RE_CODIGO } from '../paginas/acceso/textosError.js';
@@ -15,11 +15,18 @@ import { useEnvioUnico } from './useEnvioUnico.js';
 export function ActivarTotp({
   onActivado,
   cancelable = true,
+  iniciarSolo = false,
 }: {
   /** Se llama con el factor ya verificado (la sesión de Supabase pasó a aal2). */
   onActivado: () => Promise<void> | void;
   /** En la pantalla obligatoria no hay «Cancelar»: se sale activándolo o cerrando sesión. */
   cancelable?: boolean;
+  /**
+   * Genera el QR al montar, sin esperar el clic en «Activar». Lo usa la pantalla obligatoria: ahí
+   * no hay otra salida, así que el botón era un paso de más (y en la primera prueba real nadie lo
+   * tocó). Si falla, queda el botón para reintentar.
+   */
+  iniciarSolo?: boolean;
 }) {
   const t = useTextos();
   const { auth } = useSesion();
@@ -73,6 +80,15 @@ export function ActivarTotp({
       }
     });
   }
+
+  const yaIniciado = useRef(false);
+  useEffect(() => {
+    if (!iniciarSolo || yaIniciado.current) return;
+    yaIniciado.current = true;
+    empezar();
+    // empezar se recrea en cada render; solo importa la primera vez.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [iniciarSolo]);
 
   if (!inscripcion) {
     return (

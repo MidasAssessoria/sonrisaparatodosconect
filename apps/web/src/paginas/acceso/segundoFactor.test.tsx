@@ -55,8 +55,9 @@ describe('mfa_requerido al pedir /sesion', () => {
     expect(screen.queryByRole('navigation', { name: 'Módulos' })).toBeNull();
     expect(screen.getByRole('button', { name: 'Cerrar sesión' })).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Activar doble factor' }));
+    // El QR sale solo, sin tocar «Activar doble factor».
     expect(await screen.findByRole('img', { name: /Código QR/ })).toBeInTheDocument();
+    expect(auth.inscribirTotp).toHaveBeenCalledOnce();
     expect(screen.getByText('ABCDEF123456')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Cancelar' })).toBeNull();
 
@@ -65,6 +66,18 @@ describe('mfa_requerido al pedir /sesion', () => {
     expect(await screen.findByText('Todavía no hay sedes.')).toBeInTheDocument();
     expect(auth.verificarCodigo).toHaveBeenCalledWith(IDS.factor, '654321');
     expect(f.pedidos.filter((p) => p.url.pathname === '/api/v1/sesion')).toHaveLength(2);
+  });
+
+  it('si generar el QR falla, queda el botón para reintentar', async () => {
+    const auth = crearAuthFalso({ conSesion: true });
+    auth.inscribirTotp.mockRejectedValueOnce(new Error('red caída'));
+    const f = crearFetchFalso({ 'GET /sesion': sesionSegunNivel(auth) });
+    renderApp({ auth, fetch: f.fetch });
+    const reintentar = await screen.findByRole('button', { name: 'Activar doble factor' });
+    expect(screen.queryByRole('img', { name: /Código QR/ })).toBeNull();
+    fireEvent.click(reintentar);
+    expect(await screen.findByRole('img', { name: /Código QR/ })).toBeInTheDocument();
+    expect(auth.inscribirTotp).toHaveBeenCalledTimes(2);
   });
 
   it('desde la activación obligatoria se puede cerrar sesión', async () => {
@@ -114,7 +127,6 @@ describe('mfa_requerido desde otro endpoint, ya dentro de la app', () => {
     expect(
       await screen.findByRole('heading', { name: 'Activá el doble factor' }),
     ).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Activar doble factor' }));
     await screen.findByRole('img', { name: /Código QR/ });
     escribirCodigo('654321', 'Confirmar y activar');
     expect(await screen.findByText('Todavía no hay sedes.')).toBeInTheDocument();
