@@ -171,7 +171,7 @@ Criterio: lo construye y lo mantiene una persona con IA. Un solo lenguaje, pocos
 |---|---|---|
 | Lenguaje y repo | TypeScript, monorepo pnpm (`api`, `web`, `worker`, `shared`) | Un lenguaje y los mismos tipos/validaciones (Zod) en cliente y servidor |
 | Backend | NestJS, monolito modular, API REST `/api/v1` con OpenAPI | Un módulo por doc, guards para permisos e interceptores para auditoría sin repetir código |
-| Base de datos | PostgreSQL 16 (Supabase) | RLS para aislar clínicas, restricciones de exclusión para la agenda, búsqueda sin tildes (`unaccent` + `pg_trgm`), todo transaccional |
+| Base de datos | PostgreSQL 17 (Supabase; es la versión que crea hoy) | RLS para aislar clínicas, restricciones de exclusión para la agenda, búsqueda sin tildes (`unaccent` + `pg_trgm`), todo transaccional |
 | Acceso a datos | Drizzle ORM + migraciones SQL versionadas | SQL explícito y tipado; permite RLS, índices parciales y `EXCLUDE` sin pelear con el ORM |
 | Multi-clínica | `clinica_id` en toda tabla + RLS con `SET LOCAL app.clinica_id` por transacción | Es el «filtro obligatorio central» que pide el doc 00: un bug de pantalla no filtra datos de otra clínica |
 | Autenticación | Supabase Auth (correo + contraseña, TOTP, invitación por enlace) | Login, 2FA y recuperación resueltos; la identidad no es donde conviene innovar |
@@ -221,7 +221,7 @@ Criterio: lo construye y lo mantiene una persona con IA. Un solo lenguaje, pocos
 | `rol` | nombre, es_sistema | por clínica; 5 iniciales del doc 00 |
 | `rol_permiso` | rol_id, modulo, accion (ver/crear/editar/anular/exportar) | UNIQUE(rol_id, modulo, accion) |
 | `invitacion` | email, rol_id, token_hash, vence_en, aceptada_en, invitada_por | índice por token_hash |
-| `audit_log` | usuario_id, fecha, entidad, entidad_id, accion (crear/editar/anular/ver/exportar/enviar), antes, despues (jsonb), ip | particionada por mes; índices (clinica_id, entidad, entidad_id) y (clinica_id, usuario_id, fecha); sin UPDATE/DELETE |
+| `audit_log` | usuario_id, fecha, entidad, entidad_id, accion (crear/editar/anular/ver/exportar/enviar/ingresar), modulo, sede_id, usuario_nombre (congelado), antes, despues (jsonb), ip | sin particionar por ahora (se particiona por mes cuando el volumen lo pida); índices (clinica_id, fecha, id), (clinica_id, entidad, entidad_id) y (clinica_id, usuario_id, fecha); sin UPDATE/DELETE. La API solo muestra eventos de módulos y sedes que el rol puede ver |
 | `numerador` | tipo (presupuesto, receta, certificado, indicaciones, consentimiento, recibo), sede_id (nulo), ultimo | UNIQUE(clinica_id, tipo, sede_id); se toma con `SELECT … FOR UPDATE` → correlativo sin huecos |
 | `archivo` | bucket, ruta, mime, bytes, ancho, alto, sha256, subido_por | todo archivo del sistema se referencia desde acá |
 
@@ -330,16 +330,16 @@ Mantengo tu orden dentro del MVP (pacientes → anamnesis → agenda → odontog
 #### Sprint 1 · Fundaciones — esfuerzo 9 d
 **Objetivo**: repositorio, entornos, CI y base multi-clínica con login.
 **Historias**
-- Como desarrollador, cada push corre lint, tipos, pruebas y migraciones contra un Postgres real, y mergear despliega a staging. *CA*: una prueba roja bloquea el merge; staging y producción con base, bucket y secretos distintos.
-- Como dueño, entro con correo y contraseña y activo doble factor. *CA*: la sesión vence; cierre por inactividad configurable por rol; ingresos y fallos quedan en auditoría.
+- Como desarrollador, cada push corre lint, tipos, pruebas y migraciones contra un Postgres real, y mergear despliega a staging. *CA*: una prueba roja bloquea el merge; staging y producción con base, bucket y secretos distintos. *(Estado: CI hecho; el despliegue a staging quedó fuera de la primera ejecución y se decide al cerrar el sprint.)*
+- Como dueño, entro con correo y contraseña y activo doble factor. *CA*: la sesión vence; cierre por inactividad configurable por rol, aplicado en la web y en la API; el doble factor es obligatorio para dueño y administración; los ingresos quedan en auditoría (los fallos de ingreso quedan en el registro de Supabase Auth, no en el nuestro).
 - Como sistema, ningún dato cruza de clínica. *CA*: prueba automática con dos clínicas: con el contexto de A no se lee ni se modifica nada de B, aunque la consulta no filtre.
 - Como administración, creo sedes y sillones. *CA*: estados abierta / próxima / cerrada; no se borran, se dan de baja.
 - Como auditor, veo quién hizo qué. *CA*: toda alta, edición y anulación deja antes/después; `audit_log` rechaza UPDATE y DELETE.
 
 **Tablas**: clinica, sede, sede_horario, sillon, usuario, membresia, usuario_sede, rol, rol_permiso, audit_log, numerador.
 **Endpoints**: `/auth/*`, `GET /me`, CRUD `/sedes`, `/sedes/:id/sillones`, `GET /auditoria`.
-**Pruebas**: aislamiento RLS, guard de permisos, auditoría automática, migraciones de ida y vuelta.
-**Entregable**: staging con login 2FA, alta de sede y su registro de auditoría.
+**Pruebas**: aislamiento RLS, guard de permisos, auditoría automática, migraciones solo hacia adelante con checksum (una corrección es una migración nueva; no hay migraciones de vuelta).
+**Entregable**: login con doble factor, alta de sede y su registro de auditoría, en local contra el Supabase de desarrollo (staging cuando se decida el despliegue).
 **En paralelo (no es código)**: iniciar verificación de la cuenta de WhatsApp Business.
 
 #### Sprint 2 · Usuarios, permisos, archivos y esqueleto — esfuerzo 10 d
