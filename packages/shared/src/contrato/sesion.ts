@@ -23,6 +23,17 @@ export type Permiso = z.infer<typeof permisoSchema>;
 /**
  * `GET /api/v1/sesion` — quién soy, en qué clínica trabajo y qué puedo hacer.
  * Es lo primero que pide la web después de iniciar sesión.
+ *
+ * Es el único endpoint que tolera la falta de `X-Clinica-Id` con varias
+ * membresías: responde con la más antigua activa y la lista completa en
+ * `clinicas`, para que la web ofrezca elegir. El resto responde
+ * `clinica_requerida`.
+ *
+ * Doble factor: `usuario.mfaActivo` lo mantiene la API. Pasa a `true` la
+ * primera vez que llega un token aal2 y vuelve a `false` solo con
+ * `DELETE /api/v1/sesion/mfa` (exige token aal2; la web lo llama justo después
+ * de quitar el factor en Supabase). Con `mfaActivo` y token aal1 la API
+ * responde `mfa_requerido` en todo salvo `GET /sesion`.
  */
 export const sesionSchema = z.object({
   usuario: z.object({

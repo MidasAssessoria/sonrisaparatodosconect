@@ -52,7 +52,14 @@ export const crearSedeSchema = z.object({
 export type CrearSede = z.infer<typeof crearSedeSchema>;
 
 /** `PATCH /api/v1/sedes/:id` */
-export const editarSedeSchema = crearSedeSchema.partial();
+export const editarSedeSchema = z.object({
+  nombre: z.string().trim().min(2, 'Poné el nombre de la sede.').max(80).optional(),
+  /** `null` o cadena vacía borran el dato. */
+  direccion: z.string().trim().max(200).nullable().optional(),
+  telefono: z.string().trim().max(30).nullable().optional(),
+  estado: z.enum(ESTADOS_SEDE).optional(),
+  color: colorSchema.nullable().optional(),
+});
 export type EditarSede = z.infer<typeof editarSedeSchema>;
 
 /** `PUT /api/v1/sedes/:id/horarios` — reemplaza el horario completo de la sede. */
@@ -81,7 +88,7 @@ export type EditarSillon = z.infer<typeof editarSillonSchema>;
  *   GET    /sedes/:id              ver     → Sede
  *   PATCH  /sedes/:id              editar  → Sede
  *   DELETE /sedes/:id              anular  (cuerpo: bajaSchema) → 204; baja lógica
- *   PUT    /sedes/:id/horarios     editar  → Sede
+ *   PUT    /sedes/:id/horarios     editar  → Sede (la API rechaza tramos superpuestos el mismo día)
  *   POST   /sedes/:id/sillones     crear   → Sillon
  *   PATCH  /sillones/:id           editar  → Sillon
  */
