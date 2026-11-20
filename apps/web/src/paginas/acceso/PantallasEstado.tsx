@@ -18,10 +18,10 @@ export function PantallaCarga({ texto }: { texto: string }) {
 
 export function PantallaErrorSesion({ mensaje }: { mensaje: string }) {
   const t = useTextos();
-  const { cerrarSesion } = useSesion();
+  const { cerrarSesion, reintentar } = useSesion();
   return (
     <MarcoAcceso titulo={t.armazon.errorSesion}>
-      <MensajeError texto={mensaje} onReintentar={() => window.location.reload()} />
+      <MensajeError texto={mensaje} onReintentar={reintentar} />
       <Boton variante="fantasma" bloque icono="salir" onClick={() => void cerrarSesion()}>
         {t.armazon.cerrarSesion}
       </Boton>

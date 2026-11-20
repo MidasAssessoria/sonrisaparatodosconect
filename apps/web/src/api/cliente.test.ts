@@ -1,8 +1,16 @@
 import { CODIGOS_ERROR, type CodigoError } from '@conecta/shared';
 import { describe, expect, it, vi } from 'vitest';
 import { crearFetchFalso, IDS, sedeDe, sesionDe } from '../test/fabricas.js';
-import { crearClienteApi } from './cliente.js';
-import { ErrorConecta, mensajeDeError, reaccionPorCodigo, TEXTO_SIN_ACCESO } from './errores.js';
+import { crearClienteConsultas } from '../App.js';
+import { baseApi, crearClienteApi, reintentarDesde } from './cliente.js';
+import {
+  ErrorConecta,
+  esReintentable,
+  mensajeDeError,
+  reaccionPorCodigo,
+  TEXTO_DEMASIADOS_PEDIDOS,
+  TEXTO_SIN_ACCESO,
+} from './errores.js';
 
 function cliente(
   fetchImpl: typeof fetch,
@@ -149,7 +157,9 @@ describe('reacción por código', () => {
     clinica_requerida: 'elegir_clinica',
     sin_permiso: 'sin_acceso',
     sede_no_permitida: 'sin_acceso',
-    sin_membresia: 'mensaje',
+    sin_membresia: 'sin_membresia',
+    demasiados_pedidos: 'mensaje',
+    servicio_no_disponible: 'mensaje',
     no_encontrado: 'mensaje',
     datos_invalidos: 'mensaje',
     conflicto: 'mensaje',
@@ -166,5 +176,84 @@ describe('reacción por código', () => {
       'Ese nombre ya existe. Elegí otro.',
     );
     expect(mensajeDeError(new Error('raro'))).toMatch(/Probá de nuevo/);
+  });
+});
+
+describe('origen de la API (VITE_API_URL)', () => {
+  it('sin origen usa el mismo origen; con origen, la URL absoluta sin barra final', () => {
+    expect(baseApi(undefined)).toBe('/api/v1');
+    expect(baseApi('')).toBe('/api/v1');
+    expect(baseApi('https://api.conecta.test/')).toBe('https://api.conecta.test/api/v1');
+  });
+
+  it('los pedidos van al origen configurado, no a una ruta relativa', async () => {
+    const f = crearFetchFalso({ 'GET /sesion': { cuerpo: sesionDe() } });
+    const api = crearClienteApi({
+      fetch: f.fetch,
+      base: baseApi('https://api.conecta.test'),
+      obtenerToken: () => Promise.resolve('tok'),
+      obtenerClinicaId: () => null,
+    });
+    await api.sesion.obtener();
+    expect(f.pedidos[0]?.url.href).toBe('https://api.conecta.test/api/v1/sesion');
+  });
+});
+
+describe('429 y 503', () => {
+  it('429 con Retry-After: demasiados_pedidos, mensaje fijo y momento para reintentar', async () => {
+    const f = crearFetchFalso({
+      'GET /sedes': {
+        estado: 429,
+        cabeceras: { 'Retry-After': '30' },
+        cuerpo: { codigo: 'demasiados_pedidos', mensaje: 'Too many' },
+      },
+    });
+    const { api } = cliente(f.fetch);
+    const antes = Date.now();
+    const error = (await api.sedes.listar().catch((e: unknown) => e)) as ErrorConecta;
+    expect(error.codigo).toBe('demasiados_pedidos');
+    expect(mensajeDeError(error)).toBe(TEXTO_DEMASIADOS_PEDIDOS);
+    expect(error.reintentarDesde).toBeGreaterThanOrEqual(antes + 30_000);
+  });
+
+  it('un 429 sin cuerpo JSON no se vuelve error_interno (que sí se reintenta)', async () => {
+    const fetchImpl = vi.fn(() => Promise.resolve(new Response('lento', { status: 429 })));
+    const { api } = cliente(fetchImpl);
+    const error = (await api.sedes.listar().catch((e: unknown) => e)) as ErrorConecta;
+    expect(error.codigo).toBe('demasiados_pedidos');
+    expect(esReintentable(error)).toBe(false);
+    // Aunque la API mandara error_interno con 429, tampoco se reintenta.
+    expect(esReintentable(new ErrorConecta('error_interno', 'x', { estado: 429 }))).toBe(false);
+  });
+
+  it('un 503 sin cuerpo es servicio_no_disponible y no se reintenta solo', async () => {
+    const fetchImpl = vi.fn(() => Promise.resolve(new Response('', { status: 503 })));
+    const { api } = cliente(fetchImpl);
+    const error = (await api.sedes.listar().catch((e: unknown) => e)) as ErrorConecta;
+    expect(error.codigo).toBe('servicio_no_disponible');
+    expect(reaccionPorCodigo(error.codigo).tipo).toBe('mensaje');
+    expect(esReintentable(error)).toBe(false);
+  });
+
+  it('las consultas solo se reintentan solas ante la red o un 5xx genérico', () => {
+    const reintentar = crearClienteConsultas().getDefaultOptions().queries?.retry as (
+      intentos: number,
+      error: unknown,
+    ) => boolean;
+    expect(reintentar(0, new ErrorConecta('sin_conexion', 'x'))).toBe(true);
+    expect(reintentar(0, new ErrorConecta('error_interno', 'x', { estado: 500 }))).toBe(true);
+    expect(reintentar(2, new ErrorConecta('error_interno', 'x', { estado: 500 }))).toBe(false);
+    expect(reintentar(0, new ErrorConecta('demasiados_pedidos', 'x', { estado: 429 }))).toBe(false);
+    expect(reintentar(0, new ErrorConecta('servicio_no_disponible', 'x', { estado: 503 }))).toBe(
+      false,
+    );
+  });
+
+  it('Retry-After acepta segundos o fecha HTTP', () => {
+    const ahora = Date.UTC(2026, 10, 20, 12, 0, 0);
+    expect(reintentarDesde('5', ahora)).toBe(ahora + 5000);
+    expect(reintentarDesde('Fri, 20 Nov 2026 12:01:00 GMT', ahora)).toBe(ahora + 60_000);
+    expect(reintentarDesde(null, ahora)).toBeNull();
+    expect(reintentarDesde('mañana', ahora)).toBeNull();
   });
 });

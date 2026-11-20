@@ -13,6 +13,7 @@ import { useMutation } from '@tanstack/react-query';
 import { useId, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router';
 import { Esqueleto, MensajeError } from '../../componentes/estados.js';
+import { useEnvioUnico } from '../../componentes/useEnvioUnico.js';
 import { useSesionLista } from '../../sesion/ProveedorSesion.js';
 import { useActualizarSede, useSedes } from './consultas.js';
 import { infoEstadoSede } from './estadoSede.js';
@@ -67,6 +68,7 @@ export function ListaSedes() {
   const navegar = useNavigate();
   const ubicacion = useLocation();
   const idForm = useId();
+  const unaVez = useEnvioUnico();
   const [hojaAbierta, setHojaAbierta] = useState(false);
   const [creada, setCreada] = useState<Sede | null>(null);
   const [avisoNavegacion, setAvisoNavegacion] = useState<string | null>(
@@ -155,7 +157,7 @@ export function ListaSedes() {
             <FormularioSede
               id={idForm}
               inicial={datosIniciales()}
-              onGuardar={(d) => crear.mutate(d)}
+              onGuardar={(d) => void unaVez(() => crear.mutateAsync(d).catch(() => undefined))}
               error={crear.error}
             />
           ) : null}

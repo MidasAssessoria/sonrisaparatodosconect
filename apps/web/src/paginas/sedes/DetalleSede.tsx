@@ -4,6 +4,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useId, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { Esqueleto, MensajeError } from '../../componentes/estados.js';
+import { useEnvioUnico } from '../../componentes/useEnvioUnico.js';
 import { useSesionLista } from '../../sesion/ProveedorSesion.js';
 import { claveSede, useActualizarSede, useSede } from './consultas.js';
 import { DarDeBaja } from './DarDeBaja.js';
@@ -16,7 +17,10 @@ import type { EstadoNavegacionSedes } from './ListaSedes.js';
 export function DetalleSede() {
   const { id = '' } = useParams();
   const { api, puede, sesion } = useSesionLista();
-  const consulta = useSede(id);
+  // Tras la baja, el detalle no vuelve a pedir la sede (respondería «no encontrada») aunque
+  // siga montado un instante mientras se navega a la lista.
+  const [dadaDeBaja, setDadaDeBaja] = useState(false);
+  const consulta = useSede(id, !dadaDeBaja);
   const actualizar = useActualizarSede();
   const consultas = useQueryClient();
   const navegar = useNavigate();
@@ -24,14 +28,17 @@ export function DetalleSede() {
   const [editando, setEditando] = useState(false);
   const [bajaAbierta, setBajaAbierta] = useState(false);
   const [aviso, setAviso] = useState<string | null>(null);
+  const unaVez = useEnvioUnico();
 
   const editar = useMutation({
     mutationFn: (datos: CrearSede) =>
       api.sedes.editar(id, {
         ...datos,
-        // Vaciar un campo en el formulario lo borra (el esquema de edición no acepta null).
+        // Lo que el formulario deja vacío se borra: cadena vacía en los textos, `null` en el color
+        // («Sin color»). Sin esto, omitir el campo dejaba el valor anterior.
         direccion: datos.direccion ?? '',
         telefono: datos.telefono ?? '',
+        color: datos.color ?? null,
       }),
     onSuccess: async (sede) => {
       setEditando(false);
@@ -50,10 +57,15 @@ export function DetalleSede() {
   const baja = useMutation({
     mutationFn: (motivo: string) => api.sedes.darDeBaja(id, { motivo }),
     onSuccess: async () => {
-      consultas.removeQueries({ queryKey: claveSede(sesion.clinica.id, id) });
-      await actualizar();
+      // Primero se sale del detalle; recién después se limpia el caché. Al revés, el detalle
+      // (todavía montado) volvía a pedir la sede dada de baja y mostraba «No encontramos esa
+      // sede» por un instante.
+      setDadaDeBaja(true);
       const estado: EstadoNavegacionSedes = { aviso: 'La sede quedó dada de baja.' };
-      void navegar('/sedes', { state: estado });
+      void navegar('/sedes', { state: estado, replace: true });
+      await Promise.resolve();
+      consultas.removeQueries({ queryKey: claveSede(sesion.clinica.id, id), exact: true });
+      await actualizar();
     },
   });
 
@@ -203,7 +215,7 @@ export function DetalleSede() {
             <FormularioSede
               id={idForm}
               inicial={datosIniciales(sede)}
-              onGuardar={(d) => editar.mutate(d)}
+              onGuardar={(d) => void unaVez(() => editar.mutateAsync(d).catch(() => undefined))}
               error={editar.error}
             />
           ) : null}
@@ -215,7 +227,7 @@ export function DetalleSede() {
           abierta={bajaAbierta}
           nombre={sede.nombre}
           onCerrar={() => setBajaAbierta(false)}
-          onConfirmar={(m) => baja.mutate(m)}
+          onConfirmar={(m) => void unaVez(() => baja.mutateAsync(m).catch(() => undefined))}
           enviando={baja.isPending}
           error={baja.error}
         />

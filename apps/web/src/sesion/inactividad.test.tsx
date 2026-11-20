@@ -86,6 +86,22 @@ describe('useInactividad', () => {
     expect(alCerrar).not.toHaveBeenCalled();
   });
 
+  it('al montar no pisa la marca guardada: parte de la última actividad registrada', () => {
+    // Última actividad hace 2 minutos (p. ej. antes de recargar la página).
+    window.localStorage.setItem('conecta.actividad', String(Date.now() - 2 * MIN));
+    const alCerrar = vi.fn();
+    const { result } = renderHook(() => useInactividad({ minutos: 3, activo: true, alCerrar }));
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+    // Faltaba un minuto: el aviso aparece enseguida, no a los 2 minutos de montar.
+    expect(result.current.aviso).toBe(true);
+    act(() => {
+      vi.advanceTimersByTime(MIN);
+    });
+    expect(alCerrar).toHaveBeenCalledOnce();
+  });
+
   it('inactivo no hace nada', () => {
     const alCerrar = vi.fn();
     renderHook(() => useInactividad({ minutos: 1, activo: false, alCerrar }));
@@ -107,6 +123,10 @@ describe('cierre por inactividad en la app', () => {
     const f = crearFetchFalso({ 'GET /sesion': { cuerpo: sesionDe({ inactividadMin: 3 }) } });
     renderApp({ auth, fetch: f.fetch });
     await screen.findByRole('heading', { name: "Mba'éichapa, Lorena" });
+    // El efecto que registra el intervalo corre después del render: sin esto, bajo carga, el
+    // reloj falso avanzaba antes de que existiera el temporizador y la prueba fallaba a veces.
+    await vi.waitFor(() => expect(vi.getTimerCount()).toBeGreaterThan(0));
+    expect(window.localStorage.getItem('conecta.actividad')).not.toBeNull();
 
     act(() => {
       vi.advanceTimersByTime(2 * MIN + 1000);

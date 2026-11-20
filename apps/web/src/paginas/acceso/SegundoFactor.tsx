@@ -2,6 +2,7 @@ import { Boton } from '@conecta/ui';
 import { useState, type FormEvent } from 'react';
 import { CampoCodigo } from '../../componentes/CampoCodigo.js';
 import { MensajeError } from '../../componentes/estados.js';
+import { useEnvioUnico } from '../../componentes/useEnvioUnico.js';
 import { useTextos } from '../../i18n/idioma.js';
 import { useSesion } from '../../sesion/ProveedorSesion.js';
 import { MarcoAcceso } from './MarcoAcceso.js';
@@ -15,8 +16,9 @@ export function SegundoFactor() {
   const [error, setError] = useState<string | null>(null);
   const [errorGeneral, setErrorGeneral] = useState<string | null>(null);
   const [enviando, setEnviando] = useState(false);
+  const unaVez = useEnvioUnico();
 
-  async function enviar(e: FormEvent) {
+  function enviar(e: FormEvent) {
     e.preventDefault();
     setErrorGeneral(null);
     if (!RE_CODIGO.test(codigo)) {
@@ -24,20 +26,22 @@ export function SegundoFactor() {
       return;
     }
     setError(null);
-    setEnviando(true);
-    try {
-      await verificarSegundoFactor(codigo);
-    } catch (ex) {
-      setErrorGeneral(mensajeAuth(ex, t));
-      setCodigo('');
-      setEnviando(false);
-    }
+    void unaVez(async () => {
+      setEnviando(true);
+      try {
+        await verificarSegundoFactor(codigo);
+      } catch (ex) {
+        setErrorGeneral(mensajeAuth(ex, t));
+        setCodigo('');
+        setEnviando(false);
+      }
+    });
   }
 
   return (
     <MarcoAcceso titulo={t.segundoFactor.titulo}>
       <p className="w-acceso__texto">{t.segundoFactor.texto}</p>
-      <form className="w-formulario" onSubmit={(e) => void enviar(e)} noValidate>
+      <form className="w-formulario" onSubmit={enviar} noValidate>
         <CampoCodigo valor={codigo} onCambio={setCodigo} error={error} autoFocus />
         {errorGeneral ? <MensajeError texto={errorGeneral} /> : null}
         <Boton type="submit" variante="primario" tamano="lg" bloque cargando={enviando}>

@@ -11,6 +11,7 @@ import {
   uuid,
 } from '../../test/fabricas.js';
 import { validarTramos, type Tramo } from './EditorHorarios.js';
+import { COLORES_SEDE, infoEstadoSede } from './estadoSede.js';
 
 function tramo(p: Partial<Tramo>): Tramo {
   return {
@@ -200,17 +201,22 @@ describe('Sedes', () => {
     );
   });
 
-  it('editar datos manda solo el PATCH con los campos del formulario', async () => {
+  it('editar: vaciar la dirección y elegir «Sin color» borran esos datos (color: null)', async () => {
     const auth = crearAuthFalso({ conSesion: true });
+    const conColor = sedeDe({ color: COLORES_SEDE[1]!.valor });
     const f = crearFetchFalso({
       'GET /sesion': { cuerpo: sesionDe() },
-      'GET /sedes/:id': { cuerpo: sedeDe() },
-      'PATCH /sedes/:id': ({ cuerpo }) => ({ cuerpo: sedeDe(cuerpo as Partial<Sede>) }),
+      'GET /sedes/:id': { cuerpo: conColor },
+      // Respuesta fija (no un eco del pedido): la aserción mira lo que se mandó.
+      'PATCH /sedes/:id': { cuerpo: sedeDe({ direccion: null, color: null }) },
     });
     renderApp({ auth, fetch: f.fetch, ruta: `/sedes/${IDS.sedeCentro}` });
-    fireEvent.click(await screen.findByRole('button', { name: 'Editar datos' }));
+    expect(await screen.findByText('Cielo')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Editar datos' }));
     const hoja = within(await screen.findByRole('dialog', { name: 'Editar datos de la sede' }));
+    expect(hoja.getByRole('radio', { name: 'Cielo' })).toHaveAttribute('aria-checked', 'true');
     fireEvent.change(hoja.getByLabelText('Dirección'), { target: { value: '' } });
+    fireEvent.click(hoja.getByRole('radio', { name: 'Sin color' }));
     fireEvent.click(hoja.getByRole('button', { name: 'Guardar cambios' }));
     expect(await screen.findByText('Datos de la sede guardados')).toBeInTheDocument();
     expect(f.pedidos.find((p) => p.metodo === 'PATCH')?.cuerpo).toEqual({
@@ -218,17 +224,130 @@ describe('Sedes', () => {
       estado: 'abierta',
       telefono: '021 000 000',
       direccion: '',
+      color: null,
     });
   });
 
-  it('dar de baja pide motivo, confirma y vuelve a la lista con el aviso', async () => {
+  it('el nombre de cada color se ve escrito, sin depender del hover', async () => {
+    const auth = crearAuthFalso({ conSesion: true });
+    const f = crearFetchFalso({
+      'GET /sesion': { cuerpo: sesionDe() },
+      'GET /sedes': { cuerpo: [] },
+    });
+    renderApp({ auth, fetch: f.fetch, ruta: '/sedes' });
+    fireEvent.click(await screen.findByRole('button', { name: 'Nueva sede' }));
+    const hoja = within(await screen.findByRole('dialog', { name: 'Nueva sede' }));
+    for (const c of COLORES_SEDE) {
+      const opcion = hoja.getByRole('radio', { name: c.nombre });
+      expect(opcion).toHaveTextContent(c.nombre);
+      expect(opcion).not.toHaveAttribute('title');
+    }
+  });
+
+  it('dos clics rápidos en «Guardar sede» mandan un solo POST', async () => {
+    const auth = crearAuthFalso({ conSesion: true });
+    const f = crearFetchFalso({
+      'GET /sesion': { cuerpo: sesionDe() },
+      'GET /sedes': { cuerpo: [] },
+      'POST /sedes': ({ cuerpo }) => ({
+        estado: 201,
+        cuerpo: sedeDe({ id: uuid(99), ...(cuerpo as Partial<Sede>) }),
+      }),
+    });
+    renderApp({ auth, fetch: f.fetch, ruta: '/sedes' });
+    fireEvent.click(await screen.findByRole('button', { name: 'Nueva sede' }));
+    const hoja = within(await screen.findByRole('dialog', { name: 'Nueva sede' }));
+    fireEvent.change(hoja.getByLabelText(/^Nombre/), { target: { value: 'San Lorenzo' } });
+    const guardar = hoja.getByRole('button', { name: 'Guardar sede' });
+    fireEvent.click(guardar);
+    fireEvent.click(guardar);
+    expect(await screen.findByText('Sede «San Lorenzo» creada')).toBeInTheDocument();
+    expect(f.pedidos.filter((p) => p.metodo === 'POST')).toHaveLength(1);
+  });
+
+  it('dos clics rápidos en «Confirmar baja» y en «Agregar sillón» mandan un solo pedido', async () => {
     const auth = crearAuthFalso({ conSesion: true });
     const f = crearFetchFalso({
       'GET /sesion': { cuerpo: sesionDe() },
       'GET /sedes': { cuerpo: [] },
       'GET /sedes/:id': { cuerpo: sedeDe() },
+      'POST /sedes/:id/sillones': ({ cuerpo }) => ({
+        estado: 201,
+        cuerpo: { id: uuid(71), sedeId: IDS.sedeCentro, activo: true, ...(cuerpo as object) },
+      }),
       'DELETE /sedes/:id': { estado: 204 },
     });
+    renderApp({ auth, fetch: f.fetch, ruta: `/sedes/${IDS.sedeCentro}` });
+    fireEvent.change(await screen.findByLabelText('Nombre del sillón nuevo'), {
+      target: { value: 'Sillón 1' },
+    });
+    const agregar = screen.getByRole('button', { name: 'Agregar sillón' });
+    fireEvent.click(agregar);
+    fireEvent.click(agregar);
+    expect(await screen.findByText('Sillón «Sillón 1» agregado')).toBeInTheDocument();
+    expect(f.pedidos.filter((p) => p.metodo === 'POST')).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Dar de baja' }));
+    const hoja = within(await screen.findByRole('dialog', { name: 'Dar de baja «Centro»' }));
+    fireEvent.change(hoja.getByLabelText(/^Motivo de la baja/), {
+      target: { value: 'Se mudó a otro local' },
+    });
+    const confirmar = hoja.getByRole('button', { name: 'Confirmar baja' });
+    fireEvent.click(confirmar);
+    fireEvent.click(confirmar);
+    expect(await screen.findByText('La sede quedó dada de baja.')).toBeInTheDocument();
+    expect(f.pedidos.filter((p) => p.metodo === 'DELETE')).toHaveLength(1);
+  });
+
+  it('estados con ícono: sillón Activo/Inactivo y sede Cerrada sin el candado', async () => {
+    const auth = crearAuthFalso({ conSesion: true });
+    const f = crearFetchFalso({
+      'GET /sesion': { cuerpo: sesionDe() },
+      'GET /sedes/:id': {
+        cuerpo: sedeDe({
+          estado: 'cerrada',
+          sillones: [
+            { id: uuid(70), sedeId: IDS.sedeCentro, nombre: 'Sillón 1', activo: true },
+            { id: uuid(71), sedeId: IDS.sedeCentro, nombre: 'Sillón 2', activo: false },
+          ],
+        }),
+      },
+    });
+    renderApp({ auth, fetch: f.fetch, ruta: `/sedes/${IDS.sedeCentro}` });
+    await screen.findByText('Sillón 1');
+    for (const texto of ['Activo', 'Inactivo', 'Cerrada']) {
+      const chip = screen.getByText(texto).closest('.cn-chip');
+      expect(chip?.querySelector('svg')).not.toBeNull();
+    }
+    expect(infoEstadoSede('cerrada').icono).not.toBe('candado');
+  });
+
+  it('dar de baja pide motivo, confirma y vuelve a la lista con el aviso', async () => {
+    const auth = crearAuthFalso({ conSesion: true });
+    let dadaDeBaja = false;
+    let pedidaTrasLaBaja = false;
+    const f = crearFetchFalso({
+      'GET /sesion': { cuerpo: sesionDe() },
+      'GET /sedes': { cuerpo: [] },
+      'GET /sedes/:id': () => {
+        if (!dadaDeBaja) return { cuerpo: sedeDe() };
+        pedidaTrasLaBaja = true;
+        return {
+          estado: 404,
+          cuerpo: { codigo: 'no_encontrado', mensaje: 'No encontramos esa sede.' },
+        };
+      },
+      'DELETE /sedes/:id': () => {
+        dadaDeBaja = true;
+        return { estado: 204 };
+      },
+    });
+    // Si en algún momento aparece el error, queda registrado (aunque sea por un instante).
+    let vioNoEncontrada = false;
+    const observador = new MutationObserver(() => {
+      if (document.body.textContent?.includes('No encontramos esa sede')) vioNoEncontrada = true;
+    });
+    observador.observe(document.body, { childList: true, subtree: true, characterData: true });
     renderApp({ auth, fetch: f.fetch, ruta: `/sedes/${IDS.sedeCentro}` });
     fireEvent.click(await screen.findByRole('button', { name: 'Dar de baja' }));
     const hoja = within(await screen.findByRole('dialog', { name: 'Dar de baja «Centro»' }));
@@ -245,5 +364,12 @@ describe('Sedes', () => {
     const baja = f.pedidos.find((p) => p.metodo === 'DELETE');
     expect(baja?.url.pathname).toBe(`/api/v1/sedes/${IDS.sedeCentro}`);
     expect(baja?.cuerpo).toEqual({ motivo: 'Se mudó a otro local' });
+    // Esperar a que termine de recargar la sesión y el caché.
+    await waitFor(() =>
+      expect(f.pedidos.filter((p) => p.url.pathname === '/api/v1/sesion').length).toBe(2),
+    );
+    observador.disconnect();
+    expect(pedidaTrasLaBaja).toBe(false);
+    expect(vioNoEncontrada).toBe(false);
   });
 });

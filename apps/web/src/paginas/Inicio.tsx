@@ -10,8 +10,9 @@ import { infoEstadoSede } from './sedes/estadoSede.js';
 export function Inicio() {
   const t = useTextos();
   const navegar = useNavigate();
-  const { sesion, sedeActivaId, puede } = useSesionLista();
-  const sede = sesion.sedes.find((s) => s.id === sedeActivaId);
+  const { sesion, sedeActiva, puede } = useSesionLista();
+  const sede =
+    sedeActiva.tipo === 'sede' ? sesion.sedes.find((s) => s.id === sedeActiva.id) : undefined;
   const estadoSede = sede ? infoEstadoSede(sede.estado) : null;
   const primerNombre = sesion.usuario.nombre.split(/\s+/)[0] ?? sesion.usuario.nombre;
 
@@ -42,7 +43,7 @@ export function Inicio() {
                     </Chip>
                   ) : null}
                 </>
-              ) : sedeActivaId === null && sesion.puedeVerTodasLasSedes ? (
+              ) : sedeActiva.tipo === 'todas' ? (
                 t.inicio.todasLasSedes
               ) : (
                 t.inicio.sinSede

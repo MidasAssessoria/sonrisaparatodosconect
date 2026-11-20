@@ -2,6 +2,7 @@ import { Boton, Campo } from '@conecta/ui';
 import { useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router';
 import { MensajeError } from '../../componentes/estados.js';
+import { useEnvioUnico } from '../../componentes/useEnvioUnico.js';
 import { useTextos } from '../../i18n/idioma.js';
 import { useSesion } from '../../sesion/ProveedorSesion.js';
 import { MarcoAcceso } from './MarcoAcceso.js';
@@ -16,6 +17,7 @@ export function Acceso() {
   const [errores, setErrores] = useState<{ email?: string; clave?: string }>({});
   const [errorGeneral, setErrorGeneral] = useState<string | null>(null);
   const [enviando, setEnviando] = useState(false);
+  const unaVez = useEnvioUnico();
 
   const motivo = estado.fase === 'sin_sesion' ? estado.motivo : null;
   const avisoCierre =
@@ -23,9 +25,11 @@ export function Acceso() {
       ? t.acceso.cerradaInactividad(motivo.minutos)
       : motivo?.tipo === 'vencida'
         ? t.acceso.cerradaVencida
-        : null;
+        : motivo?.tipo === 'sin_membresia'
+          ? t.acceso.cerradaSinMembresia
+          : null;
 
-  async function enviar(e: FormEvent) {
+  function enviar(e: FormEvent) {
     e.preventDefault();
     const nuevos: { email?: string; clave?: string } = {};
     const correo = email.trim();
@@ -35,13 +39,15 @@ export function Acceso() {
     setErrores(nuevos);
     setErrorGeneral(null);
     if (nuevos.email || nuevos.clave) return;
-    setEnviando(true);
-    try {
-      await ingresar(correo, clave);
-    } catch (error) {
-      setErrorGeneral(mensajeAuth(error, t));
-      setEnviando(false);
-    }
+    void unaVez(async () => {
+      setEnviando(true);
+      try {
+        await ingresar(correo, clave);
+      } catch (error) {
+        setErrorGeneral(mensajeAuth(error, t));
+        setEnviando(false);
+      }
+    });
   }
 
   return (
@@ -52,7 +58,7 @@ export function Acceso() {
           {avisoCierre}
         </p>
       ) : null}
-      <form className="w-formulario" onSubmit={(e) => void enviar(e)} noValidate>
+      <form className="w-formulario" onSubmit={enviar} noValidate>
         <Campo
           etiqueta={t.acceso.correo}
           tipo="email"

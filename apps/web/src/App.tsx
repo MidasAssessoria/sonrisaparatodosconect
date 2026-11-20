@@ -3,7 +3,7 @@ import './estilos.css';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useState } from 'react';
 import type { ServicioAuth } from './auth/servicioAuth.js';
-import { ErrorConecta, reaccionPorCodigo } from './api/errores.js';
+import { esReintentable } from './api/errores.js';
 import { ProveedorIdioma } from './i18n/idioma.js';
 import { PantallaSinConfiguracion } from './paginas/acceso/PantallasEstado.js';
 import { Rutas } from './Rutas.js';
@@ -22,12 +22,9 @@ export function crearClienteConsultas(): QueryClient {
       queries: {
         staleTime: 30_000,
         refetchOnWindowFocus: false,
-        // Errores de acceso o de datos no se arreglan reintentando.
-        retry: (intentos, error) =>
-          error instanceof ErrorConecta &&
-          reaccionPorCodigo(error.codigo).tipo === 'mensaje' &&
-          ['sin_conexion', 'error_interno'].includes(error.codigo) &&
-          intentos < 2,
+        // Solo la red y un 5xx genérico se reintentan solos. Nunca un 429 ni un 503
+        // (reintento manual), ni errores de acceso o de datos.
+        retry: (intentos, error) => esReintentable(error) && intentos < 2,
       },
     },
   });

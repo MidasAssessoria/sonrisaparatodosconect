@@ -2,6 +2,7 @@ import { horarioSedeSchema, type HorarioSede } from '@conecta/shared';
 import { AvisoExito, Boton, Campo } from '@conecta/ui';
 import { useState } from 'react';
 import { MensajeError } from '../../componentes/estados.js';
+import { useEnvioUnico } from '../../componentes/useEnvioUnico.js';
 import { DIAS_SEMANA } from './estadoSede.js';
 
 export interface Tramo {
@@ -109,6 +110,7 @@ export function EditorHorarios({
   const [errores, setErrores] = useState<Record<string, string>>({});
   const [cambios, setCambios] = useState(false);
   const [guardado, setGuardado] = useState(false);
+  const unaVez = useEnvioUnico();
 
   if (!editable) return <ResumenHorarios tramos={tramos} />;
 
@@ -152,20 +154,22 @@ export function EditorHorarios({
     setGuardado(false);
   }
 
-  async function guardar() {
+  function guardar() {
     const r = validarTramos(tramos);
     if (!r.ok) {
       setErrores(r.errores);
       return;
     }
     setErrores({});
-    try {
-      await onGuardar(r.horarios);
-      setCambios(false);
-      setGuardado(true);
-    } catch {
-      // El error lo muestra el padre (prop `error`).
-    }
+    void unaVez(async () => {
+      try {
+        await onGuardar(r.horarios);
+        setCambios(false);
+        setGuardado(true);
+      } catch {
+        // El error lo muestra el padre (prop `error`).
+      }
+    });
   }
 
   const hayErrores = Object.keys(errores).length > 0;
@@ -215,12 +219,7 @@ export function EditorHorarios({
         <AvisoExito titulo="Horarios guardados" onCerrar={() => setGuardado(false)} />
       ) : null}
       <div className="w-botonera">
-        <Boton
-          variante="primario"
-          cargando={guardando}
-          disabled={!cambios}
-          onClick={() => void guardar()}
-        >
+        <Boton variante="primario" cargando={guardando} disabled={!cambios} onClick={guardar}>
           Guardar horarios
         </Boton>
         {cambios ? (

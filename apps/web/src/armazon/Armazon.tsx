@@ -1,7 +1,6 @@
 import { Boton, HojaInferior, MarcoApp, type ItemNavegacion, type RenderEnlace } from '@conecta/ui';
 import type { ReactNode } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router';
-import { AvisoPersistente } from '../componentes/estados.js';
 import { useIdioma } from '../i18n/idioma.js';
 import { modulosVisibles, moduloDeRuta, type IdModuloWeb } from '../modulos.js';
 import { useSesionLista } from '../sesion/ProveedorSesion.js';
@@ -22,7 +21,7 @@ const renderEnlace: RenderEnlace<IdModuloWeb> = ({ href, item, activo, children,
 /** Armazón con sesión: navegación según permisos, sede, menú de usuario e inactividad. */
 export function Armazon({ children }: { children: ReactNode }) {
   const { idioma, setIdioma, t } = useIdioma();
-  const { sesion, puede, sedeActivaId, elegirSede, cerrarSesion, irAElegirClinica } =
+  const { sesion, puede, sedeActiva, elegirSede, cerrarSesion, irAElegirClinica } =
     useSesionLista();
   const ubicacion = useLocation();
   const navegar = useNavigate();
@@ -68,25 +67,18 @@ export function Armazon({ children }: { children: ReactNode }) {
       usuario={{ nombre: sesion.usuario.nombre, rol: sesion.rol.nombre }}
       accionesUsuario={acciones}
       onCerrarSesion={() => void cerrarSesion()}
-      sedes={sesion.sedes.map((s) => ({ id: s.id, nombre: s.nombre }))}
-      sedeActiva={sedeActivaId}
-      onSede={elegirSede}
+      {...(sedeActiva.tipo === 'ninguna'
+        ? { sede: t.inicio.sinSede, sedes: [] }
+        : {
+            sedes: sesion.sedes.map((s) => ({ id: s.id, nombre: s.nombre })),
+            sedeActiva: sedeActiva.tipo === 'sede' ? sedeActiva.id : null,
+            onSede: elegirSede,
+          })}
       permitirTodas={sesion.puedeVerTodasLasSedes}
       idioma={idioma}
       onIdioma={setIdioma}
       pieLateral={sesion.clinica.nombre}
     >
-      {sesion.debeActivarMfa && ubicacion.pathname !== RUTA_SEGURIDAD ? (
-        <AvisoPersistente
-          titulo={t.armazon.mfaPendiente}
-          texto={t.armazon.mfaPendienteTexto}
-          accion={
-            <Boton variante="primario" icono="candado" onClick={() => void navegar(RUTA_SEGURIDAD)}>
-              {t.armazon.activarMfa}
-            </Boton>
-          }
-        />
-      ) : null}
       {children}
       <HojaInferior
         abierta={aviso}

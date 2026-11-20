@@ -18,13 +18,36 @@ import {
   type Sillon,
 } from '@conecta/shared';
 import { z } from 'zod';
-import { ErrorConecta } from './errores.js';
+import { ErrorConecta, TEXTO_DEMASIADOS_PEDIDOS, TEXTO_SERVICIO_NO_DISPONIBLE } from './errores.js';
 
-export const BASE_API = '/api/v1';
+const RUTA_API = '/api/v1';
+
+/**
+ * Base de la API a partir de su origen (`VITE_API_URL`, p. ej. «https://api.conecta.com.py»).
+ * Vacío = mismo origen que la web (en desarrollo, el proxy de Vite).
+ */
+export function baseApi(origen: string | undefined | null): string {
+  const limpio = (origen ?? '').trim().replace(/\/+$/, '');
+  return `${limpio}${RUTA_API}`;
+}
+
+/** Base configurada en el build. */
+export const BASE_API = baseApi(import.meta.env['VITE_API_URL'] as string | undefined);
+
+/** `Retry-After` en segundos o como fecha HTTP → momento (ms) desde el que se puede reintentar. */
+export function reintentarDesde(valor: string | null, ahora: number = Date.now()): number | null {
+  if (!valor) return null;
+  const texto = valor.trim();
+  if (/^\d+$/.test(texto)) return ahora + Number(texto) * 1000;
+  const fecha = Date.parse(texto);
+  return Number.isFinite(fecha) ? Math.max(fecha, ahora) : null;
+}
 
 export interface OpcionesClienteApi {
   /** `fetch` a usar (las pruebas pasan uno falso). */
   fetch?: typeof fetch;
+  /** Base de la API; por defecto `BASE_API` (de `VITE_API_URL`). */
+  base?: string;
   /** Token de acceso vigente de Supabase, o `null` sin sesión. */
   obtenerToken: () => Promise<string | null>;
   /** Clínica en la que se trabaja (`X-Clinica-Id`), o `null` para omitir la cabecera. */
@@ -42,6 +65,8 @@ interface Pedido<T> {
   esquema: z.ZodType<T> | null;
   /** Clínica explícita para este pedido (p. ej. al elegir clínica). `null` = sin cabecera. */
   clinicaId?: string | null;
+  /** No dispara las reacciones globales (`alError`); p. ej. el aviso de cierre de sesión. */
+  silencioso?: boolean;
 }
 
 const MENSAJE_SIN_CONEXION =
@@ -54,10 +79,13 @@ const MENSAJE_POR_ESTADO: Record<number, { codigo: ErrorConecta['codigo']; mensa
   403: { codigo: 'sin_permiso', mensaje: 'Tu rol no tiene acceso a esto.' },
   404: { codigo: 'no_encontrado', mensaje: 'No encontramos lo que buscabas. Volvé a la lista.' },
   409: { codigo: 'conflicto', mensaje: 'Alguien cambió estos datos. Recargá y probá de nuevo.' },
+  429: { codigo: 'demasiados_pedidos', mensaje: TEXTO_DEMASIADOS_PEDIDOS },
+  503: { codigo: 'servicio_no_disponible', mensaje: TEXTO_SERVICIO_NO_DISPONIBLE },
 };
 
 export function crearClienteApi(opciones: OpcionesClienteApi) {
   const fetchImpl = opciones.fetch ?? ((...args: Parameters<typeof fetch>) => fetch(...args));
+  const base = opciones.base ?? BASE_API;
 
   async function pedir<T>(p: Pedido<T>): Promise<T> {
     const cabeceras: Record<string, string> = { Accept: 'application/json' };
@@ -68,13 +96,13 @@ export function crearClienteApi(opciones: OpcionesClienteApi) {
     if (p.cuerpo !== undefined) cabeceras['Content-Type'] = 'application/json';
 
     const fallar = (e: ErrorConecta): never => {
-      opciones.alError?.(e);
+      if (!p.silencioso) opciones.alError?.(e);
       throw e;
     };
 
     let respuesta: Response;
     try {
-      respuesta = await fetchImpl(`${BASE_API}${p.ruta}`, {
+      respuesta = await fetchImpl(`${base}${p.ruta}`, {
         method: p.metodo,
         headers: cabeceras,
         ...(p.cuerpo !== undefined ? { body: JSON.stringify(p.cuerpo) } : {}),
@@ -90,12 +118,15 @@ export function crearClienteApi(opciones: OpcionesClienteApi) {
       } catch {
         cuerpo = null;
       }
+      const desde =
+        respuesta.status === 429 ? reintentarDesde(respuesta.headers.get('retry-after')) : null;
       const error = errorApiSchema.safeParse(cuerpo);
       if (error.success) {
         return fallar(
           new ErrorConecta(error.data.codigo, error.data.mensaje, {
             estado: respuesta.status,
             detalles: error.data.detalles ?? [],
+            reintentarDesde: desde,
           }),
         );
       }
@@ -104,7 +135,7 @@ export function crearClienteApi(opciones: OpcionesClienteApi) {
         new ErrorConecta(
           porEstado?.codigo ?? 'error_interno',
           porEstado?.mensaje ?? 'El servidor tuvo un problema. Probá de nuevo en un momento.',
-          { estado: respuesta.status },
+          { estado: respuesta.status, reintentarDesde: desde },
         ),
       );
     }
@@ -142,6 +173,15 @@ export function crearClienteApi(opciones: OpcionesClienteApi) {
           esquema: sesionSchema,
           ...(clinicaId !== undefined ? { clinicaId } : {}),
         }),
+      /**
+       * `POST /sesion/cerrar` (204): la API deja de aceptar el token. Silencioso: lo llama el
+       * cierre de sesión y no tiene que volver a disparar reacciones globales.
+       */
+      cerrar: (): Promise<void> =>
+        pedir({ metodo: 'POST', ruta: '/sesion/cerrar', esquema: null, silencioso: true }),
+      /** `DELETE /sesion/mfa` (204, exige aal2): se llama justo después de quitar el factor en Supabase. */
+      quitarMfa: (): Promise<void> =>
+        pedir({ metodo: 'DELETE', ruta: '/sesion/mfa', esquema: null }),
     },
     sedes: {
       listar: (): Promise<Sede[]> =>

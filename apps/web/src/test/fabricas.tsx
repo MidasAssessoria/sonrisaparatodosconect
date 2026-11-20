@@ -1,4 +1,12 @@
-import type { Accion, Modulo, Permiso, Sede, Sesion } from '@conecta/shared';
+import {
+  ACCIONES,
+  MODULOS,
+  type Accion,
+  type Modulo,
+  type Permiso,
+  type Sede,
+  type Sesion,
+} from '@conecta/shared';
 import { render } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { vi } from 'vitest';
@@ -10,6 +18,7 @@ import type {
   ServicioAuth,
   SesionAuth,
 } from '../auth/servicioAuth.js';
+import { registrarRutaNoSimulada } from './rutasNoSimuladas.js';
 
 /** UUID v4 válido y legible: uuid(1) → 00000000-0000-4000-8000-000000000001. */
 export function uuid(n: number): string {
@@ -23,22 +32,72 @@ export const IDS = {
   sedeCentro: uuid(20),
   sedeNorte: uuid(21),
   rol: uuid(30),
+  rolRecepcion: uuid(31),
+  rolAdministracion: uuid(32),
+  rolLectura: uuid(33),
   factor: uuid(40),
 };
 
-function todos(modulos: Modulo[], acciones: Accion[]): Permiso[] {
-  return modulos.flatMap((modulo) => acciones.map((accion) => ({ modulo, accion })));
+function matriz(filas: [Modulo, Accion[]][]): Permiso[] {
+  return filas.flatMap(([modulo, acciones]) => acciones.map((accion) => ({ modulo, accion })));
 }
 
-export const PERMISOS_DUENO: Permiso[] = todos(
-  ['inicio', 'sedes', 'auditoria'],
-  ['ver', 'crear', 'editar', 'anular', 'exportar'],
-);
+/*
+ * Matriz inicial de cada rol de sistema, igual a `packages/db/migraciones/0005_alta_clinica.sql`.
+ * Si la migración cambia, cambiá esto también.
+ */
 
-export const PERMISOS_RECEPCION: Permiso[] = [
-  { modulo: 'inicio', accion: 'ver' },
-  { modulo: 'sedes', accion: 'ver' },
-];
+/** dueno: todos los módulos y todas las acciones. */
+export const PERMISOS_DUENO: Permiso[] = matriz(MODULOS.map((m) => [m, [...ACCIONES]]));
+
+export const PERMISOS_ADMINISTRACION: Permiso[] = matriz([
+  ['inicio', ['ver']],
+  ['agenda', ['ver']],
+  ['pacientes', ['ver']],
+  ['presupuestos', ['ver']],
+  ['caja', ['ver', 'anular', 'exportar']],
+  ['contabilidad', ['ver', 'crear', 'editar', 'anular', 'exportar']],
+  ['reportes', ['ver', 'exportar']],
+  ['personal', ['ver', 'crear', 'editar', 'anular']],
+  ['inventario', ['ver', 'exportar']],
+  ['mensajeria', ['ver', 'editar']],
+  ['sedes', ['ver', 'crear', 'editar', 'anular']],
+  ['auditoria', ['ver']],
+  ['configuracion', ['ver', 'editar']],
+]);
+
+/** recepcion: sin Sedes ni Auditoría. */
+export const PERMISOS_RECEPCION: Permiso[] = matriz([
+  ['inicio', ['ver']],
+  ['agenda', ['ver', 'crear', 'editar', 'anular']],
+  ['pacientes', ['ver', 'crear', 'editar']],
+  ['presupuestos', ['ver']],
+  ['caja', ['ver', 'crear', 'editar']],
+  ['mensajeria', ['ver', 'crear']],
+]);
+
+/**
+ * Rol propio de una clínica (no es de sistema): solo mira las sedes. Ningún rol de sistema tiene
+ * `sedes:ver` sin poder editar; sirve para probar la pantalla en solo lectura.
+ */
+export const PERMISOS_LECTURA_SEDES: Permiso[] = matriz([
+  ['inicio', ['ver']],
+  ['sedes', ['ver']],
+]);
+
+export const ROL_DUENO = { id: IDS.rol, codigo: 'dueno', nombre: 'Dueño/a', exigeMfa: true };
+export const ROL_RECEPCION = {
+  id: IDS.rolRecepcion,
+  codigo: 'recepcion',
+  nombre: 'Recepción y caja',
+  exigeMfa: false,
+};
+export const ROL_LECTURA_SEDES = {
+  id: IDS.rolLectura,
+  codigo: 'consulta_sedes',
+  nombre: 'Consulta de sedes',
+  exigeMfa: false,
+};
 
 export function sesionDe(parcial: Partial<Sesion> = {}): Sesion {
   return {
@@ -46,13 +105,12 @@ export function sesionDe(parcial: Partial<Sesion> = {}): Sesion {
       id: IDS.usuario,
       nombre: 'Lorena Fretes',
       email: 'lorena@ejemplo.test',
-      mfaActivo: false,
+      mfaActivo: true,
     },
-    nivelAutenticacion: 'aal1',
-    debeActivarMfa: false,
+    nivelAutenticacion: 'aal2',
     clinicas: [{ id: IDS.clinicaA, nombre: 'Clínica Prueba' }],
     clinica: { id: IDS.clinicaA, nombre: 'Clínica Prueba', zonaHoraria: 'America/Asuncion' },
-    rol: { id: IDS.rol, codigo: 'dueno', nombre: 'Dueño' },
+    rol: ROL_DUENO,
     permisos: PERMISOS_DUENO,
     sedes: [
       { id: IDS.sedeCentro, nombre: 'Centro', estado: 'abierta', color: null },
@@ -115,8 +173,15 @@ export function crearAuthFalso(op: OpcionesAuthFalso = {}) {
     cambiarClave: vi.fn<(clave: string) => Promise<void>>(() => Promise.resolve()),
     nivel: vi.fn(() => Promise.resolve(estado.nivel)),
     factoresTotp: vi.fn(() => Promise.resolve(estado.factores)),
-    verificarCodigo: vi.fn<(factorId: string, codigo: string) => Promise<void>>(() => {
+    verificarCodigo: vi.fn<(factorId: string, codigo: string) => Promise<void>>((factorId) => {
       estado.nivel = { actual: 'aal2', siguiente: 'aal2' };
+      // Verificar un factor recién inscripto lo deja activo.
+      if (!estado.factores.some((f) => f.id === factorId)) {
+        estado.factores = [
+          ...estado.factores,
+          { id: factorId, nombre: 'Conecta', verificado: true },
+        ];
+      }
       return Promise.resolve();
     }),
     inscribirTotp: vi.fn<(nombre: string) => Promise<InscripcionTotp>>(() =>
@@ -127,7 +192,17 @@ export function crearAuthFalso(op: OpcionesAuthFalso = {}) {
         uri: 'otpauth://totp/Conecta',
       }),
     ),
-    quitarFactor: vi.fn<(factorId: string) => Promise<void>>(() => Promise.resolve()),
+    quitarFactor: vi.fn<(factorId: string) => Promise<void>>(() => {
+      estado.factores = estado.factores.filter((f) => !f.verificado);
+      return Promise.resolve();
+    }),
+    refrescarSesion: vi.fn(() => {
+      // Sin factor verificado, el token nuevo es aal1.
+      if (!estado.factores.some((f) => f.verificado)) {
+        estado.nivel = { actual: 'aal1', siguiente: 'aal1' };
+      }
+      return Promise.resolve();
+    }),
     alCambiar: vi.fn((cb: (e: 'salio' | 'recuperacion') => void) => {
       oyentes.add(cb);
       return () => oyentes.delete(cb);
@@ -139,11 +214,17 @@ export function crearAuthFalso(op: OpcionesAuthFalso = {}) {
 
 export type AuthFalso = ReturnType<typeof crearAuthFalso>;
 
+export interface RespuestaFalsa {
+  estado?: number;
+  cuerpo?: unknown;
+  cabeceras?: Record<string, string>;
+}
+
 type Manejador = (pedido: {
   url: URL;
   cuerpo: unknown;
   cabeceras: Headers;
-}) => { estado?: number; cuerpo?: unknown } | undefined;
+}) => RespuestaFalsa | undefined | Promise<RespuestaFalsa | undefined>;
 
 export interface PedidoRegistrado {
   metodo: string;
@@ -152,15 +233,20 @@ export interface PedidoRegistrado {
   cabeceras: Headers;
 }
 
+/** Rutas que toda sesión puede tocar sin que cada prueba las declare. */
+const RUTAS_POR_DEFECTO: Record<string, RespuestaFalsa> = {
+  'POST /sesion/cerrar': { estado: 204 },
+};
+
 /**
- * `fetch` falso con rutas «MÉTODO /ruta». Si una ruta no está, responde 404 con el formato de la API.
- * `pedidos` guarda todo lo que se pidió.
+ * `fetch` falso con rutas «MÉTODO /ruta» (con `:param`). Una ruta que la prueba no simuló
+ * responde 500 y queda registrada: `setup.ts` hace fallar la prueba. `pedidos` guarda todo lo
+ * que se pidió. Un manejador puede devolver una promesa (para respuestas tardías).
  */
-export function crearFetchFalso(
-  rutas: Record<string, Manejador | { estado?: number; cuerpo?: unknown }>,
-) {
+export function crearFetchFalso(rutas: Record<string, Manejador | RespuestaFalsa>) {
   const pedidos: PedidoRegistrado[] = [];
-  const fn = vi.fn((entrada: RequestInfo | URL, init?: RequestInit) => {
+  const todas: Record<string, Manejador | RespuestaFalsa> = { ...RUTAS_POR_DEFECTO, ...rutas };
+  const fn = vi.fn(async (entrada: RequestInfo | URL, init?: RequestInit) => {
     const texto =
       typeof entrada === 'string' ? entrada : entrada instanceof URL ? entrada.href : entrada.url;
     const url = new URL(texto, 'http://localhost');
@@ -171,22 +257,39 @@ export function crearFetchFalso(
     const ruta = url.pathname.replace(/^\/api\/v1/, '');
     const clave = `${metodo} ${ruta}`;
     const manejador =
-      rutas[clave] ??
-      Object.entries(rutas).find(([patron]) => {
+      todas[clave] ??
+      Object.entries(todas).find(([patron]) => {
         const re = new RegExp(`^${patron.replace(/:[a-zA-Z]+/g, '[^/]+')}$`);
         return re.test(clave);
       })?.[1];
-    const r = typeof manejador === 'function' ? manejador({ url, cuerpo, cabeceras }) : manejador;
-    if (!r) {
-      return Promise.resolve(
-        Response.json({ codigo: 'no_encontrado', mensaje: 'No existe.' }, { status: 404 }),
+    if (!manejador) {
+      registrarRutaNoSimulada(clave);
+      return Response.json(
+        { codigo: 'error_interno', mensaje: `Ruta no simulada en la prueba: ${clave}` },
+        { status: 500 },
       );
     }
+    const r =
+      typeof manejador === 'function' ? await manejador({ url, cuerpo, cabeceras }) : manejador;
+    if (!r) {
+      registrarRutaNoSimulada(`${clave} (el manejador no respondió)`);
+      return Response.json({ codigo: 'error_interno', mensaje: 'Sin respuesta.' }, { status: 500 });
+    }
     const estado = r.estado ?? 200;
-    if (estado === 204) return Promise.resolve(new Response(null, { status: 204 }));
-    return Promise.resolve(Response.json(r.cuerpo ?? null, { status: estado }));
+    const headers = new Headers(r.cabeceras);
+    if (estado === 204) return new Response(null, { status: 204, headers });
+    return Response.json(r.cuerpo ?? null, { status: estado, headers });
   });
   return { fetch: fn as unknown as typeof fetch, pedidos };
+}
+
+/** Promesa que se resuelve a mano (para simular respuestas tardías). */
+export function diferida<T>() {
+  let resolver!: (v: T) => void;
+  const promesa = new Promise<T>((r) => {
+    resolver = r;
+  });
+  return { promesa, resolver };
 }
 
 export function renderApp({

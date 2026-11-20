@@ -1,29 +1,30 @@
 import { AvisoExito, Boton, Chip, EncabezadoPagina, HojaInferior } from '@conecta/ui';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useState, type FormEvent } from 'react';
-import type { InscripcionTotp } from '../auth/servicioAuth.js';
-import { CampoCodigo } from '../componentes/CampoCodigo.js';
-import { Esqueleto, MensajeError } from '../componentes/estados.js';
+import { useState } from 'react';
+import { mensajeDeError } from '../api/errores.js';
+import { ActivarTotp } from '../componentes/ActivarTotp.js';
+import { AvisoPersistente, Esqueleto, MensajeError } from '../componentes/estados.js';
+import { useEnvioUnico } from '../componentes/useEnvioUnico.js';
 import { useTextos } from '../i18n/idioma.js';
 import { useSesionLista } from '../sesion/ProveedorSesion.js';
-import { mensajeAuth, RE_CODIGO } from './acceso/textosError.js';
+import { mensajeAuth } from './acceso/textosError.js';
 
 const CLAVE_FACTORES = ['auth', 'factores'] as const;
 
 /** Seguridad de la cuenta: activar y quitar el doble factor (TOTP de Supabase). */
 export function Seguridad() {
   const t = useTextos();
-  const { auth, recargarSesion } = useSesionLista();
+  const { auth, api, sesion, recargarSesion } = useSesionLista();
   const consultas = useQueryClient();
+  const unaVez = useEnvioUnico();
   const factores = useQuery({ queryKey: CLAVE_FACTORES, queryFn: () => auth.factoresTotp() });
 
-  const [inscripcion, setInscripcion] = useState<InscripcionTotp | null>(null);
-  const [codigo, setCodigo] = useState('');
-  const [errorCodigo, setErrorCodigo] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [ocupado, setOcupado] = useState(false);
   const [exito, setExito] = useState<{ titulo: string; texto?: string } | null>(null);
   const [confirmarQuitar, setConfirmarQuitar] = useState(false);
+  /** El factor ya se quitó en Supabase pero la API todavía no se enteró. */
+  const [avisoPendiente, setAvisoPendiente] = useState(false);
 
   const verificado = factores.data?.find((f) => f.verificado) ?? null;
 
@@ -32,58 +33,61 @@ export function Seguridad() {
     await recargarSesion();
   }
 
-  async function empezar() {
-    setError(null);
-    setExito(null);
-    setOcupado(true);
+  /**
+   * Después de quitar el factor en Supabase, todavía con el token aal2: avisarle a la API
+   * (`DELETE /sesion/mfa`) y recién ahí pedir un token nuevo (aal1). En ese orden: con el token
+   * nuevo la API ya no aceptaría el aviso, y la cuenta quedaría trabada pidiendo un código.
+   */
+  async function avisarYRefrescar() {
     try {
-      setInscripcion(await auth.inscribirTotp(t.seguridad.nombreFactor));
-      setCodigo('');
-    } catch (e) {
-      setError(mensajeAuth(e, t));
-    } finally {
-      setOcupado(false);
-    }
-  }
-
-  async function confirmar(e: FormEvent) {
-    e.preventDefault();
-    if (!inscripcion) return;
-    if (!RE_CODIGO.test(codigo)) {
-      setErrorCodigo(t.segundoFactor.formato);
+      await api.sesion.quitarMfa();
+    } catch (ex) {
+      setAvisoPendiente(true);
+      setError(`${t.seguridad.avisoFallido} ${mensajeDeError(ex)}`);
       return;
     }
-    setErrorCodigo(null);
-    setError(null);
-    setOcupado(true);
+    setAvisoPendiente(false);
     try {
-      await auth.verificarCodigo(inscripcion.factorId, codigo);
-      setInscripcion(null);
-      setExito({ titulo: t.seguridad.activado, texto: t.seguridad.activadoTexto });
-      await refrescar();
-    } catch (ex) {
-      setError(mensajeAuth(ex, t));
-      setCodigo('');
-    } finally {
-      setOcupado(false);
+      await auth.refrescarSesion();
+    } catch {
+      // Si no se pudo refrescar, el token viejo vence solo; la API ya tiene el dato.
     }
+    setExito({ titulo: t.seguridad.quitado });
+    await refrescar();
   }
 
-  async function quitar() {
+  function quitar() {
     if (!verificado) return;
-    setError(null);
-    setOcupado(true);
-    try {
-      await auth.quitarFactor(verificado.id);
+    void unaVez(async () => {
+      setError(null);
+      setOcupado(true);
+      try {
+        await auth.quitarFactor(verificado.id);
+      } catch (ex) {
+        setConfirmarQuitar(false);
+        setError(mensajeAuth(ex, t));
+        setOcupado(false);
+        return;
+      }
       setConfirmarQuitar(false);
-      setExito({ titulo: t.seguridad.quitado });
-      await refrescar();
-    } catch (ex) {
-      setConfirmarQuitar(false);
-      setError(mensajeAuth(ex, t));
-    } finally {
-      setOcupado(false);
-    }
+      try {
+        await avisarYRefrescar();
+      } finally {
+        setOcupado(false);
+      }
+    });
+  }
+
+  function reintentarAviso() {
+    void unaVez(async () => {
+      setError(null);
+      setOcupado(true);
+      try {
+        await avisarYRefrescar();
+      } finally {
+        setOcupado(false);
+      }
+    });
   }
 
   return (
@@ -99,9 +103,13 @@ export function Seguridad() {
           </h2>
           {factores.isSuccess ? (
             verificado ? (
-              <Chip tono="exito">{t.seguridad.activo}</Chip>
+              <Chip tono="exito" icono="check">
+                {t.seguridad.activo}
+              </Chip>
             ) : (
-              <Chip tono="atencion">{t.seguridad.inactivo}</Chip>
+              <Chip tono="atencion" icono="alerta">
+                {t.seguridad.inactivo}
+              </Chip>
             )
           ) : null}
         </div>
@@ -111,58 +119,32 @@ export function Seguridad() {
         {factores.isError ? (
           <MensajeError error={factores.error} onReintentar={() => void factores.refetch()} />
         ) : null}
-        {error ? <MensajeError texto={error} /> : null}
+        {avisoPendiente && error ? (
+          <AvisoPersistente
+            titulo={error}
+            accion={
+              <Boton variante="primario" cargando={ocupado} onClick={reintentarAviso}>
+                {t.seguridad.terminarQuitar}
+              </Boton>
+            }
+          />
+        ) : error ? (
+          <MensajeError texto={error} />
+        ) : null}
 
-        {factores.isSuccess && verificado ? (
+        {factores.isSuccess && verificado && !avisoPendiente ? (
           <Boton variante="peligro" onClick={() => setConfirmarQuitar(true)}>
             {t.seguridad.quitar}
           </Boton>
         ) : null}
 
-        {factores.isSuccess && !verificado && !inscripcion ? (
-          <Boton
-            variante="primario"
-            icono="candado"
-            cargando={ocupado}
-            onClick={() => void empezar()}
-          >
-            {t.seguridad.activar}
-          </Boton>
-        ) : null}
-
-        {inscripcion ? (
-          <form
-            className="w-formulario w-inscripcion"
-            onSubmit={(e) => void confirmar(e)}
-            noValidate
-          >
-            <ol className="w-pasos">
-              <li>
-                <p>{t.seguridad.paso1}</p>
-                <img
-                  className="w-qr"
-                  src={inscripcion.qr}
-                  alt="Código QR para la app de autenticación"
-                  width={200}
-                  height={200}
-                />
-                <p className="w-secundario">{t.seguridad.claveManual}</p>
-                <code className="w-clave-manual">{inscripcion.secreto}</code>
-              </li>
-              <li>
-                <p>{t.seguridad.paso2}</p>
-                <CampoCodigo valor={codigo} onCambio={setCodigo} error={errorCodigo} />
-              </li>
-            </ol>
-            <div className="w-botonera">
-              <Boton type="submit" variante="primario" cargando={ocupado}>
-                {t.seguridad.confirmar}
-              </Boton>
-              <Boton variante="fantasma" onClick={() => setInscripcion(null)}>
-                {t.comun.cancelar}
-              </Boton>
-            </div>
-          </form>
+        {factores.isSuccess && !verificado && !avisoPendiente ? (
+          <ActivarTotp
+            onActivado={async () => {
+              setExito({ titulo: t.seguridad.activado, texto: t.seguridad.activadoTexto });
+              await refrescar();
+            }}
+          />
         ) : null}
       </section>
 
@@ -175,13 +157,13 @@ export function Seguridad() {
             <Boton variante="secundario" onClick={() => setConfirmarQuitar(false)}>
               {t.comun.cancelar}
             </Boton>
-            <Boton variante="peligro" cargando={ocupado} onClick={() => void quitar()}>
+            <Boton variante="peligro" cargando={ocupado} onClick={quitar}>
               {t.seguridad.quitarConfirmar}
             </Boton>
           </>
         }
       >
-        <p>{t.seguridad.quitarTexto}</p>
+        <p>{sesion.rol.exigeMfa ? t.seguridad.quitarTextoExigido : t.seguridad.quitarTexto}</p>
       </HojaInferior>
     </>
   );

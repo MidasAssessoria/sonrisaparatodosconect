@@ -1,5 +1,10 @@
 import { createClient, type AuthError, type SupabaseClient } from '@supabase/supabase-js';
-import { ErrorAuth, type ServicioAuth, type TipoErrorAuth } from './servicioAuth.js';
+import {
+  ErrorAuth,
+  type EventoAuth,
+  type ServicioAuth,
+  type TipoErrorAuth,
+} from './servicioAuth.js';
 
 /** Traduce los errores de Supabase Auth a los tipos que entiende la app. */
 export function tipoDeErrorSupabase(
@@ -32,8 +37,27 @@ function fallar(error: AuthError | null): void {
   if (error) throw new ErrorAuth(tipoDeErrorSupabase(error), error.message);
 }
 
-export function crearServicioAuthSupabase(cliente: SupabaseClient): ServicioAuth {
+export function crearServicioAuthSupabase(cliente: Pick<SupabaseClient, 'auth'>): ServicioAuth {
   const auth = cliente.auth;
+
+  // Suscripción única y temprana: `PASSWORD_RECOVERY` se emite mientras Supabase lee el enlace
+  // del correo, que puede ser antes de que React se suscriba. Ese evento se guarda y se entrega
+  // al primer oyente.
+  const oyentes = new Set<(evento: EventoAuth) => void>();
+  let recuperacionPendiente = false;
+  const emitir = (evento: EventoAuth) => {
+    if (evento === 'recuperacion' && oyentes.size === 0) {
+      recuperacionPendiente = true;
+      return;
+    }
+    oyentes.forEach((cb) => cb(evento));
+  };
+  auth.onAuthStateChange((evento) => {
+    // No llamar a Supabase dentro del callback (se traba): se difiere.
+    if (evento === 'SIGNED_OUT') setTimeout(() => emitir('salio'), 0);
+    if (evento === 'PASSWORD_RECOVERY') setTimeout(() => emitir('recuperacion'), 0);
+  });
+
   return {
     async obtenerSesion() {
       const { data, error } = await auth.getSession();
@@ -106,13 +130,22 @@ export function crearServicioAuthSupabase(cliente: SupabaseClient): ServicioAuth
       const { error } = await auth.mfa.unenroll({ factorId });
       fallar(error);
     },
+    async refrescarSesion() {
+      const { error } = await auth.refreshSession();
+      fallar(error);
+    },
     alCambiar(cb) {
-      const { data } = auth.onAuthStateChange((evento) => {
-        // No llamar a Supabase dentro del callback (se traba): se difiere.
-        if (evento === 'SIGNED_OUT') setTimeout(() => cb('salio'), 0);
-        if (evento === 'PASSWORD_RECOVERY') setTimeout(() => cb('recuperacion'), 0);
-      });
-      return () => data.subscription.unsubscribe();
+      oyentes.add(cb);
+      if (recuperacionPendiente) {
+        setTimeout(() => {
+          if (!recuperacionPendiente || oyentes.size === 0) return;
+          recuperacionPendiente = false;
+          oyentes.forEach((o) => o('recuperacion'));
+        }, 0);
+      }
+      return () => {
+        oyentes.delete(cb);
+      };
     },
   };
 }

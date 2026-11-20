@@ -8,6 +8,7 @@ export const es = {
     cerrar: 'Cerrar',
     volver: 'Volver',
     reintentar: 'Probá de nuevo',
+    reintentarEn: (seg: number) => `Probá de nuevo en ${seg} s`,
     cargando: 'Cargando…',
     sinAcceso: 'Tu rol no tiene acceso a esto',
     sinAccesoTexto: 'Si necesitás entrar acá, pedile a la persona que administra la clínica.',
@@ -32,6 +33,8 @@ export const es = {
     cerradaInactividad: (min: number) =>
       `Cerramos tu sesión porque pasaron ${min} minutos sin actividad. Ingresá de nuevo para seguir.`,
     cerradaVencida: 'Tu sesión venció. Ingresá de nuevo para seguir.',
+    cerradaSinMembresia:
+      'Cerramos tu sesión porque tu cuenta ya no está activa en esta clínica. Si creés que es un error, pedile acceso a quien administra la clínica.',
     sinConfiguracion:
       'Falta configurar el acceso (VITE_SUPABASE_URL y VITE_SUPABASE_PUBLISHABLE_KEY). Avisá a soporte.',
   },
@@ -65,6 +68,9 @@ export const es = {
     formato: 'El código tiene 6 números.',
     incorrecto: 'Ese código no es válido o ya venció. Escribí el que se ve ahora.',
     usarOtraCuenta: 'Ingresar con otra cuenta',
+    activarTitulo: 'Activá el doble factor',
+    activarTexto:
+      'Para entrar a Conecta, tu cuenta tiene que usar doble factor. Activalo ahora con una app de autenticación; lleva un minuto.',
   },
   clinica: {
     titulo: 'Elegí la clínica',
@@ -77,9 +83,6 @@ export const es = {
   armazon: {
     seguridad: 'Seguridad',
     cerrarSesion: 'Cerrar sesión',
-    mfaPendiente: 'Tu rol pide doble factor y todavía no lo activaste.',
-    mfaPendienteTexto: 'Activalo para proteger los datos de la clínica.',
-    activarMfa: 'Activar doble factor',
     cargandoSesion: 'Preparando tu espacio de trabajo…',
     errorSesion: 'No pudimos cargar tu sesión.',
     rol: 'Rol',
@@ -122,8 +125,12 @@ export const es = {
     activadoTexto: 'Desde ahora te vamos a pedir el código cada vez que ingreses.',
     quitar: 'Quitar doble factor',
     quitarTitulo: 'Quitar el doble factor',
-    quitarTexto:
-      'Tu cuenta va a quedar protegida solo con la contraseña. Si tu rol lo pide, vas a tener que activarlo de nuevo.',
+    quitarTexto: 'Tu cuenta va a quedar protegida solo con la contraseña.',
+    quitarTextoExigido:
+      'Tu rol pide doble factor: si lo quitás, vas a tener que activarlo de nuevo para seguir usando Conecta.',
+    avisoFallido:
+      'Quitamos el doble factor de tu app, pero no pudimos avisarle al servidor. Probá de nuevo para terminar.',
+    terminarQuitar: 'Terminar de quitarlo',
     quitarConfirmar: 'Sí, quitar',
     quitado: 'Quitamos el doble factor.',
     nombreFactor: 'Conecta',

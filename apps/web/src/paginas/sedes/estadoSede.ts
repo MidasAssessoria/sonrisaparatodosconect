@@ -8,7 +8,10 @@ export const TEXTO_ESTADO_SEDE: Record<EstadoSede, string> = {
   cerrada: 'Cerrada',
 };
 
-/** Estado = color + ícono + texto. */
+/**
+ * Estado = color + ícono + texto. «Cerrada» usa la cruz (como «Inactivo»): el candado queda solo
+ * para «Tu rol no tiene acceso a esto».
+ */
 export function infoEstadoSede(estado: EstadoSede): {
   tono: Tono;
   icono: IconoNombre;
@@ -20,7 +23,7 @@ export function infoEstadoSede(estado: EstadoSede): {
     case 'proxima':
       return { tono: 'info', icono: 'reloj', texto: TEXTO_ESTADO_SEDE.proxima };
     case 'cerrada':
-      return { tono: 'neutro', icono: 'candado', texto: TEXTO_ESTADO_SEDE.cerrada };
+      return { tono: 'neutro', icono: 'cerrar', texto: TEXTO_ESTADO_SEDE.cerrada };
   }
 }
 

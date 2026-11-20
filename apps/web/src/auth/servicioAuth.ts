@@ -62,6 +62,11 @@ export interface ServicioAuth {
   verificarCodigo(factorId: string, codigo: string): Promise<void>;
   inscribirTotp(nombre: string): Promise<InscripcionTotp>;
   quitarFactor(factorId: string): Promise<void>;
-  /** Eventos de Supabase que importan a la app (también llegan de otras pestañas). */
+  /** Pide un token nuevo (p. ej. aal1 después de quitar el factor). */
+  refrescarSesion(): Promise<void>;
+  /**
+   * Eventos de Supabase que importan a la app (también llegan de otras pestañas). Un
+   * `recuperacion` que llegó antes de suscribirse (al leer el enlace del correo) se entrega igual.
+   */
   alCambiar(cb: (evento: EventoAuth) => void): () => void;
 }

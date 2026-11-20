@@ -1,6 +1,6 @@
 import { Boton, Icono } from '@conecta/ui';
-import type { ReactNode } from 'react';
-import { mensajeDeError } from '../api/errores.js';
+import { useEffect, useState, type ReactNode } from 'react';
+import { ErrorConecta, mensajeDeError } from '../api/errores.js';
 import { useTextos } from '../i18n/idioma.js';
 
 /*
@@ -19,7 +19,25 @@ export function Esqueleto({ filas = 3, etiqueta }: { filas?: number; etiqueta: s
   );
 }
 
-/** Error con ícono, texto en coral-texto y acción para resolverlo. */
+/** Segundos que faltan hasta `hasta` (ms), actualizados cada segundo; 0 si ya pasó o no hay. */
+function useSegundosRestantes(hasta: number | null): number {
+  const [ahora, setAhora] = useState(() => Date.now());
+  useEffect(() => {
+    if (hasta === null) return;
+    const id = setInterval(() => {
+      const n = Date.now();
+      setAhora(n);
+      if (n >= hasta) clearInterval(id);
+    }, 1000);
+    return () => clearInterval(id);
+  }, [hasta]);
+  return hasta === null ? 0 : Math.max(0, Math.ceil((hasta - ahora) / 1000));
+}
+
+/**
+ * Error con ícono, texto en coral-texto y acción para resolverlo. Con un 429 que trae
+ * `Retry-After`, el reintento queda deshabilitado (con la cuenta regresiva) hasta que se pueda.
+ */
 export function MensajeError({
   error,
   texto,
@@ -30,14 +48,21 @@ export function MensajeError({
   onReintentar?: () => void;
 }) {
   const t = useTextos();
+  const hasta = error instanceof ErrorConecta ? error.reintentarDesde : null;
+  const restantes = useSegundosRestantes(hasta);
   return (
     <div className="w-error" role="alert">
       <Icono nombre="alerta" tamano={22} />
       <div className="w-error__cuerpo">
         <p className="w-error__texto">{texto ?? mensajeDeError(error)}</p>
         {onReintentar ? (
-          <Boton variante="secundario" icono="sincronizar" onClick={onReintentar}>
-            {t.comun.reintentar}
+          <Boton
+            variante="secundario"
+            icono="sincronizar"
+            disabled={restantes > 0}
+            onClick={onReintentar}
+          >
+            {restantes > 0 ? t.comun.reintentarEn(restantes) : t.comun.reintentar}
           </Boton>
         ) : null}
       </div>
@@ -62,7 +87,7 @@ export function Candado({ accion }: { accion?: ReactNode }) {
   );
 }
 
-/** Aviso de atención que no se puede cerrar (p. ej. doble factor pendiente). */
+/** Aviso de atención que no se puede cerrar. */
 export function AvisoPersistente({
   titulo,
   texto,

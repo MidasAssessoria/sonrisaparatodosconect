@@ -18,11 +18,13 @@ export function useSedes() {
   });
 }
 
-export function useSede(id: string) {
+/** `activa: false` deja de pedirla (p. ej. justo después de darla de baja). */
+export function useSede(id: string, activa = true) {
   const { api, sesion } = useSesionLista();
   return useQuery({
     queryKey: claveSede(sesion.clinica.id, id),
     queryFn: () => api.sedes.obtener(id),
+    enabled: activa,
   });
 }
 

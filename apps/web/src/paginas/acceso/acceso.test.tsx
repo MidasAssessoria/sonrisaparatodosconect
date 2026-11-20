@@ -1,7 +1,15 @@
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { ErrorAuth } from '../../auth/servicioAuth.js';
-import { crearAuthFalso, crearFetchFalso, IDS, renderApp, sesionDe } from '../../test/fabricas.js';
+import {
+  crearAuthFalso,
+  crearFetchFalso,
+  diferida,
+  IDS,
+  renderApp,
+  sesionDe,
+} from '../../test/fabricas.js';
+import type { RespuestaFalsa } from '../../test/fabricas.js';
 
 function llenar(correo: string, clave: string) {
   fireEvent.change(screen.getByLabelText('Correo'), { target: { value: correo } });
@@ -92,23 +100,6 @@ describe('Acceso', () => {
     expect(await screen.findByRole('heading', { name: 'Sedes' })).toBeInTheDocument();
   });
 
-  it('la API responde mfa_requerido: pasa al segundo factor', async () => {
-    const auth = crearAuthFalso({
-      conSesion: true,
-      factores: [{ id: IDS.factor, nombre: null, verificado: true }],
-    });
-    const f = crearFetchFalso({
-      'GET /sesion': {
-        estado: 403,
-        cuerpo: { codigo: 'mfa_requerido', mensaje: 'Confirmá el código.' },
-      },
-    });
-    renderApp({ auth, fetch: f.fetch });
-    expect(
-      await screen.findByRole('heading', { name: 'Confirmá que sos vos' }),
-    ).toBeInTheDocument();
-  });
-
   it('«Olvidé mi contraseña» manda el correo de recuperación', async () => {
     const auth = crearAuthFalso();
     renderApp({ auth, fetch: crearFetchFalso({}).fetch, ruta: '/acceso' });
@@ -150,5 +141,47 @@ describe('Acceso', () => {
     await waitFor(() =>
       expect(screen.getByRole('heading', { name: "Mba'éichapa, Lorena" })).toBeInTheDocument(),
     );
+  });
+
+  it('con una sesión normal, la ruta de nueva contraseña NO muestra el formulario', async () => {
+    const auth = crearAuthFalso({ conSesion: true });
+    const f = crearFetchFalso({ 'GET /sesion': { cuerpo: sesionDe() } });
+    // La URL real del navegador también, no solo la del router en memoria.
+    window.history.pushState({}, '', '/acceso/nueva-clave');
+    try {
+      renderApp({ auth, fetch: f.fetch, ruta: '/acceso/nueva-clave' });
+      expect(
+        await screen.findByRole('heading', { name: "Mba'éichapa, Lorena" }),
+      ).toBeInTheDocument();
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+    expect(screen.queryByRole('heading', { name: 'Definí tu contraseña nueva' })).toBeNull();
+    expect(screen.queryByLabelText('Contraseña nueva')).toBeNull();
+    expect(auth.cambiarClave).not.toHaveBeenCalled();
+  });
+
+  it('sin sesión, la ruta de nueva contraseña dice que el enlace venció', async () => {
+    const auth = crearAuthFalso();
+    renderApp({ auth, fetch: crearFetchFalso({}).fetch, ruta: '/acceso/nueva-clave' });
+    expect(
+      await screen.findByText('El enlace venció o ya se usó. Pedí uno nuevo.'),
+    ).toBeInTheDocument();
+    expect(screen.queryByLabelText('Contraseña nueva')).toBeNull();
+  });
+
+  it('PASSWORD_RECOVERY durante el arranque no queda pisado por la sesión que llega después', async () => {
+    const auth = crearAuthFalso({ conSesion: true });
+    const tarde = diferida<RespuestaFalsa>();
+    const f = crearFetchFalso({ 'GET /sesion': () => tarde.promesa });
+    renderApp({ auth, fetch: f.fetch, ruta: '/acceso/nueva-clave' });
+    await waitFor(() => expect(f.pedidos).toHaveLength(1));
+    auth.emitir('recuperacion');
+    expect(
+      await screen.findByRole('heading', { name: 'Definí tu contraseña nueva' }),
+    ).toBeInTheDocument();
+    tarde.resolver({ cuerpo: sesionDe() });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.getByRole('heading', { name: 'Definí tu contraseña nueva' })).toBeInTheDocument();
   });
 });

@@ -130,6 +130,7 @@ export function FormularioSede({
             className="w-color w-color--ninguno"
             onClick={() => setD({ ...d, color: null })}
           >
+            {d.color === null ? <Icono nombre="check" tamano={20} /> : null}
             <span>Sin color</span>
           </button>
           {COLORES_SEDE.map((c) => {
@@ -140,13 +141,17 @@ export function FormularioSede({
                 type="button"
                 role="radio"
                 aria-checked={elegido}
-                aria-label={c.nombre}
-                title={c.nombre}
                 className="w-color"
-                style={{ background: c.valor }}
                 onClick={() => setD({ ...d, color: c.valor })}
               >
-                {elegido ? <Icono nombre="check" tamano={20} /> : null}
+                <span
+                  className="w-color__muestra"
+                  style={{ background: c.valor }}
+                  aria-hidden="true"
+                >
+                  {elegido ? <Icono nombre="check" tamano={16} /> : null}
+                </span>
+                <span>{c.nombre}</span>
               </button>
             );
           })}

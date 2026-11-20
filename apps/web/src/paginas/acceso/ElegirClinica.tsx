@@ -14,6 +14,7 @@ export function ElegirClinica() {
   if (estado.fase !== 'elegir_clinica') return null;
 
   async function elegir(id: string) {
+    if (eligiendo !== null) return;
     setEligiendo(id);
     setError(null);
     try {

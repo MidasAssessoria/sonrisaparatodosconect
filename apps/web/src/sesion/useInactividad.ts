@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { claveCompleta, claves, escribir, leer } from './preferencias.js';
+import { claveCompleta, claves, leerActividad, marcarActividad } from './preferencias.js';
 
 const EVENTOS_ACTIVIDAD = ['pointerdown', 'keydown', 'wheel', 'touchstart', 'scroll'] as const;
 /** Cada cuánto se revisa el tiempo sin actividad. */
@@ -18,6 +18,10 @@ interface Opciones {
  * se comparte en `localStorage` (`conecta.actividad`, solo un número de milisegundos).
  * Un minuto antes del cierre se muestra el aviso; mientras está visible, la actividad pasiva
  * no cuenta: hay que tocar «Seguir conectado».
+ *
+ * Al montar NO pisa la marca guardada: parte de la última actividad registrada (de esta u otra
+ * pestaña). Así recargar la página o reabrir el navegador no reinicia la cuenta. El ingreso con
+ * contraseña es el que marca «ahora» (`ProveedorSesion.ingresar`).
  */
 export function useInactividad({ minutos, activo, alCerrar }: Opciones) {
   const [aviso, setAviso] = useState(false);
@@ -34,13 +38,15 @@ export function useInactividad({ minutos, activo, alCerrar }: Opciones) {
     refUltima.current = ahora;
     if (forzar || ahora - refEscrita.current >= ESCRITURA_MIN_MS) {
       refEscrita.current = ahora;
-      escribir(claves.actividad, String(ahora));
+      marcarActividad(ahora);
     }
   }, []);
 
   useEffect(() => {
     if (!activo) return;
-    registrar(true);
+    const guardada = leerActividad();
+    if (guardada !== null && guardada <= Date.now()) refUltima.current = guardada;
+    else registrar(true);
     refAviso.current = false;
     let cerrada = false;
     const limite = minutos * 60_000;
@@ -56,10 +62,8 @@ export function useInactividad({ minutos, activo, alCerrar }: Opciones) {
     };
     const revisar = () => {
       if (cerrada) return;
-      const compartida = Number(leer(claves.actividad));
-      if (Number.isFinite(compartida) && compartida > refUltima.current) {
-        refUltima.current = compartida;
-      }
+      const compartida = leerActividad();
+      if (compartida !== null && compartida > refUltima.current) refUltima.current = compartida;
       const transcurrido = Date.now() - refUltima.current;
       if (transcurrido >= limite) {
         cerrada = true;

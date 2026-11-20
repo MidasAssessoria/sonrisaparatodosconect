@@ -1,22 +1,34 @@
 import { Boton, EstadoVacio } from '@conecta/ui';
+import { lazy, Suspense } from 'react';
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router';
 import { Armazon, RUTA_SEGURIDAD } from './armazon/Armazon.js';
 import { RutaModulo } from './armazon/RutaModulo.js';
-import { Candado } from './componentes/estados.js';
+import { Candado, Esqueleto } from './componentes/estados.js';
 import { useTextos } from './i18n/idioma.js';
 import { modulosVisibles } from './modulos.js';
 import { Acceso } from './paginas/acceso/Acceso.js';
+import { ActivarSegundoFactor } from './paginas/acceso/ActivarSegundoFactor.js';
 import { ElegirClinica } from './paginas/acceso/ElegirClinica.js';
 import { NuevaClave } from './paginas/acceso/NuevaClave.js';
 import { PantallaCarga, PantallaErrorSesion } from './paginas/acceso/PantallasEstado.js';
 import { Recuperar } from './paginas/acceso/Recuperar.js';
 import { SegundoFactor } from './paginas/acceso/SegundoFactor.js';
-import { Auditoria } from './paginas/auditoria/Auditoria.js';
 import { Inicio } from './paginas/Inicio.js';
-import { DetalleSede } from './paginas/sedes/DetalleSede.js';
-import { ListaSedes } from './paginas/sedes/ListaSedes.js';
-import { Seguridad } from './paginas/Seguridad.js';
 import { RUTA_NUEVA_CLAVE, useSesion, useSesionLista } from './sesion/ProveedorSesion.js';
+
+// Módulos que no hacen falta para entrar: se bajan recién cuando se visitan.
+const ListaSedes = lazy(() =>
+  import('./paginas/sedes/ListaSedes.js').then((m) => ({ default: m.ListaSedes })),
+);
+const DetalleSede = lazy(() =>
+  import('./paginas/sedes/DetalleSede.js').then((m) => ({ default: m.DetalleSede })),
+);
+const Auditoria = lazy(() =>
+  import('./paginas/auditoria/Auditoria.js').then((m) => ({ default: m.Auditoria })),
+);
+const Seguridad = lazy(() =>
+  import('./paginas/Seguridad.js').then((m) => ({ default: m.Seguridad })),
+);
 
 interface EstadoDesde {
   desde?: string;
@@ -70,6 +82,8 @@ export function Rutas() {
       return <PantallaCarga texto={t.armazon.cargandoSesion} />;
     case 'segundo_factor':
       return <SegundoFactor />;
+    case 'activar_segundo_factor':
+      return <ActivarSegundoFactor />;
     case 'elegir_clinica':
       return <ElegirClinica />;
     case 'recuperacion':
@@ -88,36 +102,38 @@ export function Rutas() {
     case 'lista':
       return (
         <Armazon>
-          <Routes>
-            <Route path="/" element={<RutaRaiz />} />
-            <Route
-              path="/sedes"
-              element={
-                <RutaModulo modulo="sedes">
-                  <ListaSedes />
-                </RutaModulo>
-              }
-            />
-            <Route
-              path="/sedes/:id"
-              element={
-                <RutaModulo modulo="sedes">
-                  <DetalleSede />
-                </RutaModulo>
-              }
-            />
-            <Route
-              path="/auditoria"
-              element={
-                <RutaModulo modulo="auditoria">
-                  <Auditoria />
-                </RutaModulo>
-              }
-            />
-            <Route path={RUTA_SEGURIDAD} element={<Seguridad />} />
-            <Route path="/acceso/*" element={<VolverTrasIngresar />} />
-            <Route path="*" element={<NoEncontrada />} />
-          </Routes>
+          <Suspense fallback={<Esqueleto filas={4} etiqueta={t.comun.cargando} />}>
+            <Routes>
+              <Route path="/" element={<RutaRaiz />} />
+              <Route
+                path="/sedes"
+                element={
+                  <RutaModulo modulo="sedes">
+                    <ListaSedes />
+                  </RutaModulo>
+                }
+              />
+              <Route
+                path="/sedes/:id"
+                element={
+                  <RutaModulo modulo="sedes">
+                    <DetalleSede />
+                  </RutaModulo>
+                }
+              />
+              <Route
+                path="/auditoria"
+                element={
+                  <RutaModulo modulo="auditoria">
+                    <Auditoria />
+                  </RutaModulo>
+                }
+              />
+              <Route path={RUTA_SEGURIDAD} element={<Seguridad />} />
+              <Route path="/acceso/*" element={<VolverTrasIngresar />} />
+              <Route path="*" element={<NoEncontrada />} />
+            </Routes>
+          </Suspense>
         </Armazon>
       );
   }

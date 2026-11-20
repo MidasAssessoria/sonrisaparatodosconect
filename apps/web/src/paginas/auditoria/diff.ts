@@ -66,4 +66,5 @@ export const ACCION_AUDITORIA: Record<
   ver: { texto: 'Consulta', tono: 'neutro', icono: 'ojo' },
   exportar: { texto: 'Exportación', tono: 'categoria', icono: 'exportar' },
   enviar: { texto: 'Envío', tono: 'info', icono: 'mensaje' },
+  ingresar: { texto: 'Ingreso', tono: 'neutro', icono: 'personal' },
 };

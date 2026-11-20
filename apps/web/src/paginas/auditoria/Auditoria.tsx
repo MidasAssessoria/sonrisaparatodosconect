@@ -18,7 +18,7 @@ import { useInfiniteQuery } from '@tanstack/react-query';
 import { useMemo, useState } from 'react';
 import { Esqueleto, MensajeError } from '../../componentes/estados.js';
 import { useSesionLista } from '../../sesion/ProveedorSesion.js';
-import { finDelDia, formatoFechaHora, inicioDelDia } from '../../utilidades/fechas.js';
+import { formatoFechaHora, hastaExclusivo, inicioDelDia } from '../../utilidades/fechas.js';
 import {
   ACCION_AUDITORIA,
   camposCambiados,
@@ -40,14 +40,15 @@ interface Filtros {
 
 const SIN_FILTROS: Filtros = { entidad: '', accion: '', usuarioId: '', desde: '', hasta: '' };
 
-function consultaDesde(f: Filtros): Partial<ConsultaAuditoria> {
+/** Días en la zona de la clínica. `hasta` de la API es exclusivo: el inicio del día siguiente. */
+function consultaDesde(f: Filtros, zona: string): Partial<ConsultaAuditoria> {
   return {
     limite: TAMANO_PAGINA,
     ...(f.entidad ? { entidad: f.entidad } : {}),
     ...(f.accion ? { accion: f.accion } : {}),
     ...(f.usuarioId ? { usuarioId: f.usuarioId } : {}),
-    ...(f.desde ? { desde: inicioDelDia(f.desde) } : {}),
-    ...(f.hasta ? { hasta: finDelDia(f.hasta) } : {}),
+    ...(f.desde ? { desde: inicioDelDia(f.desde, zona) } : {}),
+    ...(f.hasta ? { hasta: hastaExclusivo(f.hasta, zona) } : {}),
   };
 }
 
@@ -62,9 +63,13 @@ function ChipAccion({ accion }: { accion: AccionAuditoria }) {
 
 function DetalleEvento({
   evento,
+  zona,
+  nombreSede,
   onCerrar,
 }: {
   evento: EventoAuditoria | null;
+  zona: string;
+  nombreSede: (id: string) => string;
   onCerrar: () => void;
 }) {
   const cambios = evento ? camposCambiados(evento.antes, evento.despues) : [];
@@ -75,7 +80,7 @@ function DetalleEvento({
           <dl className="w-datos">
             <div>
               <dt>Fecha</dt>
-              <dd>{formatoFechaHora(evento.fecha)}</dd>
+              <dd>{formatoFechaHora(evento.fecha, zona)}</dd>
             </div>
             <div>
               <dt>Quién</dt>
@@ -88,6 +93,12 @@ function DetalleEvento({
                 <ChipAccion accion={evento.accion} />
               </dd>
             </div>
+            {evento.sedeId ? (
+              <div>
+                <dt>Sede</dt>
+                <dd>{nombreSede(evento.sedeId)}</dd>
+              </div>
+            ) : null}
             {evento.ip ? (
               <div>
                 <dt>IP</dt>
@@ -125,15 +136,18 @@ function DetalleEvento({
 
 export function Auditoria() {
   const { api, sesion } = useSesionLista();
+  const zona = sesion.clinica.zonaHoraria;
+  const nombreSede = (id: string) =>
+    sesion.sedes.find((s) => s.id === id)?.nombre ?? 'Sede dada de baja o fuera de tu acceso';
   const [filtros, setFiltros] = useState<Filtros>(SIN_FILTROS);
   const [elegido, setElegido] = useState<EventoAuditoria | null>(null);
   const rangoInvalido = !!filtros.desde && !!filtros.hasta && filtros.desde > filtros.hasta;
 
   const consulta = useInfiniteQuery({
-    queryKey: ['auditoria', sesion.clinica.id, filtros],
+    queryKey: ['auditoria', sesion.clinica.id, zona, filtros],
     queryFn: ({ pageParam }) =>
       api.auditoria.listar({
-        ...consultaDesde(filtros),
+        ...consultaDesde(filtros, zona),
         ...(pageParam ? { cursor: pageParam } : {}),
       }),
     initialPageParam: null as string | null,
@@ -162,7 +176,7 @@ export function Auditoria() {
   }, [eventos]);
 
   const columnas: Columna<EventoAuditoria>[] = [
-    { clave: 'fecha', titulo: 'Fecha', render: (e) => formatoFechaHora(e.fecha) },
+    { clave: 'fecha', titulo: 'Fecha', render: (e) => formatoFechaHora(e.fecha, zona) },
     { clave: 'usuario', titulo: 'Quién', render: (e) => e.usuario?.nombre ?? 'Sistema' },
     { clave: 'entidad', titulo: 'Entidad', render: (e) => nombreEntidad(e.entidad) },
     { clave: 'accion', titulo: 'Acción', render: (e) => <ChipAccion accion={e.accion} /> },
@@ -288,7 +302,12 @@ export function Auditoria() {
         </>
       ) : null}
 
-      <DetalleEvento evento={elegido} onCerrar={() => setElegido(null)} />
+      <DetalleEvento
+        evento={elegido}
+        zona={zona}
+        nombreSede={nombreSede}
+        onCerrar={() => setElegido(null)}
+      />
     </>
   );
 }

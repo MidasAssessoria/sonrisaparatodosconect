@@ -361,28 +361,40 @@
   flex-wrap: wrap;
   gap: var(--espacio-2);
 }
+/* Cada opción muestra la muestra de color y su nombre (nada depende del hover). */
 .w-color {
-  display: grid;
-  place-items: center;
-  min-width: var(--toque-minimo);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--espacio-2);
   min-height: var(--toque-minimo);
+  padding: var(--espacio-1) var(--espacio-3) var(--espacio-1) var(--espacio-1);
   border-radius: var(--radio-pill);
-  border: 2px solid var(--blanco);
-  box-shadow: 0 0 0 1px var(--borde-control);
+  border: 1px solid var(--borde-control);
+  background: var(--blanco);
   color: var(--tinta);
+  font: var(--tipo-etiqueta);
   cursor: pointer;
 }
 .w-color[aria-checked='true'] {
-  box-shadow: 0 0 0 3px var(--tinta);
+  box-shadow: 0 0 0 2px var(--tinta);
 }
 .w-color:focus-visible {
   outline: 3px solid var(--foco);
   outline-offset: 3px;
 }
+.w-color__muestra {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radio-pill);
+  border: 1px solid var(--borde-control);
+  color: var(--tinta);
+}
 .w-color--ninguno {
-  padding: 0 var(--espacio-4);
+  padding: var(--espacio-1) var(--espacio-4);
   background: var(--fondo-suave);
-  font: var(--tipo-etiqueta);
 }
 
 .w-horarios {

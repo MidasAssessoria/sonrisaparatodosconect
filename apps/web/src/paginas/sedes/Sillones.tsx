@@ -3,6 +3,7 @@ import { AvisoExito, Boton, Campo, Chip, EstadoVacio } from '@conecta/ui';
 import { useMutation } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
 import { MensajeError } from '../../componentes/estados.js';
+import { useEnvioUnico } from '../../componentes/useEnvioUnico.js';
 import { useSesionLista } from '../../sesion/ProveedorSesion.js';
 
 function validarNombre(nombre: string): string | null {
@@ -26,6 +27,7 @@ function FilaSillon({
   const [renombrando, setRenombrando] = useState(false);
   const [nombre, setNombre] = useState(sillon.nombre);
   const [errorNombre, setErrorNombre] = useState<string | null>(null);
+  const unaVez = useEnvioUnico();
   const editar = useMutation({
     mutationFn: (datos: { nombre?: string; activo?: boolean }) =>
       api.sedes.editarSillon(sillon.id, datos),
@@ -35,11 +37,15 @@ function FilaSillon({
     },
   });
 
+  function cambiar(datos: { nombre?: string; activo?: boolean }) {
+    void unaVez(() => editar.mutateAsync(datos).catch(() => undefined));
+  }
+
   function guardarNombre(e: FormEvent) {
     e.preventDefault();
     const err = validarNombre(nombre);
     setErrorNombre(err);
-    if (!err) editar.mutate({ nombre: nombre.trim() });
+    if (!err) cambiar({ nombre: nombre.trim() });
   }
 
   return (
@@ -74,7 +80,9 @@ function FilaSillon({
         <div className="w-sillon__fila">
           <span className="w-sillon__nombre">{sillon.nombre}</span>
           {sillon.activo ? (
-            <Chip tono="exito">Activo</Chip>
+            <Chip tono="exito" icono="check">
+              Activo
+            </Chip>
           ) : (
             <Chip tono="neutro" icono="cerrar">
               Inactivo
@@ -92,7 +100,7 @@ function FilaSillon({
               <Boton
                 variante="secundario"
                 cargando={editar.isPending}
-                onClick={() => editar.mutate({ activo: !sillon.activo })}
+                onClick={() => cambiar({ activo: !sillon.activo })}
                 aria-label={`${sillon.activo ? 'Desactivar' : 'Activar'} ${sillon.nombre}`}
               >
                 {sillon.activo ? 'Desactivar' : 'Activar'}
@@ -121,6 +129,7 @@ export function Sillones({
   const [nombre, setNombre] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [agregado, setAgregado] = useState<string | null>(null);
+  const unaVezAlta = useEnvioUnico();
 
   const crear = useMutation({
     mutationFn: (n: string) => api.sedes.crearSillon(sedeId, { nombre: n }),
@@ -136,7 +145,7 @@ export function Sillones({
     const err = validarNombre(nombre);
     setError(err);
     setAgregado(null);
-    if (!err) crear.mutate(nombre.trim());
+    if (!err) void unaVezAlta(() => crear.mutateAsync(nombre.trim()).catch(() => undefined));
   }
 
   return (

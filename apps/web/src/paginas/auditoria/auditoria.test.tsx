@@ -1,6 +1,6 @@
 import type { EventoAuditoria } from '@conecta/shared';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   crearAuthFalso,
   crearFetchFalso,
@@ -9,7 +9,12 @@ import {
   sesionDe,
   uuid,
 } from '../../test/fabricas.js';
-import { finDelDia, formatoFechaHora, inicioDelDia } from '../../utilidades/fechas.js';
+import {
+  desfaseMinutos,
+  formatoFechaHora,
+  hastaExclusivo,
+  inicioDelDia,
+} from '../../utilidades/fechas.js';
 import { camposCambiados } from './diff.js';
 
 function evento(n: number, p: Partial<EventoAuditoria> = {}): EventoAuditoria {
@@ -17,6 +22,8 @@ function evento(n: number, p: Partial<EventoAuditoria> = {}): EventoAuditoria {
     id: uuid(500 + n),
     fecha: '2026-11-20T12:05:00Z',
     usuario: { id: IDS.usuario, nombre: 'Lorena Fretes' },
+    modulo: 'sedes',
+    sedeId: IDS.sedeCentro,
     entidad: 'sede',
     entidadId: IDS.sedeCentro,
     accion: 'editar',
@@ -42,10 +49,56 @@ describe('diff y fechas', () => {
 
   it('fecha en America/Asuncion con el formato del design system', () => {
     const ahora = new Date('2026-11-25T12:00:00Z');
-    expect(formatoFechaHora('2026-11-20T12:05:00Z', ahora)).toBe('vie 20 de nov · 9:05');
-    expect(formatoFechaHora('2025-01-02T02:30:00Z', ahora)).toBe('mié 1 de ene de 2025 · 23:30');
-    expect(inicioDelDia('2026-11-20')).toBe('2026-11-20T00:00:00-03:00');
-    expect(finDelDia('2026-11-20')).toBe('2026-11-20T23:59:59.999-03:00');
+    const zona = 'America/Asuncion';
+    expect(formatoFechaHora('2026-11-20T12:05:00Z', zona, ahora)).toBe('vie 20 de nov · 9:05');
+    expect(formatoFechaHora('2025-01-02T02:30:00Z', zona, ahora)).toBe(
+      'mié 1 de ene de 2025 · 23:30',
+    );
+    expect(inicioDelDia('2026-11-20', zona)).toBe('2026-11-20T00:00:00-03:00');
+  });
+
+  it('«hasta» es exclusivo: el inicio del día siguiente (también a fin de mes y de año)', () => {
+    expect(hastaExclusivo('2026-11-20', 'America/Asuncion')).toBe('2026-11-21T00:00:00-03:00');
+    expect(hastaExclusivo('2026-11-30', 'America/Asuncion')).toBe('2026-12-01T00:00:00-03:00');
+    expect(hastaExclusivo('2026-12-31', 'America/Asuncion')).toBe('2027-01-01T00:00:00-03:00');
+  });
+
+  it('usa la zona que se le pasa (la de la clínica), no una fija', () => {
+    const ahora = new Date('2026-11-25T12:00:00Z');
+    expect(formatoFechaHora('2026-11-20T12:05:00Z', 'Europe/Madrid', ahora)).toBe(
+      'vie 20 de nov · 13:05',
+    );
+    expect(inicioDelDia('2026-11-20', 'Europe/Madrid')).toBe('2026-11-20T00:00:00+01:00');
+    expect(inicioDelDia('2026-07-20', 'Europe/Madrid')).toBe('2026-07-20T00:00:00+02:00');
+  });
+
+  describe('sin la tabla de zonas del navegador para Asunción', () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it('desde octubre de 2024 Asunción es UTC−3 todo el año aunque el navegador no lo sepa', () => {
+      // Navegador «viejo»: si alguien le pregunta por America/Asuncion, la prueba se entera.
+      const Original = Intl.DateTimeFormat;
+      const espia = vi.spyOn(Intl, 'DateTimeFormat').mockImplementation(function (
+        locales?: string | string[],
+        opciones?: Intl.DateTimeFormatOptions,
+      ) {
+        if (opciones?.timeZone === 'America/Asuncion') {
+          throw new Error('se consultó la tabla de zonas del navegador');
+        }
+        return new Original(locales, opciones);
+      } as unknown as typeof Intl.DateTimeFormat);
+      const zona = 'America/Asuncion';
+      // Julio: con la regla vieja sería UTC−4.
+      expect(inicioDelDia('2025-07-15', zona)).toBe('2025-07-15T00:00:00-03:00');
+      expect(hastaExclusivo('2025-07-15', zona)).toBe('2025-07-16T00:00:00-03:00');
+      expect(formatoFechaHora('2025-07-15T12:00:00Z', zona, new Date('2025-08-01T00:00:00Z'))).toBe(
+        'mar 15 de jul · 9:00',
+      );
+      expect(desfaseMinutos(Date.UTC(2026, 5, 1), zona)).toBe(-180);
+      expect(espia).toHaveBeenCalled();
+    });
   });
 });
 
@@ -116,7 +169,8 @@ describe('Auditoría', () => {
       expect(q?.get('entidad')).toBe('sillon');
       expect(q?.get('usuarioId')).toBe(uuid(2));
       expect(q?.get('desde')).toBe('2026-11-01T00:00:00-03:00');
-      expect(q?.get('hasta')).toBe('2026-11-20T23:59:59.999-03:00');
+      // Exclusivo: incluye todo el 20 de noviembre.
+      expect(q?.get('hasta')).toBe('2026-11-21T00:00:00-03:00');
       expect(q?.has('cursor')).toBe(false);
     });
   });
@@ -136,7 +190,33 @@ describe('Auditoría', () => {
     // Solo la consulta con «desde» (antes de poner «hasta»).
     expect(f.pedidos.length - antes).toBeLessThanOrEqual(1);
     expect(
-      f.pedidos.every((p) => p.url.searchParams.get('hasta') !== '2026-11-01T23:59:59.999-03:00'),
+      f.pedidos.every((p) => p.url.searchParams.get('hasta') !== '2026-11-02T00:00:00-03:00'),
     ).toBe(true);
+  });
+});
+
+describe('Auditoría en la zona de la clínica', () => {
+  it('muestra las horas y arma los filtros con sesion.clinica.zonaHoraria', async () => {
+    const auth = crearAuthFalso({ conSesion: true });
+    const f = crearFetchFalso({
+      'GET /sesion': {
+        cuerpo: sesionDe({
+          clinica: { id: IDS.clinicaA, nombre: 'Clínica Prueba', zonaHoraria: 'Europe/Madrid' },
+        }),
+      },
+      'GET /auditoria': {
+        cuerpo: {
+          items: [evento(1, { accion: 'ingresar', antes: null, despues: null })],
+          siguienteCursor: null,
+        },
+      },
+    });
+    renderApp({ auth, fetch: f.fetch, ruta: '/auditoria' });
+    expect((await screen.findAllByText(/20 de nov · 13:05/)).length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Ingreso').length).toBeGreaterThan(0);
+    fireEvent.change(screen.getByLabelText('Hasta'), { target: { value: '2026-11-20' } });
+    await waitFor(() =>
+      expect(f.pedidos.at(-1)?.url.searchParams.get('hasta')).toBe('2026-11-21T00:00:00+01:00'),
+    );
   });
 });
