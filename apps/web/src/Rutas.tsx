@@ -26,6 +26,32 @@ const DetalleSede = lazy(() =>
 const Auditoria = lazy(() =>
   import('./paginas/auditoria/Auditoria.js').then((m) => ({ default: m.Auditoria })),
 );
+const ListaPersonal = lazy(() =>
+  import('./paginas/personal/ListaPersonal.js').then((m) => ({ default: m.ListaPersonal })),
+);
+const DetallePersona = lazy(() =>
+  import('./paginas/personal/DetallePersona.js').then((m) => ({ default: m.DetallePersona })),
+);
+const Roles = lazy(() => import('./paginas/personal/Roles.js').then((m) => ({ default: m.Roles })));
+const AceptarInvitacion = lazy(() =>
+  import('./paginas/personal/AceptarInvitacion.js').then((m) => ({ default: m.AceptarInvitacion })),
+);
+const ListaProfesionales = lazy(() =>
+  import('./paginas/catalogos/ListaProfesionales.js').then((m) => ({
+    default: m.ListaProfesionales,
+  })),
+);
+const DetalleProfesional = lazy(() =>
+  import('./paginas/catalogos/DetalleProfesional.js').then((m) => ({
+    default: m.DetalleProfesional,
+  })),
+);
+const Tratamientos = lazy(() =>
+  import('./paginas/catalogos/Tratamientos.js').then((m) => ({ default: m.Tratamientos })),
+);
+const PruebaOdontograma = lazy(() =>
+  import('./experimentos/index.js').then((m) => ({ default: m.PruebaOdontograma })),
+);
 const Seguridad = lazy(() =>
   import('./paginas/Seguridad.js').then((m) => ({ default: m.Seguridad })),
 );
@@ -96,6 +122,14 @@ export function Rutas() {
           <Route path="/acceso" element={<Acceso />} />
           <Route path="/acceso/recuperar" element={<Recuperar />} />
           <Route path={RUTA_NUEVA_CLAVE} element={<NuevaClave />} />
+          <Route
+            path="/invitacion"
+            element={
+              <Suspense fallback={<PantallaCarga texto={t.comun.cargando} />}>
+                <AceptarInvitacion />
+              </Suspense>
+            }
+          />
           <Route path="*" element={<IrAAcceso />} />
         </Routes>
       );
@@ -129,6 +163,58 @@ export function Rutas() {
                   </RutaModulo>
                 }
               />
+              <Route
+                path="/personal"
+                element={
+                  <RutaModulo modulo="personal">
+                    <ListaPersonal />
+                  </RutaModulo>
+                }
+              />
+              <Route
+                path="/personal/:id"
+                element={
+                  <RutaModulo modulo="personal">
+                    <DetallePersona />
+                  </RutaModulo>
+                }
+              />
+              <Route
+                path="/roles"
+                element={
+                  <RutaModulo modulo="personal">
+                    <Roles />
+                  </RutaModulo>
+                }
+              />
+              <Route
+                path="/profesionales"
+                element={
+                  <RutaModulo modulo="personal">
+                    <ListaProfesionales />
+                  </RutaModulo>
+                }
+              />
+              <Route
+                path="/profesionales/:id"
+                element={
+                  <RutaModulo modulo="personal">
+                    <DetalleProfesional />
+                  </RutaModulo>
+                }
+              />
+              <Route
+                path="/tratamientos"
+                element={
+                  <RutaModulo modulo="configuracion">
+                    <Tratamientos />
+                  </RutaModulo>
+                }
+              />
+              {/* Prueba técnica del Sprint 2: el odontograma 3D de la maqueta como componente. */}
+              <Route path="/experimentos/odontograma" element={<PruebaOdontograma />} />
+              {/* Invitación abierta con una sesión ya iniciada (cuenta existente). */}
+              <Route path="/invitacion" element={<AceptarInvitacion />} />
               <Route path={RUTA_SEGURIDAD} element={<Seguridad />} />
               <Route path="/acceso/*" element={<VolverTrasIngresar />} />
               <Route path="*" element={<NoEncontrada />} />

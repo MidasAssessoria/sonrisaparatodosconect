@@ -17,6 +17,9 @@ export interface ModuloWeb {
 export const MODULOS_WEB: readonly ModuloWeb[] = [
   { id: 'inicio', modulo: 'inicio', icono: 'inicio', ruta: '/' },
   { id: 'sedes', modulo: 'sedes', icono: 'sede', ruta: '/sedes' },
+  { id: 'personal', modulo: 'personal', icono: 'personal', ruta: '/personal' },
+  { id: 'profesionales', modulo: 'personal', icono: 'odontologia', ruta: '/profesionales' },
+  { id: 'tratamientos', modulo: 'configuracion', icono: 'tabla', ruta: '/tratamientos' },
   { id: 'auditoria', modulo: 'auditoria', icono: 'archivo', ruta: '/auditoria' },
 ];
 
