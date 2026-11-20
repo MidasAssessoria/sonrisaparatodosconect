@@ -21,7 +21,7 @@ const renderEnlace: RenderEnlace<IdModuloWeb> = ({ href, item, activo, children,
 /** Armazón con sesión: navegación según permisos, sede, menú de usuario e inactividad. */
 export function Armazon({ children }: { children: ReactNode }) {
   const { idioma, setIdioma, t } = useIdioma();
-  const { sesion, puede, sedeActiva, elegirSede, cerrarSesion, irAElegirClinica } =
+  const { sesion, puede, sedeActiva, elegirSede, cerrarSesion, irAElegirClinica, mantenerSesion } =
     useSesionLista();
   const ubicacion = useLocation();
   const navegar = useNavigate();
@@ -37,6 +37,8 @@ export function Armazon({ children }: { children: ReactNode }) {
     minutos: sesion.inactividadMin,
     activo: true,
     alCerrar: () => void cerrarSesion({ tipo: 'inactividad', minutos: sesion.inactividadMin }),
+    // La API mide la inactividad por pedidos: la actividad en pantalla también la renueva allá.
+    alAvisarApi: () => void mantenerSesion(),
   });
 
   const acciones = [

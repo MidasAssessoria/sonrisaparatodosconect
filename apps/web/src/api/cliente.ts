@@ -179,6 +179,13 @@ export function crearClienteApi(opciones: OpcionesClienteApi) {
        */
       cerrar: (): Promise<void> =>
         pedir({ metodo: 'POST', ruta: '/sesion/cerrar', esquema: null, silencioso: true }),
+      /**
+       * Aviso de actividad: `GET /sesion` sin leer la respuesta. La API renueva la última
+       * actividad del lado del servidor con cualquier pedido autenticado. Silencioso: quien lo
+       * llama decide qué errores importan (ver `ProveedorSesion.mantenerSesion`).
+       */
+      mantener: (): Promise<void> =>
+        pedir({ metodo: 'GET', ruta: '/sesion', esquema: null, silencioso: true }),
       /** `DELETE /sesion/mfa` (204, exige aal2): se llama justo después de quitar el factor en Supabase. */
       quitarMfa: (): Promise<void> =>
         pedir({ metodo: 'DELETE', ruta: '/sesion/mfa', esquema: null }),

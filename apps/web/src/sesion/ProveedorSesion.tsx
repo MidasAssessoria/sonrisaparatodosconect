@@ -79,6 +79,12 @@ export interface ValorSesion {
   elegirClinica: (id: string) => Promise<void>;
   irAElegirClinica: () => void;
   recargarSesion: () => Promise<void>;
+  /**
+   * Aviso silencioso de actividad a la API (renueva la sesión del servidor). No toca el estado:
+   * solo reacciona si la API dice que la sesión venció (`no_autenticado`) o que ya no hay
+   * membresía (`sin_membresia`). Red caída, 429 o 503 se ignoran.
+   */
+  mantenerSesion: () => Promise<void>;
   /** Reintento manual desde la pantalla de error (p. ej. 503 al arrancar). */
   reintentar: () => void;
   terminarRecuperacion: () => Promise<void>;
@@ -473,6 +479,21 @@ export function ProveedorSesion({ auth, fetch: fetchImpl, baseApi, children }: P
     cambiarEstado({ fase: 'lista', sesion: s });
   }, [api, vigente, enlace, cambiarEstado]);
 
+  const mantenerSesion = useCallback(async () => {
+    if (refEstado.current.fase !== 'lista') return;
+    const g = refGeneracion.current;
+    try {
+      await api.sesion.mantener();
+    } catch (e) {
+      // Un cambio de rumbo mientras tanto (salir, cambiar de clínica): la respuesta ya no cuenta.
+      if (!vigente(g) || refEstado.current.fase !== 'lista') return;
+      if (!(e instanceof ErrorConecta)) return;
+      const r = reaccionPorCodigo(e.codigo);
+      if (r.tipo === 'cerrar_sesion') void cerrarSesion({ tipo: 'vencida' });
+      else if (r.tipo === 'sin_membresia') void cerrarSesion({ tipo: 'sin_membresia' });
+    }
+  }, [api, vigente, cerrarSesion]);
+
   const sesion = estado.fase === 'lista' ? estado.sesion : null;
 
   const valor = useMemo<ValorSesion>(() => {
@@ -525,6 +546,7 @@ export function ProveedorSesion({ auth, fetch: fetchImpl, baseApi, children }: P
         });
       },
       recargarSesion,
+      mantenerSesion,
       reintentar: () => {
         if (refUsuario.current) void cargarSesion();
         else void arrancar();
@@ -551,6 +573,7 @@ export function ProveedorSesion({ auth, fetch: fetchImpl, baseApi, children }: P
     cargarSesion,
     cerrarSesion,
     recargarSesion,
+    mantenerSesion,
     arrancar,
     consultas,
     nuevaGeneracion,

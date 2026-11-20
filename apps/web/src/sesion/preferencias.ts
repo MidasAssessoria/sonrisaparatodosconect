@@ -70,6 +70,8 @@ export const claves = {
   sedeElegida: (usuarioId: string, clinicaId: string) => `sede-elegida.${usuarioId}.${clinicaId}`,
   sedesElegidas: 'sede-elegida.',
   actividad: 'actividad',
+  /** Último aviso de actividad mandado a la API desde cualquier pestaña (ms). */
+  avisoApi: 'aviso-api',
 } as const;
 
 /** Clave completa (con prefijo) para comparar en el evento `storage`. */
@@ -88,4 +90,14 @@ export function leerActividad(): number | null {
 
 export function marcarActividad(cuando: number = Date.now()): void {
   escribir(claves.actividad, String(cuando));
+}
+
+/** Momento (ms) del último aviso de actividad a la API, de cualquier pestaña, o `null`. */
+export function leerAvisoApi(): number | null {
+  const v = Number(leer(claves.avisoApi));
+  return Number.isFinite(v) && v > 0 ? v : null;
+}
+
+export function marcarAvisoApi(cuando: number): void {
+  escribir(claves.avisoApi, String(cuando));
 }
