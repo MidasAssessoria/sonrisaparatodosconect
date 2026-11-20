@@ -24,6 +24,7 @@ const configSchema = z.object({
     .string()
     .regex(/^(true|false|\d{1,2})$/, 'usá true, false o la cantidad de proxies (p. ej. 1)'),
   RATE_LIMIT_PER_MINUTE: z.coerce.number().int().min(1).max(100_000),
+  RATE_LIMIT_USER_PER_MINUTE: z.coerce.number().int().min(1).max(100_000),
 });
 
 export interface Config {
@@ -45,6 +46,8 @@ export interface Config {
   trustProxy: false | number;
   /** Pedidos por minuto y por IP antes de responder 429. */
   limitePedidosPorMinuto: number;
+  /** Pedidos por minuto y por usuario autenticado (`sub` del token) antes de responder 429. */
+  limitePedidosPorUsuario: number;
 }
 
 const CLAVES = [
@@ -56,6 +59,7 @@ const CLAVES = [
   'WEB_ORIGIN',
   'TRUST_PROXY',
   'RATE_LIMIT_PER_MINUTE',
+  'RATE_LIMIT_USER_PER_MINUTE',
 ] as const;
 
 /** Valores por defecto en cualquier entorno (incluida producción). */
@@ -63,17 +67,22 @@ const PREDETERMINADOS_COMUNES: Partial<Record<(typeof CLAVES)[number], string>> 
   // PORT tiene un valor por defecto razonable incluso en producción (Railway lo define siempre).
   PORT: '3000',
   DATABASE_POOL_MAX: '10',
-  TRUST_PROXY: 'false',
   RATE_LIMIT_PER_MINUTE: '300',
+  RATE_LIMIT_USER_PER_MINUTE: '120',
 };
 
-/** Valores para desarrollo y pruebas. En producción no hay valores por defecto para lo sensible. */
+/**
+ * Valores para desarrollo y pruebas. En producción no hay valores por defecto para lo sensible ni
+ * para TRUST_PROXY: detrás de un proxy, sin él, todos los clientes comparten un contador del
+ * límite de pedidos y la auditoría guarda la IP del proxy.
+ */
 const PREDETERMINADOS: Record<'development' | 'test', Record<string, string>> = {
   development: {
     DATABASE_URL: 'postgres://app_api:app_api@localhost:5432/conecta',
     SUPABASE_URL: 'http://127.0.0.1:54321',
     SUPABASE_JWKS_URL: 'http://127.0.0.1:54321/auth/v1/.well-known/jwks.json',
     WEB_ORIGIN: 'http://localhost:5173',
+    TRUST_PROXY: 'false',
   },
   test: {
     PORT: '0',
@@ -81,7 +90,17 @@ const PREDETERMINADOS: Record<'development' | 'test', Record<string, string>> = 
     SUPABASE_URL: 'http://127.0.0.1:54321',
     SUPABASE_JWKS_URL: 'http://127.0.0.1:54321/auth/v1/.well-known/jwks.json',
     WEB_ORIGIN: 'http://localhost:5173',
+    TRUST_PROXY: 'false',
   },
+};
+
+/** Por qué falta cada variable, cuando no alcanza con «definila». */
+const EXPLICACION_FALTANTE: Partial<Record<(typeof CLAVES)[number], string>> = {
+  TRUST_PROXY:
+    'falta. En producción definila explícitamente: la cantidad de proxies delante de la API ' +
+    '(p. ej. 1 detrás del balanceador de Railway) o false si los clientes llegan directo. Sin ' +
+    'esto, detrás de un proxy todos los clientes comparten el límite de pedidos y la auditoría ' +
+    'guarda la IP del proxy.',
 };
 
 export class ErrorDeConfiguracion extends Error {
@@ -115,9 +134,11 @@ export function cargarConfig(env: NodeJS.ProcessEnv = process.env): Config {
         const clave = String(issue.path[0] ?? '');
         if (vistas.has(clave)) return null;
         vistas.add(clave);
-        return valores[clave] === undefined
-          ? `- ${clave}: falta. Definila en el entorno (ver .env.example).`
-          : `- ${clave}: valor inválido (${issue.message}).`;
+        if (valores[clave] !== undefined) return `- ${clave}: valor inválido (${issue.message}).`;
+        const explicacion = EXPLICACION_FALTANTE[clave as (typeof CLAVES)[number]];
+        return explicacion
+          ? `- ${clave}: ${explicacion}`
+          : `- ${clave}: falta. Definila en el entorno (ver .env.example).`;
       })
       .filter((linea) => linea !== null)
       .join('\n');
@@ -144,5 +165,6 @@ export function cargarConfig(env: NodeJS.ProcessEnv = process.env): Config {
           ? 1
           : Number(c.TRUST_PROXY),
     limitePedidosPorMinuto: c.RATE_LIMIT_PER_MINUTE,
+    limitePedidosPorUsuario: c.RATE_LIMIT_USER_PER_MINUTE,
   };
 }

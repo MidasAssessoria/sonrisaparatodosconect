@@ -185,25 +185,26 @@ describe('matriz de permisos', () => {
 
   it('el permiso sale de rol_permiso, no del nombre del rol', async () => {
     const otra = await crearClinica(prueba, { sedes: 1 });
-    const token = await otra.dueno.token();
+    const persona = await crearPersona(prueba, otra.clinicaId, { rol: 'administracion' });
+    const token = await persona.token();
     await prueba.pedir('post', '/sedes', { token, cuerpo: { nombre: 'Antes' } }).expect(201);
     await comoSistema(
       prueba.admin,
       otra.clinicaId,
       "update app.rol_permiso set activo = false where rol_id = $1 and modulo = 'sedes' and accion = 'crear'",
-      [otra.roles.dueno],
+      [otra.roles.administracion],
     );
     await esperarError(
       prueba.pedir('post', '/sedes', { token, cuerpo: { nombre: 'Después' } }),
       403,
       'sin_permiso',
     );
-    // Un rol desactivado se queda sin permisos.
+    // Un rol desactivado se queda sin permisos (el rol Dueño/a no se puede desactivar).
     await comoSistema(
       prueba.admin,
       otra.clinicaId,
       'update app.rol set activo = false where id = $1',
-      [otra.roles.dueno],
+      [otra.roles.administracion],
     );
     await esperarError(prueba.pedir('get', '/sedes', { token }), 403, 'sin_permiso');
     const sesion = segun(

@@ -11,8 +11,13 @@ export type Acceso =
   /** Sin sesión (p. ej. `GET /salud`). */
   | { tipo: 'publica' }
   /**
-   * Solo `GET /sesion`: con sesión, tolera la falta de `X-Clinica-Id` con varias membresías y no
-   * exige el segundo factor (la web lo necesita para saber que tiene que pedirlo).
+   * Solo `POST /sesion/cerrar`: token válido (con `session_id`), sin clínica ni membresía y aunque
+   * el token sea aal1 con el doble factor pendiente (la web lo llama desde la pantalla del código).
+   */
+  | { tipo: 'cierre' }
+  /**
+   * Solo `GET /sesion`: con sesión, tolera la falta de `X-Clinica-Id` con varias membresías. El
+   * doble factor se exige igual que en el resto.
    */
   | { tipo: 'sesion' }
   /** Con sesión y membresía activa en la clínica, sin un permiso de módulo en particular. */
@@ -22,6 +27,9 @@ export type Acceso =
 
 /** Ruta sin sesión. Usala solo para lo que de verdad es público. */
 export const Publica = () => SetMetadata(ACCESO, { tipo: 'publica' } satisfies Acceso);
+
+/** Reservado para `POST /sesion/cerrar` (ver `Acceso`). */
+export const CierreSesion = () => SetMetadata(ACCESO, { tipo: 'cierre' } satisfies Acceso);
 
 /** Reservado para `GET /sesion` (ver `Acceso`). */
 export const AccesoSesion = () => SetMetadata(ACCESO, { tipo: 'sesion' } satisfies Acceso);

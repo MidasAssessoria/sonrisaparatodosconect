@@ -68,7 +68,10 @@ describe('rutas: negar por defecto', () => {
   it('toda ruta de la app declara su acceso, y la tabla coincide con el contrato', () => {
     const rutas = rutasRegistradas(prueba).filter((r) => r.ruta !== '/sin-declarar');
     const sinDeclarar = rutas.filter((r) => r.acceso === undefined);
-    expect(sinDeclarar, 'rutas sin @Permiso/@Publica/@SoloMiembro/@AccesoSesion').toEqual([]);
+    expect(
+      sinDeclarar,
+      'rutas sin @Permiso/@Publica/@SoloMiembro/@AccesoSesion/@CierreSesion',
+    ).toEqual([]);
 
     const tabla = rutas.map((r) => {
       const acceso = r.acceso;
@@ -89,6 +92,7 @@ describe('rutas: negar por defecto', () => {
         'POST /sedes/:id/sillones sedes:crear',
         'DELETE /sesion/mfa miembro',
         'GET /sesion sesion',
+        'POST /sesion/cerrar cierre',
         'PATCH /sillones/:id sedes:editar',
       ].sort(),
     );

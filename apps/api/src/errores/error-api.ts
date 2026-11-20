@@ -3,8 +3,9 @@ import type { CodigoError, ErrorApi as CuerpoErrorApi } from '@conecta/shared';
 export type DetalleError = NonNullable<CuerpoErrorApi['detalles']>[number];
 
 /**
- * Error con código estable del contrato (`CODIGOS_ERROR`). El filtro global lo responde tal cual;
- * cualquier otro error se traduce antes de salir (ver `traducir.ts`).
+ * Error con código estable del contrato (`CODIGOS_ERROR`). El filtro global lo responde tal cual
+ * (con sus `cabeceras`, p. ej. `Retry-After`); cualquier otro error se traduce antes de salir (ver
+ * `traducir.ts`).
  */
 export class ErrorApi extends Error {
   override name = 'ErrorApi';
@@ -14,6 +15,7 @@ export class ErrorApi extends Error {
     readonly codigo: CodigoError,
     mensaje: string,
     readonly detalles?: DetalleError[],
+    readonly cabeceras?: Readonly<Record<string, string>>,
   ) {
     super(mensaje);
   }
@@ -32,7 +34,7 @@ export const errores = {
   noAutenticado: (mensaje = 'Tu sesión no es válida o venció. Ingresá de nuevo.') =>
     new ErrorApi(401, 'no_autenticado', mensaje),
   mfaRequerido: (
-    mensaje = 'Tu cuenta tiene doble factor: confirmá el código de tu aplicación para seguir.',
+    mensaje = 'Tu cuenta usa doble factor: confirmá el código de tu aplicación para seguir.',
   ) => new ErrorApi(403, 'mfa_requerido', mensaje),
   sinMembresia: (
     mensaje = 'No tenés acceso activo a esta clínica. Pedile a quien la administra que te habilite.',
@@ -57,6 +59,19 @@ export const errores = {
   datosInvalidos: (mensaje: string, detalles?: DetalleError[]) =>
     new ErrorApi(400, 'datos_invalidos', mensaje, detalles),
   conflicto: (mensaje: string) => new ErrorApi(409, 'conflicto', mensaje),
+  /** 429 con `Retry-After` en segundos. */
+  demasiadosPedidos: (segundos: number) =>
+    new ErrorApi(
+      429,
+      'demasiados_pedidos',
+      `Hiciste demasiados pedidos seguidos. Esperá ${String(segundos)} segundos y probá de nuevo.`,
+      undefined,
+      { 'Retry-After': String(segundos) },
+    ),
+  /** 503: una dependencia (JWKS de Supabase, base de datos) no responde. No cierra la sesión. */
+  servicioNoDisponible: (
+    mensaje = 'El servicio no responde en este momento. Esperá unos segundos y probá de nuevo.',
+  ) => new ErrorApi(503, 'servicio_no_disponible', mensaje),
   interno: () =>
     new ErrorApi(
       500,

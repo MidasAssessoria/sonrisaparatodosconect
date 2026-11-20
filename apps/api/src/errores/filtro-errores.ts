@@ -14,6 +14,9 @@ function responder(registro: Registro, error: unknown, req: Request, res: Respon
     });
   }
   if (res.headersSent) return;
+  for (const [nombre, valor] of Object.entries(traducido.cabeceras ?? {})) {
+    res.setHeader(nombre, valor);
+  }
   res.status(traducido.estado).json(traducido.cuerpo);
 }
 

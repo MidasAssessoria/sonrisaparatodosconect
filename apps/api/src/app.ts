@@ -78,6 +78,7 @@ export function configurarApp(app: NestExpressApplication): NestExpressApplicati
     origin: config.webOrigenes,
     methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE'],
     allowedHeaders: CABECERAS_PERMITIDAS,
+    // Retry-After: la web (en otro origen) lo lee para saber cuándo reintentar tras un 429.
     exposedHeaders: ['X-Request-Id', 'Retry-After'],
     credentials: false,
     maxAge: 600,

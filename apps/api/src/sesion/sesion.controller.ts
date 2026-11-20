@@ -1,7 +1,10 @@
-import { Controller, Delete, Get, HttpCode } from '@nestjs/common';
+import { Controller, Delete, Get, HttpCode, Post, Req } from '@nestjs/common';
 import type { Sesion } from '@conecta/shared';
-import { AccesoSesion, SoloMiembro } from '../contexto/acceso.js';
-import { Ctx, type ContextoPedido } from '../contexto/contexto-pedido.js';
+import type { Request } from 'express';
+import type { IdentidadToken } from '../auth/verificador-jwt.js';
+import { ipDe } from '../comun/pedido.js';
+import { AccesoSesion, CierreSesion, SoloMiembro } from '../contexto/acceso.js';
+import { Ctx, Identidad, type ContextoPedido } from '../contexto/contexto-pedido.js';
 import { SesionService } from './sesion.service.js';
 
 @Controller('sesion')
@@ -12,6 +15,13 @@ export class SesionController {
   @AccesoSesion()
   obtener(@Ctx() ctx: ContextoPedido): Promise<Sesion> {
     return this.sesion.obtener(ctx);
+  }
+
+  @Post('cerrar')
+  @HttpCode(204)
+  @CierreSesion()
+  async cerrar(@Identidad() identidad: IdentidadToken, @Req() req: Request): Promise<void> {
+    await this.sesion.cerrar(identidad, ipDe(req));
   }
 
   @Delete('mfa')

@@ -4,11 +4,15 @@
  * En producción las claves salen del JWKS remoto del proyecto (`SUPABASE_JWKS_URL`); las pruebas
  * inyectan un verificador con un JWKS local para firmar sus propios tokens. Se valida firma
  * (solo ES256 o RS256: nunca `none` ni HS*), vencimiento, emisor `<SUPABASE_URL>/auth/v1` y audiencia
- * `authenticated`. Del token solo se usan `sub`, `email` y `aal`.
+ * `authenticated`. Del token solo se usan `sub`, `email`, `aal`, `iat` y `session_id`.
+ *
+ * Un token inválido es `no_autenticado` (401: la web cierra la sesión). No poder verificarlo porque
+ * el JWKS no responde, responde un error o devuelve algo roto es `servicio_no_disponible` (503): no
+ * es culpa del token y la web no tiene que sacar a nadie.
  */
 import { createRemoteJWKSet, errors, jwtVerify, type JWTVerifyGetKey } from 'jose';
 import { idSchema } from '@conecta/shared';
-import { ErrorApi, errores } from '../errores/error-api.js';
+import { errores } from '../errores/error-api.js';
 
 export const VERIFICADOR_JWT = Symbol('VERIFICADOR_JWT');
 
@@ -23,10 +27,14 @@ export interface IdentidadToken {
   email: string | null;
   /** `aal2` = pasó el segundo factor en esta sesión. Cualquier otro valor cuenta como `aal1`. */
   nivel: NivelAutenticacion;
+  /** `session_id`: la sesión de Supabase Auth (= `app.sesion.id`). */
+  sesionId: string;
+  /** `iat`: cuándo se emitió el token (para ignorar tokens aal2 anteriores a la baja del factor). */
+  emitidoEn: Date;
 }
 
 export interface VerificadorJwt {
-  /** Devuelve la identidad o lanza `no_autenticado` (o `error_interno` si no hay cómo verificar). */
+  /** Devuelve la identidad o lanza `no_autenticado` (o `servicio_no_disponible`). */
   verificar(token: string): Promise<IdentidadToken>;
 }
 
@@ -35,7 +43,10 @@ export interface OpcionesVerificador {
   audiencia?: string;
 }
 
-/** Errores de jose que significan «token inválido» (no «no pudimos verificar»). */
+/**
+ * Errores de jose que significan «este token no sirve». Cualquier otro (JWKS que responde un error,
+ * que no responde, que devuelve un JSON roto o claves inválidas, falla de red) es de la dependencia.
+ */
 const CODIGOS_TOKEN_INVALIDO = new Set([
   'ERR_JWT_EXPIRED',
   'ERR_JWT_CLAIM_VALIDATION_FAILED',
@@ -46,8 +57,9 @@ const CODIGOS_TOKEN_INVALIDO = new Set([
   'ERR_JOSE_NOT_SUPPORTED',
   'ERR_JWKS_NO_MATCHING_KEY',
   'ERR_JWKS_MULTIPLE_MATCHING_KEYS',
-  'ERR_JWK_INVALID',
 ]);
+
+const MENSAJE_SESION_INVALIDA = 'Tu sesión no es válida. Ingresá de nuevo.';
 
 export function crearVerificadorJwt(
   claves: JWTVerifyGetKey,
@@ -61,7 +73,7 @@ export function crearVerificadorJwt(
           algorithms: [...ALGORITMOS_JWT],
           issuer: opciones.emisor,
           audience: opciones.audiencia ?? AUDIENCIA_JWT,
-          requiredClaims: ['exp', 'sub'],
+          requiredClaims: ['exp', 'sub', 'iat'],
           clockTolerance: 5,
         }));
       } catch (error) {
@@ -71,24 +83,25 @@ export function crearVerificadorJwt(
         if (error instanceof errors.JOSEError && CODIGOS_TOKEN_INVALIDO.has(error.code)) {
           throw errores.noAutenticado();
         }
-        if (error instanceof errors.JOSEError && error.code !== 'ERR_JWKS_TIMEOUT') {
-          throw errores.noAutenticado();
-        }
-        // JWKS caído o lento: no es culpa del token.
-        throw new ErrorApi(
-          503,
-          'error_interno',
+        throw errores.servicioNoDisponible(
           'No pudimos verificar tu sesión en este momento. Probá de nuevo en unos segundos.',
         );
       }
 
       const sub = idSchema.safeParse(payload.sub);
       if (!sub.success) throw errores.noAutenticado();
+      const sesion = idSchema.safeParse(payload['session_id']);
+      if (!sesion.success) throw errores.noAutenticado(MENSAJE_SESION_INVALIDA);
+      if (typeof payload.iat !== 'number' || !Number.isFinite(payload.iat)) {
+        throw errores.noAutenticado(MENSAJE_SESION_INVALIDA);
+      }
       const email = typeof payload['email'] === 'string' ? payload['email'] : null;
       return {
         usuarioId: sub.data.toLowerCase(),
         email,
         nivel: payload['aal'] === 'aal2' ? 'aal2' : 'aal1',
+        sesionId: sesion.data.toLowerCase(),
+        emitidoEn: new Date(payload.iat * 1000),
       };
     },
   };

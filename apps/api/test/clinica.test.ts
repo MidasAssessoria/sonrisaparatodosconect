@@ -1,4 +1,5 @@
 import { sedeSchema, sesionSchema } from '@conecta/shared';
+import type request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import {
@@ -187,6 +188,74 @@ describe('resolución de la clínica del pedido', () => {
       "update app.membresia set estado = 'inactivo' where id = $1",
       [persona.membresiaId],
     );
+    await esperarError(prueba.pedir('get', '/sedes', { token }), 403, 'sin_membresia');
+  });
+
+  it('membresía desactivada entre la verificación y la operación: falla con sin_membresia y no se aplica', async () => {
+    const persona = await crearPersona(prueba, a.clinicaId, { rol: 'administracion' });
+    const token = await persona.token();
+    const sede = a.sedes[0]!;
+    await prueba.pedir('get', '/sesion', { token }).expect(200);
+
+    // Otra conexión retiene la fila de la membresía.
+    const otra = await prueba.admin.connect();
+    let respuesta: Promise<request.Response> | undefined;
+    try {
+      await otra.query('begin');
+      await otra.query(
+        `select set_config('app.clinica_id', $1, true), set_config('app.usuario_id', '', true)`,
+        [a.clinicaId],
+      );
+      await otra.query('select id from app.membresia where id = $1 for update', [
+        persona.membresiaId,
+      ]);
+      const { rows } = await otra.query<{ xid: string }>(
+        'select pg_current_xact_id()::text as xid',
+      );
+      const xid = rows[0]!.xid;
+
+      // La operación arranca: el paso previo (sin bloqueo) ve la membresía activa, y la comprobación
+      // dentro de la transacción (FOR SHARE) queda esperando a la otra conexión.
+      respuesta = prueba
+        .pedir('patch', `/sedes/${sede.sedeId}`, { token, cuerpo: { nombre: 'No debería quedar' } })
+        .then((r) => r);
+      const limite = Date.now() + 20_000;
+      for (;;) {
+        const espera = await prueba.admin.query<{ esperando: boolean }>(
+          `select exists (select 1 from pg_locks
+                          where locktype = 'transactionid' and transactionid::text = $1
+                            and not granted) as esperando`,
+          [xid],
+        );
+        if (espera.rows[0]?.esperando) break;
+        if (Date.now() > limite) throw new Error('La operación nunca quedó esperando el bloqueo.');
+        await new Promise((r) => setTimeout(r, 25));
+      }
+
+      // Se desactiva la membresía y se suelta la fila.
+      await otra.query("update app.membresia set estado = 'inactivo' where id = $1", [
+        persona.membresiaId,
+      ]);
+      await otra.query('commit');
+    } catch (error) {
+      await otra.query('rollback').catch(() => undefined);
+      throw error;
+    } finally {
+      otra.release();
+    }
+
+    const resultado = await respuesta;
+    expect({ estado: resultado.status, cuerpo: resultado.body as unknown }).toMatchObject({
+      estado: 403,
+      cuerpo: { codigo: 'sin_membresia' },
+    });
+    const { rows } = await comoSistema<{ nombre: string }>(
+      prueba.admin,
+      a.clinicaId,
+      'select nombre from app.sede where id = $1',
+      [sede.sedeId],
+    );
+    expect(rows[0]?.nombre).not.toBe('No debería quedar');
     await esperarError(prueba.pedir('get', '/sedes', { token }), 403, 'sin_membresia');
   });
 

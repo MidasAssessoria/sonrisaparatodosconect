@@ -1,8 +1,18 @@
-import { errorApiSchema, paginaAuditoriaSchema, sedeSchema } from '@conecta/shared';
+import { randomUUID } from 'node:crypto';
+import { paginaAuditoriaSchema, sedeSchema } from '@conecta/shared';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ServicioBd } from '../src/base/servicio-bd.js';
 import type { DatoRegistro, Registro } from '../src/comun/registro.js';
-import { crearClinica, crearPrueba, segun, type Clinica, type Prueba } from './ayudas.js';
+import {
+  crearClinica,
+  crearPersona,
+  crearPrueba,
+  esperarError,
+  leerSesion,
+  segun,
+  type Clinica,
+  type Prueba,
+} from './ayudas.js';
 
 const ORIGEN_WEB = 'https://app.conecta.test';
 
@@ -78,18 +88,98 @@ describe('límite de pedidos por IP', () => {
     await prueba.cerrar();
   });
 
-  it('después del límite responde 429 con Retry-After; cada IP cuenta aparte; /salud no cuenta', async () => {
+  it('después del límite responde 429 demasiados_pedidos con Retry-After; cada IP cuenta aparte; /salud no cuenta', async () => {
     const desde = (ip: string) => prueba.pedir('get', '/sedes').set('X-Forwarded-For', ip);
     for (let i = 0; i < 5; i++) await desde('198.51.100.1').expect(401);
-    const bloqueado = await desde('198.51.100.1').expect(429);
-    segun(errorApiSchema, bloqueado.body);
+    const bloqueado = await esperarError(desde('198.51.100.1'), 429, 'demasiados_pedidos');
     expect((bloqueado.body as { mensaje: string }).mensaje).toMatch(/demasiados pedidos/);
     expect(Number(bloqueado.headers['retry-after'])).toBeGreaterThan(0);
+    expect(Number(bloqueado.headers['retry-after'])).toBeLessThanOrEqual(60);
 
     await desde('198.51.100.2').expect(401);
     for (let i = 0; i < 10; i++) {
       await prueba.pedir('get', '/salud').set('X-Forwarded-For', '198.51.100.1').expect(200);
     }
+  });
+});
+
+describe('límite de pedidos por usuario', () => {
+  let prueba: Prueba;
+  let a: Clinica;
+
+  beforeAll(async () => {
+    prueba = await crearPrueba({
+      config: {
+        limitePedidosPorUsuario: 4,
+        limitePedidosPorMinuto: 1_000,
+        trustProxy: 1,
+        webOrigenes: [ORIGEN_WEB],
+      },
+    });
+    a = await crearClinica(prueba, { sedes: 1 });
+  });
+
+  afterAll(async () => {
+    await prueba.cerrar();
+  });
+
+  it('cuenta por usuario aunque cambie de IP, con Retry-After expuesto por CORS; otro usuario sigue', async () => {
+    const token = await a.dueno.token();
+    for (let i = 0; i < 4; i++) {
+      await prueba
+        .pedir('get', '/sedes', { token })
+        .set('X-Forwarded-For', `198.51.100.${String(10 + i)}`)
+        .expect(200);
+    }
+    const bloqueado = await esperarError(
+      prueba
+        .pedir('get', '/sedes', { token })
+        .set('X-Forwarded-For', '198.51.100.99')
+        .set('Origin', ORIGEN_WEB),
+      429,
+      'demasiados_pedidos',
+    );
+    const espera = Number(bloqueado.headers['retry-after']);
+    expect(espera).toBeGreaterThan(0);
+    expect(espera).toBeLessThanOrEqual(60);
+    expect(bloqueado.headers['access-control-allow-origin']).toBe(ORIGEN_WEB);
+    expect(String(bloqueado.headers['access-control-expose-headers']).toLowerCase()).toContain(
+      'retry-after',
+    );
+    // También con otro token del mismo usuario (otra sesión), y también para cerrar sesión.
+    await esperarError(
+      prueba.pedir('get', '/sesion', {
+        token: await a.dueno.token('aal2', { sesion: randomUUID() }),
+      }),
+      429,
+      'demasiados_pedidos',
+    );
+    await esperarError(
+      prueba.pedir('post', '/sesion/cerrar', { token }),
+      429,
+      'demasiados_pedidos',
+    );
+
+    // Otra persona desde la misma IP no se ve afectada.
+    const otra = await crearPersona(prueba, a.clinicaId, { rol: 'administracion' });
+    await prueba
+      .pedir('get', '/sedes', { token: await otra.token() })
+      .set('X-Forwarded-For', '198.51.100.99')
+      .expect(200);
+  });
+
+  it('el 429 por usuario llega antes de tocar la base (sin ingresos ni sesiones nuevas)', async () => {
+    const persona = await crearPersona(prueba, a.clinicaId, { rol: 'odontologo' });
+    for (let i = 0; i < 4; i++) {
+      await prueba.pedir('get', '/sesion', { token: await persona.token() }).expect(200);
+    }
+    const nueva = randomUUID();
+    await esperarError(
+      prueba.pedir('get', '/sesion', { token: await persona.token('aal1', { sesion: nueva }) }),
+      429,
+      'demasiados_pedidos',
+    );
+    expect(await leerSesion(prueba, a.clinicaId, persona.usuarioId, nueva)).toBeNull();
   });
 });
 
@@ -150,7 +240,7 @@ describe('registro (logs)', () => {
     try {
       const a = await crearClinica(prueba, { sedes: 1 });
       const email = 'paciente.secreta@correo.test';
-      const token = await prueba.token({ sub: a.duenoId, email });
+      const token = await prueba.token({ sub: a.duenoId, email, aal: 'aal2' });
       const sede = segun(
         sedeSchema,
         (

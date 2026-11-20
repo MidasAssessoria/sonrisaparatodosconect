@@ -1,9 +1,10 @@
 /**
  * Traduce cualquier error a una respuesta `errorApiSchema`. Nunca deja salir SQL, trazas ni mensajes
- * de la base: los de Postgres se convierten por código y nombre de restricción.
+ * de la base: los de Postgres se convierten por código y nombre de restricción (también los nombres
+ * de regla que la base pone en `constraint`, ver `RESTRICCIONES_ACCESO` de `@conecta/db`).
  */
 import { HttpException } from '@nestjs/common';
-import { ErrorDeContexto } from '@conecta/db';
+import { ErrorDeContexto, ErrorDeMembresia, type RestriccionAcceso } from '@conecta/db';
 import type { ErrorApi as CuerpoErrorApi } from '@conecta/shared';
 import type { DatoRegistro } from '../comun/registro.js';
 import { ErrorApi, errores } from './error-api.js';
@@ -11,6 +12,8 @@ import { ErrorApi, errores } from './error-api.js';
 export interface ErrorTraducido {
   estado: number;
   cuerpo: CuerpoErrorApi;
+  /** Cabeceras que acompañan la respuesta (p. ej. `Retry-After`). */
+  cabeceras?: Readonly<Record<string, string>>;
   /** Datos para el registro cuando el error es inesperado (sin mensajes ni valores). */
   registrar?: Record<string, DatoRegistro>;
 }
@@ -27,38 +30,132 @@ function esErrorPostgres(valor: unknown): valor is ErrorPostgres {
   return typeof v['code'] === 'string' && /^[0-9A-Z]{5}$/.test(v['code']) && 'severity' in v;
 }
 
-/** Busca el error de Postgres en la cadena de `cause` (Drizzle envuelve el de `pg`). */
-function errorPostgresDe(error: unknown): ErrorPostgres | null {
+/** Recorre la cadena de `cause` (Drizzle envuelve el error de `pg`). */
+function* cadena(error: unknown): Generator<unknown> {
   let actual: unknown = error;
   for (let i = 0; i < 5 && actual; i++) {
-    if (esErrorPostgres(actual)) return actual;
-    actual = (actual as { cause?: unknown }).cause;
+    yield actual;
+    actual = typeof actual === 'object' ? (actual as { cause?: unknown }).cause : undefined;
   }
+}
+
+function errorPostgresDe(error: unknown): ErrorPostgres | null {
+  for (const e of cadena(error)) if (esErrorPostgres(e)) return e;
   return null;
 }
 
-/** Mensajes por restricción: lo que la persona tiene que corregir. */
-const MENSAJES_RESTRICCION: Record<string, ErrorApi> = {
-  sede_nombre_unico: errores.conflicto('Ya hay una sede con ese nombre. Elegí otro nombre.'),
-  sillon_nombre_unico: errores.conflicto(
-    'Esa sede ya tiene un sillón activo con ese nombre. Elegí otro nombre.',
-  ),
-  sede_horario_rango_check: errores.datosInvalidos(
-    'La hora de cierre tiene que ser posterior a la de apertura.',
-  ),
-  sede_color_check: errores.datosInvalidos('Elegí un color válido (por ejemplo, #1A7F5A).'),
+/** Errores de red de Node al hablar con la base. */
+const CODIGOS_RED = new Set([
+  'ECONNREFUSED',
+  'ECONNRESET',
+  'ETIMEDOUT',
+  'ENOTFOUND',
+  'EHOSTUNREACH',
+  'ENETUNREACH',
+  'EAI_AGAIN',
+  'EPIPE',
+]);
+
+/** Mensajes de `pg`/`pg-pool` cuando la conexión no se pudo abrir o se cortó (sin código). */
+const MENSAJES_CONEXION =
+  /timeout exceeded when trying to connect|Connection terminated|Client has encountered a connection error|connection timeout/i;
+
+/** Códigos de Postgres que dicen «la base no está disponible», no «tu pedido está mal». */
+function esPostgresNoDisponible(codigo: string): boolean {
+  return (
+    codigo.startsWith('08') || // conexión
+    codigo.startsWith('53') || // recursos (demasiadas conexiones, memoria, disco)
+    codigo === '57P01' || // admin_shutdown
+    codigo === '57P02' || // crash_shutdown
+    codigo === '57P03' || // cannot_connect_now
+    codigo === '57014' // query_canceled (statement_timeout)
+  );
+}
+
+/** ¿La base de datos no responde (caída, sin conexiones, apagándose)? */
+function esBaseNoDisponible(error: unknown): boolean {
+  for (const e of cadena(error)) {
+    if (esErrorPostgres(e)) return esPostgresNoDisponible(e.code);
+    if (typeof e !== 'object' || e === null) continue;
+    const codigo = (e as { code?: unknown }).code;
+    if (typeof codigo === 'string' && CODIGOS_RED.has(codigo)) return true;
+    if (e instanceof Error && MENSAJES_CONEXION.test(e.message)) return true;
+  }
+  return false;
+}
+
+/**
+ * Único y FK que no tienen un mensaje propio responden lo mismo: con el id de un registro de otra
+ * clínica, la base siempre dispara el FK compuesto (las únicas incluyen `clinica_id`), y la
+ * respuesta no tiene que distinguir «eso ya existe» de «eso no existe».
+ */
+const MENSAJE_REFERENCIA =
+  'No pudimos guardar el cambio: algún dato elegido ya está cargado o no está disponible en esta clínica. Recargá la página, revisá y probá de nuevo.';
+
+/**
+ * Reglas de acceso de la base (`app.proteger_acceso()`, sesiones, auditoría). Cada una con el
+ * código del contrato y un mensaje que dice qué hacer, sin detalles internos.
+ */
+const MENSAJES_ACCESO: Record<RestriccionAcceso, () => ErrorApi> = {
+  acceso_sin_actor: () =>
+    errores.sinPermiso('Para hacer este cambio tenés que ingresar con tu usuario.'),
+  acceso_sin_membresia: () =>
+    errores.sinMembresia(
+      'Para cambiar personal o roles tenés que ser miembro activo de esta clínica. Pedile a quien la administra que te habilite.',
+    ),
+  acceso_sin_permiso: () =>
+    errores.sinPermiso(
+      'Tu rol no tiene el permiso que hace falta para este cambio. Pedile acceso a quien administra la clínica.',
+    ),
+  acceso_propio: () =>
+    errores.sinPermiso(
+      'No podés cambiar tu propio acceso (tu membresía, tus sedes, tu rol ni sus permisos). Pedíselo a otra persona con permiso.',
+    ),
+  acceso_rol_dueno: () =>
+    errores.sinPermiso(
+      'Solo un dueño puede cambiar el acceso de otro dueño, y el rol Dueño/a no se modifica.',
+    ),
+  membresia_nace_pendiente: () =>
+    errores.conflicto(
+      'Una invitación queda pendiente hasta que la persona la acepta. Esperá a que la acepte y probá de nuevo.',
+    ),
+  rol_sistema: () =>
+    errores.conflicto('Los roles de sistema ya vienen con la clínica. Creá un rol propio.'),
+  membresia_ultimo_dueno: () =>
+    errores.conflicto(
+      'La clínica no puede quedarse sin dueño. Dale el rol Dueño/a a otra persona antes de hacer este cambio.',
+    ),
+  rol_dueno_activo: () =>
+    errores.conflicto('El rol Dueño/a no se puede desactivar: la clínica se quedaría sin dueño.'),
+  sesion_ajena: () => errores.noAutenticado('Tu sesión no es válida. Ingresá de nuevo.'),
+  auditoria_sin_clinica: () =>
+    errores.conflicto(
+      'Este cambio no quedaría registrado en ninguna clínica. Elegí la clínica en la que trabajás y probá de nuevo.',
+    ),
+};
+
+/** Mensajes por restricción de datos: lo que la persona tiene que corregir. */
+const MENSAJES_RESTRICCION: Record<string, () => ErrorApi> = {
+  ...MENSAJES_ACCESO,
+  sede_nombre_unico: () => errores.conflicto('Ya hay una sede con ese nombre. Elegí otro nombre.'),
+  sillon_nombre_unico: () =>
+    errores.conflicto('Esa sede ya tiene un sillón activo con ese nombre. Elegí otro nombre.'),
+  sede_horario_rango_check: () =>
+    errores.datosInvalidos('La hora de cierre tiene que ser posterior a la de apertura.'),
+  sede_color_check: () => errores.datosInvalidos('Elegí un color válido (por ejemplo, #1A7F5A).'),
 };
 
 function traducirPostgres(error: ErrorPostgres): ErrorApi | null {
-  const porRestriccion = error.constraint ? MENSAJES_RESTRICCION[error.constraint] : undefined;
-  if (porRestriccion) return porRestriccion;
+  const porRestriccion =
+    error.constraint && Object.hasOwn(MENSAJES_RESTRICCION, error.constraint)
+      ? MENSAJES_RESTRICCION[error.constraint]
+      : undefined;
+  if (porRestriccion) return porRestriccion();
+  if (esPostgresNoDisponible(error.code)) return errores.servicioNoDisponible();
   switch (error.code) {
     case '23505':
-      return errores.conflicto('Ya existe un registro con esos datos. Revisá y probá de nuevo.');
     case '23503':
-      return errores.conflicto(
-        'Algo de lo que elegiste ya no existe o no está disponible. Recargá la página y probá de nuevo.',
-      );
+      return errores.conflicto(MENSAJE_REFERENCIA);
     case '23514':
     case '23502':
     case '22P02':
@@ -72,7 +169,7 @@ function traducirPostgres(error: ErrorPostgres): ErrorApi | null {
     case '42501':
       // Una fila de otra clínica es invisible: para quien pregunta, no existe.
       if (/row-level security/i.test(error.message)) return errores.noEncontrado();
-      return errores.conflicto('Esa operación no está permitida sobre este registro.');
+      return errores.sinPermiso('Esa operación no está permitida sobre este registro.');
     case '40001':
     case '40P01':
     case '55P03':
@@ -146,13 +243,31 @@ function traducirHttp(error: HttpException): ErrorTraducido {
   };
 }
 
+function desdeErrorApi(error: ErrorApi): ErrorTraducido {
+  return {
+    estado: error.estado,
+    cuerpo: error.cuerpo(),
+    ...(error.cabeceras ? { cabeceras: error.cabeceras } : {}),
+  };
+}
+
 export function traducirError(error: unknown): ErrorTraducido {
-  if (error instanceof ErrorApi) return { estado: error.estado, cuerpo: error.cuerpo() };
+  if (error instanceof ErrorApi) return desdeErrorApi(error);
 
   const cuerpo = traducirCuerpo(error);
   if (cuerpo) return cuerpo;
 
   if (error instanceof HttpException) return traducirHttp(error);
+
+  if (error instanceof ErrorDeMembresia) {
+    return desdeErrorApi(
+      error.motivo === 'clinica_inactiva'
+        ? errores.sinMembresia(
+            'Esta clínica está dada de baja. Si creés que es un error, hablá con quien la administra.',
+          )
+        : errores.sinMembresia(),
+    );
+  }
 
   if (error instanceof ErrorDeContexto) {
     return {
@@ -164,11 +279,25 @@ export function traducirError(error: unknown): ErrorTraducido {
   const pg = errorPostgresDe(error);
   if (pg) {
     const traducido = traducirPostgres(pg);
-    if (traducido) return { estado: traducido.estado, cuerpo: traducido.cuerpo() };
+    if (traducido) {
+      return {
+        ...desdeErrorApi(traducido),
+        ...(traducido.estado === 503
+          ? { registrar: { tipo: 'base_no_disponible', codigoPg: pg.code } }
+          : {}),
+      };
+    }
     return {
       estado: 500,
       cuerpo: errores.interno().cuerpo(),
       registrar: { tipo: 'postgres', codigoPg: pg.code, restriccion: pg.constraint ?? null },
+    };
+  }
+
+  if (esBaseNoDisponible(error)) {
+    return {
+      ...desdeErrorApi(errores.servicioNoDisponible()),
+      registrar: { tipo: 'base_no_disponible', codigoPg: null },
     };
   }
 

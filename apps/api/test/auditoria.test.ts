@@ -1,4 +1,8 @@
+import { randomUUID } from 'node:crypto';
+import { baseDeDatos, conContextoCliente } from '@conecta/db';
 import {
+  MODULOS,
+  consultaAuditoriaSchema,
   paginaAuditoriaSchema,
   sedeSchema,
   sillonSchema,
@@ -6,12 +10,17 @@ import {
   type PaginaAuditoria,
   type Sede,
 } from '@conecta/shared';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import pg from 'pg';
+import { afterAll, beforeAll, describe, expect, inject, it } from 'vitest';
+import { consultaPagina, type AlcanceAuditoria } from '../src/auditoria/auditoria.service.js';
 import {
+  comoSistema,
+  comoUsuarioAdmin,
   crearClinica,
   crearPersona,
   crearPrueba,
   esperarError,
+  relojDeLaBase,
   segun,
   type Clinica,
   type Persona,
@@ -144,7 +153,27 @@ describe('auditoría', () => {
     ]);
   });
 
-  it('filtros: entidad, entidadId, usuarioId, accion, desde y hasta', async () => {
+  it('cada evento trae módulo, sede y el nombre del autor en ese momento', async () => {
+    const sede = await crearSede('Con módulo', tokenAdmin);
+    const { rowCount } = await comoUsuarioAdmin(
+      prueba.admin,
+      a.clinicaId,
+      admin.usuarioId,
+      'update app.usuario set nombre = $2 where id = $1',
+      [admin.usuarioId, 'Nombre Nuevo'],
+    );
+    expect(rowCount).toBe(1);
+    await prueba
+      .pedir('patch', `/sedes/${sede.id}`, { token: tokenAdmin, cuerpo: { telefono: '1' } })
+      .expect(200);
+    const { items } = await pagina(`?entidad=sede&entidadId=${sede.id}`);
+    expect(items.map((i) => [i.accion, i.modulo, i.sedeId, i.usuario?.nombre])).toEqual([
+      ['editar', 'sedes', sede.id, 'Nombre Nuevo'],
+      ['crear', 'sedes', sede.id, expect.stringMatching(/^Usuario /) as string],
+    ]);
+  });
+
+  it('filtros: entidad, entidadId, usuarioId, accion, desde (inclusivo) y hasta (exclusivo)', async () => {
     const otra = await crearClinica(prueba, { sedes: 0 });
     const t = await otra.dueno.token();
     const persona = await crearPersona(prueba, otra.clinicaId, { rol: 'administracion' });
@@ -154,7 +183,8 @@ describe('auditoría', () => {
     await prueba
       .pedir('patch', `/sedes/${s1.id}`, { token: t, cuerpo: { estado: 'cerrada' } })
       .expect(200);
-    const medio = new Date().toISOString();
+    // El corte sale del reloj de la base (el mismo que fija `fecha`), no del de este proceso.
+    const medio = await relojDeLaBase(prueba);
     await prueba
       .pedir('patch', `/sedes/${s2.id}`, { token: tp, cuerpo: { estado: 'proxima' } })
       .expect(200);
@@ -172,6 +202,124 @@ describe('auditoría', () => {
     expect(hasta.map((i) => i.entidadId)).toEqual([s1.id, s2.id, s1.id]);
     const ninguna = (await pagina('?entidad=sillon', t)).items;
     expect(ninguna).toEqual([]);
+
+    // Bordes exactos: `desde` incluye la fecha del evento y `hasta` la excluye.
+    const ultimo = (await pagina(`?entidad=sede&entidadId=${s2.id}&accion=editar`, t)).items[0]!;
+    const exacta = encodeURIComponent(ultimo.fecha);
+    const conDesde = (await pagina(`?entidadId=${s2.id}&accion=editar&desde=${exacta}`, t)).items;
+    expect(conDesde.map((i) => i.id)).toEqual([ultimo.id]);
+    const conHasta = (await pagina(`?entidadId=${s2.id}&accion=editar&hasta=${exacta}`, t)).items;
+    expect(conHasta).toEqual([]);
+    const mismoInstante = (await pagina(`?entidadId=${s2.id}&desde=${exacta}&hasta=${exacta}`, t))
+      .items;
+    expect(mismoInstante).toEqual([]);
+  });
+
+  it('paginación con muchas filas de la misma fecha exacta: desempata por id sin repetir ni saltear', async () => {
+    const otra = await crearClinica(prueba, { sedes: 1 });
+    const t = await otra.dueno.token();
+    const fecha = '2026-03-01T12:00:00.123456Z';
+    // 9 filas con la misma fecha al microsegundo, insertadas como administración.
+    const { rows } = await comoSistema<{ id: string }>(
+      prueba.admin,
+      otra.clinicaId,
+      `insert into app.audit_log (clinica_id, fecha, entidad, entidad_id, accion, modulo, sede_id)
+       select $1, $2::timestamptz, 'empate', gen_random_uuid(), 'ver', 'sedes', $3
+       from generate_series(1, 9) returning id`,
+      [otra.clinicaId, fecha, otra.sedes[0]!.sedeId],
+    );
+    const esperados = rows
+      .map((r) => r.id)
+      .sort()
+      .reverse();
+
+    for (const limite of [1, 2, 4]) {
+      const vistos: string[] = [];
+      let cursor: string | null = null;
+      let paginas = 0;
+      do {
+        const consulta: string = `?entidad=empate&limite=${String(limite)}${cursor ? `&cursor=${cursor}` : ''}`;
+        const p: PaginaAuditoria = await pagina(consulta, t);
+        expect(p.items.every((i) => i.fecha === fecha)).toBe(true);
+        if (p.siguienteCursor) expect(p.items).toHaveLength(limite);
+        vistos.push(...p.items.map((i) => i.id));
+        cursor = p.siguienteCursor;
+        paginas++;
+      } while (cursor);
+      expect(vistos).toEqual(esperados);
+      expect(paginas).toBe(Math.ceil(9 / limite));
+    }
+
+    // Sin filtro (la consulta que recorre el índice de paginación) también.
+    const todo: string[] = [];
+    let cursor: string | null = null;
+    do {
+      const consulta: string = `?limite=3&hasta=${encodeURIComponent('2026-03-01T12:00:00.123457Z')}${cursor ? `&cursor=${cursor}` : ''}`;
+      const p: PaginaAuditoria = await pagina(consulta, t);
+      todo.push(...p.items.map((i) => i.id));
+      cursor = p.siguienteCursor;
+    } while (cursor);
+    expect(todo).toEqual(esperados);
+  });
+
+  it('la consulta de una página usa el índice (clinica_id, fecha DESC, id DESC), también con cursor', async () => {
+    const otra = await crearClinica(prueba, { sedes: 1 });
+    // Volumen suficiente para que el planificador elija el índice por sí solo.
+    await comoSistema(
+      prueba.admin,
+      otra.clinicaId,
+      `insert into app.audit_log (clinica_id, fecha, entidad, entidad_id, accion, modulo, sede_id)
+       select $1, now() - make_interval(secs => g), 'relleno', gen_random_uuid(), 'ver',
+              (array['sedes', 'agenda', 'caja', 'personal'])[1 + g % 4], case when g % 3 = 0 then null else $2::uuid end
+       from generate_series(1, 5000) g`,
+      [otra.clinicaId, otra.sedes[0]!.sedeId],
+    );
+    await prueba.admin.query('analyze app.audit_log');
+
+    const api = new pg.Pool({ connectionString: inject('conectaDb').urlApi, max: 1 });
+    try {
+      const alcances: AlcanceAuditoria[] = [
+        // Dueño: todos los módulos, todas las sedes.
+        {
+          clinicaId: otra.clinicaId,
+          permisos: MODULOS.map((modulo) => ({ modulo, accion: 'ver' as const })),
+          todasLasSedes: true,
+          sedesPermitidas: [],
+        },
+        // Recepción con auditoría y una sede.
+        {
+          clinicaId: otra.clinicaId,
+          permisos: (['agenda', 'caja', 'auditoria'] as const).map((modulo) => ({
+            modulo,
+            accion: 'ver' as const,
+          })),
+          todasLasSedes: false,
+          sedesPermitidas: [otra.sedes[0]!.sedeId],
+        },
+      ];
+      const cursor = { fecha: '2026-01-01T00:00:00.000000Z', id: randomUUID() };
+      for (const alcance of alcances) {
+        for (const posicion of [null, cursor]) {
+          const q = consultaPagina(
+            baseDeDatos(api),
+            alcance,
+            consultaAuditoriaSchema.parse({ limite: 50 }),
+            posicion,
+          ).toSQL();
+          const plan = await conContextoCliente(
+            api,
+            { clinicaId: otra.clinicaId, usuarioId: otra.duenoId },
+            (c) => c.query<{ 'QUERY PLAN': unknown }>(`explain (format json) ${q.sql}`, q.params),
+          );
+          const texto = JSON.stringify(plan.rows[0]?.['QUERY PLAN']);
+          expect(texto).toContain('audit_log_clinica_fecha_idx');
+          expect(texto).not.toContain('"Node Type":"Sort"');
+          if (posicion) expect(texto).toMatch(/"Index Cond":"[^"]*fecha <=/);
+        }
+      }
+    } finally {
+      await api.end();
+    }
   });
 
   it('paginación por cursor: sin repetidos ni saltos, aunque lleguen registros nuevos en el medio', async () => {

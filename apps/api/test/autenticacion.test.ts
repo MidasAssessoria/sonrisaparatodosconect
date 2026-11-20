@@ -36,7 +36,7 @@ describe('autenticación (JWT de Supabase)', () => {
   });
 
   it('acepta un token RS256 válido', async () => {
-    const token = await prueba.token({ sub: a.duenoId, alg: 'RS256' });
+    const token = await prueba.token({ sub: a.duenoId, alg: 'RS256', aal: 'aal2' });
     await sesion(token).expect(200);
   });
 
