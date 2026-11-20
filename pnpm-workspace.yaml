@@ -15,12 +15,3 @@ allowBuilds:
   '@embedded-postgres/darwin-arm64': true
 
 minimumReleaseAgeExclude:
-  - '@embedded-postgres/darwin-arm64@16.16.0-beta.19'
-  - '@embedded-postgres/darwin-x64@16.16.0-beta.19'
-  - '@embedded-postgres/linux-arm64@16.16.0-beta.19'
-  - '@embedded-postgres/linux-arm@16.16.0-beta.19'
-  - '@embedded-postgres/linux-ia32@16.16.0-beta.19'
-  - '@embedded-postgres/linux-ppc64@16.16.0-beta.19'
-  - '@embedded-postgres/linux-x64@16.16.0-beta.19'
-  - '@embedded-postgres/windows-x64@16.16.0-beta.19'
-  - embedded-postgres@16.16.0-beta.19

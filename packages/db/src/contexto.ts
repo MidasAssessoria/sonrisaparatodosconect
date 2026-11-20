@@ -1,0 +1,205 @@
+/**
+ * Conexión y contexto de transacción.
+ *
+ * Toda consulta de negocio corre dentro de `conContexto`: abre una transacción, fija
+ * `app.clinica_id`, `app.usuario_id` y `app.ip` con `set_config(..., true)` (equivale a SET LOCAL,
+ * se borra al terminar la transacción) usando parámetros, ejecuta `fn` y hace commit o rollback.
+ *
+ * Seguridad: las políticas RLS confían en ese contexto. Quien llama tiene que haber verificado
+ * antes el JWT y que el usuario tiene una membresía activa en esa clínica: la base no lo puede
+ * comprobar (app_api puede fijar cualquier clínica). Nunca uses `set_config(..., false)`: con un
+ * pool, el valor quedaría pegado a la conexión y lo vería la próxima petición.
+ */
+import { isIP } from 'node:net';
+import { sql } from 'drizzle-orm';
+import { drizzle, type NodePgDatabase } from 'drizzle-orm/node-postgres';
+import type { PgTransactionConfig } from 'drizzle-orm/pg-core';
+import pg from 'pg';
+import { esquema, type Esquema } from './esquema.js';
+
+export type BaseDeDatos = NodePgDatabase<Esquema>;
+/** Transacción de Drizzle que reciben `conContexto` y `conUsuario`. */
+export type TransaccionConecta = Parameters<Parameters<BaseDeDatos['transaction']>[0]>[0];
+
+export interface ContextoSesion {
+  /** Clínica activa, tomada de una membresía activa verificada por la API. */
+  clinicaId: string;
+  /** `sub` del JWT verificado (= `app.usuario.id`). */
+  usuarioId: string;
+  /** IP de la petición, para la auditoría. */
+  ip?: string | null | undefined;
+}
+
+export class ErrorDeContexto extends Error {
+  override name = 'ErrorDeContexto';
+}
+
+export interface OpcionesPool extends Omit<pg.PoolConfig, 'connectionString'> {
+  /**
+   * Errores de conexiones inactivas del pool (p. ej. la base se reinició). Sin este manejador el
+   * evento `error` del pool tiraría el proceso; por defecto se ignoran (el pool descarta la conexión).
+   */
+  alErrorInactivo?: (error: Error) => void;
+}
+
+const PATRON_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function crearPool(url: string, opciones: OpcionesPool = {}): pg.Pool {
+  const { alErrorInactivo, ...config } = opciones;
+  const pool = new pg.Pool({ application_name: 'conecta', ...config, connectionString: url });
+  pool.on('error', alErrorInactivo ?? (() => undefined));
+  return pool;
+}
+
+const instancias = new WeakMap<pg.Pool, BaseDeDatos>();
+
+/** Instancia de Drizzle sobre el pool (una por pool). Para consultas, usá `conContexto`. */
+export function baseDeDatos(pool: pg.Pool): BaseDeDatos {
+  let db = instancias.get(pool);
+  if (!db) {
+    db = drizzle(pool, { schema: esquema });
+    instancias.set(pool, db);
+  }
+  return db;
+}
+
+function uuidValido(valor: unknown, campo: string): string {
+  if (typeof valor !== 'string' || !PATRON_UUID.test(valor)) {
+    throw new ErrorDeContexto(`${campo} tiene que ser un UUID.`);
+  }
+  return valor.toLowerCase();
+}
+
+function ipValida(valor: string | null | undefined): string {
+  if (valor === undefined || valor === null || valor === '') return '';
+  if (isIP(valor) === 0) throw new ErrorDeContexto('La IP del contexto no es válida.');
+  return valor;
+}
+
+interface ValoresContexto {
+  clinicaId: string;
+  usuarioId: string;
+  ip: string;
+}
+
+function valoresDe(contexto: ContextoSesion): ValoresContexto {
+  return {
+    clinicaId: uuidValido(contexto.clinicaId, 'clinicaId'),
+    usuarioId: uuidValido(contexto.usuarioId, 'usuarioId'),
+    ip: ipValida(contexto.ip),
+  };
+}
+
+/**
+ * Ejecuta `fn` en una transacción con el contexto de clínica y usuario fijado.
+ * Commit si `fn` termina bien; rollback si lanza. Las transacciones anidadas (`tx.transaction`)
+ * usan savepoints y conservan el contexto.
+ */
+export async function conContexto<T>(
+  pool: pg.Pool,
+  contexto: ContextoSesion,
+  fn: (tx: TransaccionConecta) => Promise<T>,
+  config?: PgTransactionConfig,
+): Promise<T> {
+  const valores = valoresDe(contexto);
+  return baseDeDatos(pool).transaction(async (tx) => {
+    await tx.execute(sql`select
+      set_config('app.clinica_id', ${valores.clinicaId}, true),
+      set_config('app.usuario_id', ${valores.usuarioId}, true),
+      set_config('app.ip', ${valores.ip}, true)`);
+    return fn(tx);
+  }, config);
+}
+
+/**
+ * Como `conContexto` pero solo con usuario, sin clínica: para el paso del login que lista
+ * «mis clínicas» (membresías propias y clínicas con membresía activa) antes de elegir una.
+ * Sin clínica en el contexto, las tablas de negocio no devuelven nada.
+ */
+export async function conUsuario<T>(
+  pool: pg.Pool,
+  usuarioId: string,
+  fn: (tx: TransaccionConecta) => Promise<T>,
+  opciones: { ip?: string | null | undefined; config?: PgTransactionConfig } = {},
+): Promise<T> {
+  const usuario = uuidValido(usuarioId, 'usuarioId');
+  const ip = ipValida(opciones.ip);
+  return baseDeDatos(pool).transaction(async (tx) => {
+    await tx.execute(sql`select
+      set_config('app.clinica_id', '', true),
+      set_config('app.usuario_id', ${usuario}, true),
+      set_config('app.ip', ${ip}, true)`);
+    return fn(tx);
+  }, opciones.config);
+}
+
+export interface MembresiaActiva {
+  membresiaId: string;
+  rolId: string;
+  sedeDefectoId: string | null;
+}
+
+/**
+ * Paso previo a `conContexto`: confirma que el usuario (el `sub` del JWT ya verificado) tiene una
+ * membresía activa en una clínica activa. Devuelve null si no. La API tiene que fijar el contexto
+ * solo cuando esto devuelve una membresía: es la frontera de confianza que la base no puede ver.
+ */
+export async function buscarMembresiaActiva(
+  pool: pg.Pool,
+  usuarioId: string,
+  clinicaId: string,
+): Promise<MembresiaActiva | null> {
+  const clinica = uuidValido(clinicaId, 'clinicaId');
+  return conUsuario(pool, usuarioId, async (tx) => {
+    // Con solo el usuario en el contexto, RLS deja ver sus membresías y las clínicas donde está activo.
+    const resultado = await tx.execute<{
+      membresia_id: string;
+      rol_id: string;
+      sede_defecto_id: string | null;
+    }>(sql`select m.id as membresia_id, m.rol_id, m.sede_defecto_id
+           from app.membresia m join app.clinica c on c.id = m.clinica_id
+           where m.clinica_id = ${clinica} and m.usuario_id = app.usuario_actual()
+             and m.estado = 'activo' and c.activo`);
+    const fila = resultado.rows[0];
+    return fila
+      ? { membresiaId: fila.membresia_id, rolId: fila.rol_id, sedeDefectoId: fila.sede_defecto_id }
+      : null;
+  });
+}
+
+/**
+ * Variante con el cliente de `pg` crudo (para pg-boss, scripts y pruebas). Mismo contrato que
+ * `conContexto`: transacción, contexto con parámetros, commit o rollback.
+ */
+export async function conContextoCliente<T>(
+  pool: pg.Pool,
+  contexto: ContextoSesion,
+  fn: (cliente: pg.PoolClient) => Promise<T>,
+): Promise<T> {
+  const valores = valoresDe(contexto);
+  const cliente = await pool.connect();
+  let conexionRota: Error | undefined;
+  try {
+    await cliente.query('BEGIN');
+    await cliente.query(
+      `select set_config('app.clinica_id', $1, true),
+              set_config('app.usuario_id', $2, true),
+              set_config('app.ip', $3, true)`,
+      [valores.clinicaId, valores.usuarioId, valores.ip],
+    );
+    const resultado = await fn(cliente);
+    await cliente.query('COMMIT');
+    return resultado;
+  } catch (error) {
+    try {
+      await cliente.query('ROLLBACK');
+    } catch (errorRollback) {
+      conexionRota =
+        errorRollback instanceof Error ? errorRollback : new Error(String(errorRollback));
+    }
+    throw error;
+  } finally {
+    // Si el ROLLBACK falló, la conexión se descarta en vez de volver al pool.
+    cliente.release(conexionRota);
+  }
+}
