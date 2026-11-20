@@ -43,3 +43,33 @@ describe('contrato de la API', () => {
     expect(consultaAuditoriaSchema.parse({ limite: '20' }).limite).toBe(20);
   });
 });
+
+describe('contrato del Sprint 2', () => {
+  it('la sede por defecto de una invitación tiene que estar entre sus sedes', async () => {
+    const { crearInvitacionSchema } = await import('../index.js');
+    const base = {
+      nombre: 'Lorena Fretes',
+      email: 'Lorena@Ejemplo.com',
+      rolId: '00000000-0000-4000-8000-000000000001',
+    };
+    const sede = '00000000-0000-4000-8000-0000000000a1';
+    expect(crearInvitacionSchema.parse(base).email).toBe('lorena@ejemplo.com');
+    expect(crearInvitacionSchema.safeParse({ ...base, sedeDefectoId: sede }).success).toBe(false);
+    expect(
+      crearInvitacionSchema.safeParse({ ...base, sedeIds: [sede], sedeDefectoId: sede }).success,
+    ).toBe(true);
+  });
+
+  it('los montos son guaraníes enteros', async () => {
+    const { montoSchema } = await import('../index.js');
+    expect(montoSchema.safeParse(150000).success).toBe(true);
+    expect(montoSchema.safeParse(1500.5).success).toBe(false);
+    expect(montoSchema.safeParse(-1).success).toBe(false);
+  });
+
+  it('la tabla de rutas no repite ninguna ruta', async () => {
+    const { RUTAS_API } = await import('../index.js');
+    const claves = RUTAS_API.map((r) => r.split(' ').slice(0, 2).join(' '));
+    expect(new Set(claves).size).toBe(claves.length);
+  });
+});
