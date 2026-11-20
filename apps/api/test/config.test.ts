@@ -12,6 +12,10 @@ const PRODUCCION = {
   SUPABASE_JWKS_URL: 'https://proyecto.supabase.co/auth/v1/.well-known/jwks.json',
   WEB_ORIGIN: 'https://app.example.com, https://staging.example.com',
   TRUST_PROXY: '1',
+  ARCHIVOS_ALMACEN: 'supabase',
+  ARCHIVOS_DIRECTORIO: '/var/conecta/archivos',
+  ARCHIVOS_FIRMA_SECRETO: 'x'.repeat(40),
+  SUPABASE_SECRET_KEY: 'sb_secret_' + 'y'.repeat(30),
 };
 
 /** Producción completa salvo TRUST_PROXY. */
@@ -124,6 +128,20 @@ describe('cargarConfig', () => {
     expect(() => cargarConfig({ ...PRODUCCION, RATE_LIMIT_USER_PER_MINUTE: '0' })).toThrow(
       /RATE_LIMIT_USER_PER_MINUTE/,
     );
+  });
+
+  it('en producción los archivos se configuran explícitamente', () => {
+    const sinSecreto: Record<string, string> = { ...PRODUCCION };
+    delete sinSecreto['ARCHIVOS_FIRMA_SECRETO'];
+    expect(() => cargarConfig(sinSecreto)).toThrow(/ARCHIVOS_FIRMA_SECRETO/);
+    expect(() => cargarConfig({ ...PRODUCCION, ARCHIVOS_FIRMA_SECRETO: 'corto' })).toThrow(/32/);
+    expect(cargarConfig(PRODUCCION).archivos.almacen).toBe('supabase');
+  });
+
+  it('fuera de producción usa el almacén local y la clave secreta es opcional', () => {
+    const config = cargarConfig({ NODE_ENV: 'development' });
+    expect(config.archivos.almacen).toBe('local');
+    expect(config.supabaseSecretKey).toBeUndefined();
   });
 
   it('rechaza un WEB_ORIGIN que no es una URL', () => {

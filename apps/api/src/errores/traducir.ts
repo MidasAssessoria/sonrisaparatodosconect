@@ -8,6 +8,10 @@ import { ErrorDeContexto, ErrorDeMembresia, type RestriccionAcceso } from '@cone
 import type { ErrorApi as CuerpoErrorApi } from '@conecta/shared';
 import type { DatoRegistro } from '../comun/registro.js';
 import { ErrorApi, errores } from './error-api.js';
+import { MENSAJES_ARCHIVOS } from './restricciones/archivos.js';
+import { MENSAJES_CATALOGOS } from './restricciones/catalogos.js';
+import { MENSAJES_PERSONAL } from './restricciones/personal.js';
+import { MENSAJES_PROFESIONALES } from './restricciones/profesionales.js';
 
 export interface ErrorTraducido {
   estado: number;
@@ -137,6 +141,11 @@ const MENSAJES_ACCESO: Record<RestriccionAcceso, () => ErrorApi> = {
 /** Mensajes por restricción de datos: lo que la persona tiene que corregir. */
 const MENSAJES_RESTRICCION: Record<string, () => ErrorApi> = {
   ...MENSAJES_ACCESO,
+  // Sprint 2: un archivo por módulo, para que cada módulo agregue los suyos sin pisar a otro.
+  ...MENSAJES_PERSONAL,
+  ...MENSAJES_PROFESIONALES,
+  ...MENSAJES_CATALOGOS,
+  ...MENSAJES_ARCHIVOS,
   sede_nombre_unico: () => errores.conflicto('Ya hay una sede con ese nombre. Elegí otro nombre.'),
   sillon_nombre_unico: () =>
     errores.conflicto('Esa sede ya tiene un sillón activo con ese nombre. Elegí otro nombre.'),

@@ -24,3 +24,7 @@ Thumbs.db
 
 # configuración local del asistente
 .claude/
+
+# almacén local de archivos (desarrollo y pruebas)
+.archivos/
+.archivos-prueba/

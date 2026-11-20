@@ -25,6 +25,11 @@ const configSchema = z.object({
     .regex(/^(true|false|\d{1,2})$/, 'usá true, false o la cantidad de proxies (p. ej. 1)'),
   RATE_LIMIT_PER_MINUTE: z.coerce.number().int().min(1).max(100_000),
   RATE_LIMIT_USER_PER_MINUTE: z.coerce.number().int().min(1).max(100_000),
+  SUPABASE_SECRET_KEY: z.string().min(20).optional(),
+  ARCHIVOS_ALMACEN: z.enum(['local', 'supabase']),
+  ARCHIVOS_DIRECTORIO: z.string().min(1),
+  ARCHIVOS_BUCKET: z.string().regex(/^[a-z0-9][a-z0-9-]{1,62}$/, 'minúsculas, números y guiones'),
+  ARCHIVOS_FIRMA_SECRETO: z.string().min(32, 'usá al menos 32 caracteres aleatorios'),
 });
 
 export interface Config {
@@ -48,6 +53,21 @@ export interface Config {
   limitePedidosPorMinuto: number;
   /** Pedidos por minuto y por usuario autenticado (`sub` del token) antes de responder 429. */
   limitePedidosPorUsuario: number;
+  /**
+   * Clave secreta de Supabase (Admin API: crear la cuenta de quien acepta una invitación; Storage).
+   * Opcional fuera de producción: sin ella, lo que la necesita responde 503 servicio_no_disponible.
+   */
+  supabaseSecretKey: string | undefined;
+  archivos: {
+    /** `local`: disco (desarrollo y pruebas). `supabase`: Supabase Storage, bucket privado. */
+    almacen: 'local' | 'supabase';
+    /** Carpeta del almacén local. */
+    directorio: string;
+    /** Bucket privado de Supabase Storage. */
+    bucket: string;
+    /** Secreto para firmar las URLs de descarga del almacén local (HMAC). */
+    secretoFirma: string;
+  };
 }
 
 const CLAVES = [
@@ -60,6 +80,11 @@ const CLAVES = [
   'TRUST_PROXY',
   'RATE_LIMIT_PER_MINUTE',
   'RATE_LIMIT_USER_PER_MINUTE',
+  'SUPABASE_SECRET_KEY',
+  'ARCHIVOS_ALMACEN',
+  'ARCHIVOS_DIRECTORIO',
+  'ARCHIVOS_BUCKET',
+  'ARCHIVOS_FIRMA_SECRETO',
 ] as const;
 
 /** Valores por defecto en cualquier entorno (incluida producción). */
@@ -69,6 +94,7 @@ const PREDETERMINADOS_COMUNES: Partial<Record<(typeof CLAVES)[number], string>> 
   DATABASE_POOL_MAX: '10',
   RATE_LIMIT_PER_MINUTE: '300',
   RATE_LIMIT_USER_PER_MINUTE: '120',
+  ARCHIVOS_BUCKET: 'conecta-privado',
 };
 
 /**
@@ -83,6 +109,9 @@ const PREDETERMINADOS: Record<'development' | 'test', Record<string, string>> = 
     SUPABASE_JWKS_URL: 'http://127.0.0.1:54321/auth/v1/.well-known/jwks.json',
     WEB_ORIGIN: 'http://localhost:5173',
     TRUST_PROXY: 'false',
+    ARCHIVOS_ALMACEN: 'local',
+    ARCHIVOS_DIRECTORIO: '../../.archivos',
+    ARCHIVOS_FIRMA_SECRETO: 'desarrollo-no-usar-en-produccion-0123456789',
   },
   test: {
     PORT: '0',
@@ -91,6 +120,9 @@ const PREDETERMINADOS: Record<'development' | 'test', Record<string, string>> = 
     SUPABASE_JWKS_URL: 'http://127.0.0.1:54321/auth/v1/.well-known/jwks.json',
     WEB_ORIGIN: 'http://localhost:5173',
     TRUST_PROXY: 'false',
+    ARCHIVOS_ALMACEN: 'local',
+    ARCHIVOS_DIRECTORIO: '../../.archivos-prueba',
+    ARCHIVOS_FIRMA_SECRETO: 'pruebas-no-usar-en-produccion-0123456789',
   },
 };
 
@@ -166,5 +198,12 @@ export function cargarConfig(env: NodeJS.ProcessEnv = process.env): Config {
           : Number(c.TRUST_PROXY),
     limitePedidosPorMinuto: c.RATE_LIMIT_PER_MINUTE,
     limitePedidosPorUsuario: c.RATE_LIMIT_USER_PER_MINUTE,
+    supabaseSecretKey: c.SUPABASE_SECRET_KEY,
+    archivos: {
+      almacen: c.ARCHIVOS_ALMACEN,
+      directorio: c.ARCHIVOS_DIRECTORIO,
+      bucket: c.ARCHIVOS_BUCKET,
+      secretoFirma: c.ARCHIVOS_FIRMA_SECRETO,
+    },
   };
 }
