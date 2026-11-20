@@ -28,6 +28,10 @@ export const CODIGOS_ERROR = [
   'no_encontrado',
   'datos_invalidos',
   'conflicto',
+  /** 429: la web no reintenta sola; respeta `Retry-After`. */
+  'demasiados_pedidos',
+  /** 503: algo de lo que depende la API no responde. La web no cierra la sesión. */
+  'servicio_no_disponible',
   'error_interno',
 ] as const;
 export type CodigoError = (typeof CODIGOS_ERROR)[number];
