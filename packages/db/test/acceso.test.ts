@@ -110,8 +110,9 @@ describe('permisos que exige la base', () => {
 
   it('administración (personal:crear/editar, configuracion:editar) gestiona personal y roles ajenos', async () => {
     await como(K, K.administra.usuarioId, async (c) => {
+      // Desde 0010 la membresía nace sin usuario (lo recibe al aceptar la invitación).
       expect(
-        await intentar(c, SQL.altaMembresia(), [K.clinicaId, K.ajeno, K.roles.asistente]),
+        await intentar(c, SQL.altaMembresia(), [K.clinicaId, null, K.roles.asistente]),
       ).toMatchObject({ ok: true, cantidad: 1 });
       expect(
         await intentar(c, "update app.membresia set estado = 'inactivo' where id = $1", [
@@ -169,9 +170,11 @@ describe('permisos que exige la base', () => {
         ]),
       ).toMatchObject({ ok: true, cantidad: 1 });
     });
-    await como(
-      p,
-      p.duenoId,
+    // Desde 0010 un rol en uso no se desactiva por la API (rol_en_uso): lo hace la administración
+    // del sistema, para probar que la defensa igual mira que el rol del actor esté activo.
+    await enTransaccion(
+      admin,
+      { clinica: p.clinicaId, usuario: '' },
       (c) => c.query('update app.rol set activo = false where id = $1', [p.roles.administracion]),
       { confirmar: true },
     );
@@ -517,24 +520,45 @@ describe('una clínica no se queda sin dueño', () => {
 });
 
 describe('invitación pendiente: no da acceso al perfil de la persona', () => {
-  it('una clínica crea una membresía pendiente para alguien de otra clínica y no ve nada de su perfil', async () => {
+  it('una clínica no crea una membresía con el usuario de otra persona, ni ve nada de su perfil', async () => {
     await como(K, K.administra.usuarioId, async (c) => {
+      // 0009 dejaba crearla (pendiente, sin ver el perfil); desde 0010 ni eso: la membresía nace sin
+      // usuario y lo recibe solo al aceptar la invitación con su enlace.
       expect(
         await intentar(c, SQL.altaMembresia(), [K.clinicaId, K.ajeno, K.roles.asistente]),
-      ).toMatchObject({ ok: true });
+      ).toMatchObject(rechazo('42501', 'membresia_por_invitacion'));
       expect(await valor(c, 'select count(*)::int from app.usuario where id = $1', [K.ajeno])).toBe(
         0,
       );
-      // Ni activándola, ni pasándola a inactiva (las inactivas se ven), ni creándola así.
+      // Una pendiente CON usuario (anterior a 0010, la crea la administración): ni activándola, ni
+      // pasándola a inactiva (las inactivas se ven).
       for (const estado of ['activo', 'inactivo']) {
         expect(
-          await intentar(
-            c,
-            'update app.membresia set estado = $3 where clinica_id = $1 and usuario_id = $2',
-            [K.clinicaId, K.ajeno, estado],
-          ),
+          await intentar(c, 'update app.membresia set estado = $2 where id = $1', [
+            K.pendiente.membresiaId,
+            estado,
+          ]),
         ).toMatchObject(rechazo('42501', 'membresia_nace_pendiente'));
       }
+      // Ni poniéndole un usuario a una pendiente sin usuario.
+      const sinUsuario = await valor<string>(
+        c,
+        'insert into app.membresia (clinica_id, rol_id) values ($1, $2) returning id',
+        [K.clinicaId, K.roles.asistente],
+      );
+      for (const set of [
+        `usuario_id = '${K.ajeno}'`,
+        `usuario_id = '${K.ajeno}', estado = 'activo'`,
+        `usuario_id = '${K.recepcion.usuarioId}', estado = 'activo'`,
+      ]) {
+        expect(
+          await intentar(c, `update app.membresia set ${set} where id = $1`, [sinUsuario]),
+        ).toMatchObject(rechazo('42501', 'membresia_por_invitacion'));
+      }
+      // Ni activándola sin usuario (sin rodeos: la base pide un usuario para estar activa).
+      expect(
+        await intentar(c, "update app.membresia set estado = 'activo' where id = $1", [sinUsuario]),
+      ).toMatchObject(rechazo('42501', 'membresia_nace_pendiente'));
     });
     await como(K, K.administra.usuarioId, async (c) => {
       for (const estado of ['activo', 'inactivo']) {

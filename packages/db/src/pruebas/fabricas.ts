@@ -6,11 +6,17 @@
  * membresías ya activas, asignar sedes, etc.) y fijan contextos sin membresía, por eso usan
  * `verificarMembresia: false`. Lo que hace la API pasa por las reglas completas.
  */
-import { randomUUID } from 'node:crypto';
-import { ROLES_SISTEMA, type RolSistema } from '@conecta/shared';
+import { randomBytes, randomUUID } from 'node:crypto';
+import {
+  ROLES_SISTEMA,
+  type CategoriaArchivo,
+  type RolSistema,
+  type TasaIva,
+} from '@conecta/shared';
 import type pg from 'pg';
 import { conContextoCliente } from '../contexto.js';
 import type { EstadoMembresia } from '../esquema.js';
+import { hashTokenInvitacion } from '../funciones.js';
 
 export interface ClinicaDePrueba {
   clinicaId: string;
@@ -152,6 +158,225 @@ export async function crearSedeDePrueba(
       const sillonId = sillon.rows[0]?.id;
       if (!sillonId) throw new Error('No se pudo crear el sillón de prueba.');
       return { sedeId, sillonId };
+    },
+    SIN_VERIFICAR,
+  );
+}
+
+/** Id de un rol de sistema de la clínica (o el `rolId` dado). */
+async function rolDe(
+  cliente: pg.PoolClient,
+  clinicaId: string,
+  opciones: { rol?: RolSistema | undefined; rolId?: string | undefined },
+): Promise<string> {
+  if (opciones.rolId) return opciones.rolId;
+  const { rows } = await cliente.query<{ id: string }>(
+    'select id from app.rol where clinica_id = $1 and codigo = $2',
+    [clinicaId, opciones.rol ?? 'recepcion'],
+  );
+  const id = rows[0]?.id;
+  if (!id) throw new Error(`No existe el rol ${opciones.rol ?? 'recepcion'} en la clínica.`);
+  return id;
+}
+
+export interface InvitacionDePrueba {
+  /** Membresía pendiente, sin usuario. */
+  membresiaId: string;
+  invitacionId: string;
+  /** Token en claro (lo que iría en el enlace). */
+  token: string;
+  /** `hashTokenInvitacion(token)`: lo que guarda la base. */
+  tokenHash: string;
+  email: string;
+  nombre: string;
+  venceEn: Date;
+}
+
+/**
+ * Crea una membresía pendiente sin usuario y su invitación, como administración (sin las reglas de
+ * `app.proteger_invitacion`: sirve para armar invitaciones vencidas con `venceEn` en el pasado).
+ * Por defecto: rol recepcion, sin sedes, vence en 7 días, invitada por el sistema.
+ */
+export async function crearInvitacionDePrueba(
+  admin: pg.Pool,
+  opciones: {
+    clinicaId: string;
+    rol?: RolSistema;
+    rolId?: string;
+    email?: string;
+    nombre?: string;
+    sedeIds?: string[];
+    sedeDefectoId?: string;
+    venceEn?: Date;
+    invitadaPor?: string;
+  },
+): Promise<InvitacionDePrueba> {
+  const marca = sufijo();
+  const token = randomBytes(32).toString('base64url');
+  const tokenHash = hashTokenInvitacion(token);
+  const email = (opciones.email ?? `invitada-${marca}@prueba.test`).trim().toLowerCase();
+  const nombre = opciones.nombre ?? `Invitada ${marca}`;
+  return conContextoCliente(
+    admin,
+    { clinicaId: opciones.clinicaId, usuarioId: randomUUID() },
+    async (cliente) => {
+      await cliente.query("select set_config('app.usuario_id', $1, true)", [
+        opciones.invitadaPor ?? '',
+      ]);
+      const rolId = await rolDe(cliente, opciones.clinicaId, opciones);
+      const membresia = await cliente.query<{ id: string }>(
+        `insert into app.membresia (clinica_id, rol_id, sede_defecto_id, estado)
+         values ($1, $2, $3, 'pendiente') returning id`,
+        [opciones.clinicaId, rolId, opciones.sedeDefectoId ?? null],
+      );
+      const membresiaId = membresia.rows[0]?.id;
+      if (!membresiaId) throw new Error('No se pudo crear la membresía pendiente.');
+      for (const sedeId of opciones.sedeIds ?? []) {
+        await cliente.query(
+          'insert into app.usuario_sede (clinica_id, membresia_id, sede_id) values ($1, $2, $3)',
+          [opciones.clinicaId, membresiaId, sedeId],
+        );
+      }
+      const invitacion = await cliente.query<{ id: string; vence_en: Date }>(
+        `insert into app.invitacion (clinica_id, membresia_id, email, nombre, token_hash, vence_en)
+         values ($1, $2, $3, $4, $5, coalesce($6::timestamptz, now() + interval '7 days'))
+         returning id, vence_en`,
+        [
+          opciones.clinicaId,
+          membresiaId,
+          email,
+          nombre,
+          tokenHash,
+          opciones.venceEn?.toISOString() ?? null,
+        ],
+      );
+      const fila = invitacion.rows[0];
+      if (!fila) throw new Error('No se pudo crear la invitación.');
+      return {
+        membresiaId,
+        invitacionId: fila.id,
+        token,
+        tokenHash,
+        email,
+        nombre,
+        venceEn: fila.vence_en,
+      };
+    },
+    SIN_VERIFICAR,
+  );
+}
+
+/** Crea un profesional (activo), opcionalmente asociado a una membresía. */
+export async function crearProfesionalDePrueba(
+  admin: pg.Pool,
+  opciones: {
+    clinicaId: string;
+    membresiaId?: string;
+    nombre?: string;
+    especialidad?: string;
+    color?: string;
+  },
+): Promise<{ profesionalId: string }> {
+  return conContextoCliente(
+    admin,
+    { clinicaId: opciones.clinicaId, usuarioId: randomUUID() },
+    async (cliente) => {
+      await cliente.query("select set_config('app.usuario_id', '', true)");
+      const { rows } = await cliente.query<{ id: string }>(
+        `insert into app.profesional (clinica_id, membresia_id, nombre, especialidad, color)
+         values ($1, $2, $3, $4, $5) returning id`,
+        [
+          opciones.clinicaId,
+          opciones.membresiaId ?? null,
+          opciones.nombre ?? `Dra. Prueba ${sufijo()}`,
+          opciones.especialidad ?? null,
+          opciones.color ?? '#18BFB0',
+        ],
+      );
+      const profesionalId = rows[0]?.id;
+      if (!profesionalId) throw new Error('No se pudo crear el profesional de prueba.');
+      return { profesionalId };
+    },
+    SIN_VERIFICAR,
+  );
+}
+
+/** Crea un tratamiento activo del catálogo. Por defecto Gs. 150.000, IVA 10, 30 minutos. */
+export async function crearTratamientoDePrueba(
+  admin: pg.Pool,
+  opciones: {
+    clinicaId: string;
+    nombre?: string;
+    categoria?: string;
+    precio?: number;
+    iva?: TasaIva;
+    duracionMin?: number;
+  },
+): Promise<{ tratamientoId: string }> {
+  return conContextoCliente(
+    admin,
+    { clinicaId: opciones.clinicaId, usuarioId: randomUUID() },
+    async (cliente) => {
+      await cliente.query("select set_config('app.usuario_id', '', true)");
+      const { rows } = await cliente.query<{ id: string }>(
+        `insert into app.tratamiento (clinica_id, nombre, categoria, precio, iva, duracion_min)
+         values ($1, $2, $3, $4, $5, $6) returning id`,
+        [
+          opciones.clinicaId,
+          opciones.nombre ?? `Tratamiento ${sufijo()}`,
+          opciones.categoria ?? null,
+          opciones.precio ?? 150_000,
+          opciones.iva ?? 10,
+          opciones.duracionMin ?? 30,
+        ],
+      );
+      const tratamientoId = rows[0]?.id;
+      if (!tratamientoId) throw new Error('No se pudo crear el tratamiento de prueba.');
+      return { tratamientoId };
+    },
+    SIN_VERIFICAR,
+  );
+}
+
+/**
+ * Registra los metadatos de un archivo (no guarda ningún contenido). Por defecto categoría
+ * logo_clinica, almacén local, bucket «pruebas», ruta `<clinica_id>/<categoria>/<uuid>.png`.
+ */
+export async function crearArchivoDePrueba(
+  admin: pg.Pool,
+  opciones: {
+    clinicaId: string;
+    categoria?: CategoriaArchivo;
+    sedeId?: string;
+    /** Usuario del contexto (subido_por y created_by). Por defecto, el sistema (NULL). */
+    usuarioId?: string;
+  },
+): Promise<{ archivoId: string; ruta: string }> {
+  const categoria = opciones.categoria ?? 'logo_clinica';
+  const ruta = `${opciones.clinicaId}/${categoria}/${randomUUID()}.png`;
+  return conContextoCliente(
+    admin,
+    { clinicaId: opciones.clinicaId, usuarioId: randomUUID() },
+    async (cliente) => {
+      await cliente.query("select set_config('app.usuario_id', $1, true)", [
+        opciones.usuarioId ?? '',
+      ]);
+      const { rows } = await cliente.query<{ id: string }>(
+        `insert into app.archivo (clinica_id, categoria, sede_id, almacen, bucket, ruta,
+                                  nombre_original, tipo, bytes, ancho, alto, sha256)
+         values ($1, $2, $3, 'local', 'pruebas', $4, 'logo.png', 'image/png', 2048, 64, 64, $5)
+         returning id`,
+        [
+          opciones.clinicaId,
+          categoria,
+          opciones.sedeId ?? null,
+          ruta,
+          randomBytes(32).toString('hex'),
+        ],
+      );
+      const archivoId = rows[0]?.id;
+      if (!archivoId) throw new Error('No se pudo crear el archivo de prueba.');
+      return { archivoId, ruta };
     },
     SIN_VERIFICAR,
   );

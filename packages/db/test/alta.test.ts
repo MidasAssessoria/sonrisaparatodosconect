@@ -1,9 +1,10 @@
 /** app.alta_clinica() y la semilla de desarrollo. */
 import { randomUUID } from 'node:crypto';
 import { ACCIONES, MODULOS, ROLES_SISTEMA } from '@conecta/shared';
+import pg from 'pg';
 import { describe, expect, it } from 'vitest';
-import { DEMO, sembrarDemo } from '../src/index.js';
-import { crearClinicaDePrueba } from '../src/pruebas/index.js';
+import { DEMO, migrar, sembrarDemo } from '../src/index.js';
+import { crearBaseVacia, crearClinicaDePrueba } from '../src/pruebas/index.js';
 import { enTransaccion, intentar, nuevoPool, urls, valor } from './ayudas.js';
 
 const admin = nuevoPool(urls().urlAdmin);
@@ -170,9 +171,20 @@ describe('app.alta_clinica()', () => {
 
 describe('semilla de desarrollo', () => {
   it('crea la clínica de demostración con dos sedes y sillones, y es idempotente', async () => {
-    await sembrarDemo(admin);
+    const primera = await sembrarDemo(admin);
+    expect(primera).toEqual({
+      clinicaId: DEMO.clinicaId,
+      duenoId: DEMO.duenoId,
+      creada: true,
+      agregados: { profesionales: 3, tramos: 15, tratamientos: 12 },
+    });
     const segunda = await sembrarDemo(admin);
-    expect(segunda).toEqual({ clinicaId: DEMO.clinicaId, duenoId: DEMO.duenoId, creada: false });
+    expect(segunda).toEqual({
+      clinicaId: DEMO.clinicaId,
+      duenoId: DEMO.duenoId,
+      creada: false,
+      agregados: { profesionales: 0, tramos: 0, tratamientos: 0 },
+    });
 
     await enTransaccion(admin, { clinica: DEMO.clinicaId, usuario: DEMO.duenoId }, async (c) => {
       const sedes = await c.query<{ nombre: string; sillones: number; dias: number }>(
@@ -198,6 +210,125 @@ describe('semilla de desarrollo', () => {
           sedes: 2,
         },
       ]);
+      await esperarDemoCompleta(c);
     });
   });
+
+  it('completa una clínica de demostración creada por la versión anterior, sin duplicar nada', async () => {
+    // Base aparte: la clínica de demostración tiene id fijo y la de la base compartida ya existe.
+    const base = await crearBaseVacia(urls());
+    const pool = new pg.Pool({ connectionString: base.urlAdmin, max: 2 });
+    try {
+      await migrar(base.urlAdmin);
+      // Lo que hacía sembrarDemo antes de 0010: clínica, sedes, horarios, sillones y la dueña.
+      await enTransaccion(
+        pool,
+        { clinica: DEMO.clinicaId, usuario: DEMO.duenoId },
+        async (c) => {
+          await c.query(
+            `select app.alta_clinica(p_nombre => 'Sonrisa Para Todos (demostración)', p_dueno_id => $1,
+               p_dueno_nombre => $2, p_dueno_email => $3, p_clinica_id => $4)`,
+            [DEMO.duenoId, DEMO.duenoNombre, DEMO.duenoEmail, DEMO.clinicaId],
+          );
+          for (const [id, nombre] of [
+            [DEMO.sedes.centro, 'Asunción · Centro'],
+            [DEMO.sedes.sanLorenzo, 'San Lorenzo'],
+          ] as const) {
+            await c.query('insert into app.sede (id, clinica_id, nombre) values ($1, $2, $3)', [
+              id,
+              DEMO.clinicaId,
+              nombre,
+            ]);
+            await c.query(
+              "insert into app.sillon (clinica_id, sede_id, nombre) values ($1, $2, 'Sillón 1')",
+              [DEMO.clinicaId, id],
+            );
+          }
+          // Alguien ya cargó a mano un tratamiento con uno de los nombres (con otra grafía).
+          await c.query(
+            "insert into app.tratamiento (clinica_id, nombre, precio) values ($1, 'consulta Y DIAGNOSTICO', 100000)",
+            [DEMO.clinicaId],
+          );
+        },
+        { confirmar: true },
+      );
+
+      const completada = await sembrarDemo(pool);
+      expect(completada).toEqual({
+        clinicaId: DEMO.clinicaId,
+        duenoId: DEMO.duenoId,
+        creada: false,
+        agregados: { profesionales: 3, tramos: 15, tratamientos: 11 },
+      });
+      expect((await sembrarDemo(pool)).agregados).toEqual({
+        profesionales: 0,
+        tramos: 0,
+        tratamientos: 0,
+      });
+      await enTransaccion(pool, { clinica: DEMO.clinicaId, usuario: DEMO.duenoId }, async (c) => {
+        await esperarDemoCompleta(c);
+        // Lo anterior quedó como estaba: dos sedes, un sillón cada una, su tratamiento.
+        expect(await valor(c, 'select count(*)::int from app.sede')).toBe(2);
+        expect(await valor(c, 'select count(*)::int from app.sillon')).toBe(2);
+        expect(
+          await valor(
+            c,
+            "select precio::int from app.tratamiento where nombre = 'consulta Y DIAGNOSTICO'",
+          ),
+        ).toBe(100000);
+      });
+    } finally {
+      await pool.end();
+      await base.eliminar();
+    }
+  });
 });
+
+/** Profesionales (la dueña asociada a su membresía), tramos sin superposición y catálogo. */
+async function esperarDemoCompleta(c: pg.ClientBase): Promise<void> {
+  const profesionales = await c.query<{
+    nombre: string;
+    especialidad: string;
+    es_la_duena: boolean;
+    tramos: number;
+    sedes: number;
+  }>(
+    `select p.nombre, p.especialidad, (u.id is not null) as es_la_duena,
+            (select count(*)::int from app.profesional_disponibilidad d
+             where d.profesional_id = p.id and d.activo) as tramos,
+            (select count(distinct d.sede_id)::int from app.profesional_disponibilidad d
+             where d.profesional_id = p.id and d.activo) as sedes
+     from app.profesional p
+     left join app.membresia m on m.id = p.membresia_id
+     left join app.usuario u on u.id = m.usuario_id`,
+  );
+  // Orden en JS: el de la base depende de la collation del servidor.
+  const ordenados = [...profesionales.rows].sort((x, y) => (x.nombre < y.nombre ? -1 : 1));
+  expect(ordenados).toEqual([
+    {
+      nombre: 'Dr. Esteban Rojas',
+      especialidad: 'Implantes',
+      es_la_duena: false,
+      tramos: 5,
+      sedes: 2,
+    },
+    {
+      nombre: 'Dra. Marta Acosta',
+      especialidad: 'Endodoncia y cirugía',
+      es_la_duena: true,
+      tramos: 5,
+      sedes: 2,
+    },
+    {
+      nombre: 'Dra. Rosa Duarte',
+      especialidad: 'Ortodoncia',
+      es_la_duena: false,
+      tramos: 5,
+      sedes: 2,
+    },
+  ]);
+  expect(await valor(c, 'select count(*)::int from app.tratamiento where activo')).toBe(12);
+  expect(await valor(c, 'select count(distinct iva)::int from app.tratamiento where activo')).toBe(
+    3,
+  );
+}

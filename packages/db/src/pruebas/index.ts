@@ -14,9 +14,14 @@ export {
   type UrlsDeBanco,
 } from './banco.js';
 export {
+  crearArchivoDePrueba,
   crearClinicaDePrueba,
+  crearInvitacionDePrueba,
+  crearProfesionalDePrueba,
   crearSedeDePrueba,
+  crearTratamientoDePrueba,
   crearUsuarioDePrueba,
   type ClinicaDePrueba,
+  type InvitacionDePrueba,
   type UsuarioDePrueba,
 } from './fabricas.js';

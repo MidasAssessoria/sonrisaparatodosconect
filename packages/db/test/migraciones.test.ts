@@ -229,7 +229,7 @@ describe('migrar()', () => {
         `select count(*)::int as tablas from pg_class c join pg_namespace n on n.oid = c.relnamespace
          where n.nspname = 'app' and c.relkind = 'r'`,
       );
-      expect(rows[0]?.tablas).toBe(12);
+      expect(rows[0]?.tablas).toBe(19);
     } finally {
       await cliente.end();
     }

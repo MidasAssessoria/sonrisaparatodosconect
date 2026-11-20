@@ -82,7 +82,9 @@ describe('app_api no puede escalar privilegios', () => {
     'grant pg_read_all_data to app_api',
     'grant pg_signal_backend to app_api',
     'create extension dblink',
-    'create extension btree_gist',
+    // btree_gist ya la instala 0011 (crearla de nuevo da 42710): se prueba con otra «trusted».
+    'create extension pg_trgm',
+    'create extension unaccent',
   ])('rechaza: %s', async (texto) => {
     await rechazada(texto);
   });
@@ -181,6 +183,13 @@ describe('app_api no puede apagar RLS ni saltarse el contexto', () => {
         'numerador',
         'audit_log',
         'sesion',
+        'invitacion',
+        'profesional',
+        'profesional_disponibilidad',
+        'profesional_bloqueo',
+        'tratamiento',
+        'agenda_config',
+        'archivo',
       ]) {
         expect({ tabla, r: await intentar(c, `delete from app.${tabla}`) }).toMatchObject({
           tabla,
@@ -201,12 +210,18 @@ describe('app_api no puede apagar RLS ni saltarse el contexto', () => {
         'clinica',
         'numerador',
         'sesion',
+        'invitacion',
+        'profesional_disponibilidad',
+        'tratamiento',
+        'archivo',
       ]) {
         const r = await intentar(c, `delete from app.${tabla} where false`);
         expect({ tabla, r }).toMatchObject({ tabla, r: { ok: false, codigo: '42501' } });
         if (!r.ok) expect(r.mensaje).toContain('no se borra nada');
       }
-      expect(await intentar(c, 'truncate app.sillon')).toMatchObject({
+      // Una tabla sin FK que la referencien: con una (p. ej. sillon, desde 0011) Postgres rechaza el
+      // TRUNCATE antes del trigger (0A000).
+      expect(await intentar(c, 'truncate app.tratamiento')).toMatchObject({
         ok: false,
         codigo: '42501',
       });

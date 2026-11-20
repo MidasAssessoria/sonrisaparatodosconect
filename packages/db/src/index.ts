@@ -14,6 +14,7 @@ export {
   crearPool,
   ErrorDeContexto,
   ErrorDeMembresia,
+  sinContexto,
   type BaseDeDatos,
   type ContextoSesion,
   type MembresiaActiva,
@@ -23,12 +24,25 @@ export {
   type TransaccionConecta,
 } from './contexto.js';
 export {
+  aceptarInvitacion,
   activarMfa,
+  anularInvitacion,
   cerrarSesion,
+  consultarInvitacion,
+  crearInvitacion,
   desactivarMfa,
+  hashTokenInvitacion,
+  listarPersonal,
+  reemplazarPermisosRol,
+  reenviarInvitacion,
   registrarEvento,
   tocarSesion,
+  type AceptacionInvitacion,
+  type DatosInvitacion,
   type EventoAuditable,
+  type InvitacionConsultada,
+  type PermisoRol,
+  type ResultadoCrearInvitacion,
 } from './funciones.js';
 export {
   calcularChecksum,
