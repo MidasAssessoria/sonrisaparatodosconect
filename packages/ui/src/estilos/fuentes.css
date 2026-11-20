@@ -1,0 +1,20 @@
+/*
+ * Fuentes autoalojadas (OFL). Son variables por peso: un solo archivo cubre todos los pesos.
+ * Subconjunto «latin» de Google Fonts: ñ, á…ú, õ y la tilde combinante (U+0303) están; ẽ ĩ ũ ỹ
+ * precompuestas no, y se dibujan como letra base + tilde combinante (anclas «mark» de la fuente).
+ */
+@font-face {
+  font-family: 'Fredoka';
+  font-style: normal;
+  font-weight: 300 700;
+  font-display: swap;
+  src: url('../fuentes/Fredoka.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Hanken Grotesk';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('../fuentes/HankenGrotesk.woff2') format('woff2');
+}

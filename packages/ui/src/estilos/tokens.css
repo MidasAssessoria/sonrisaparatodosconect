@@ -1,0 +1,173 @@
+/* Archivo generado por scripts/generar-tokens.mjs desde origen/tokens.json. No lo edites a mano. */
+
+:root {
+  color-scheme: light;
+
+  /* Color (tema claro) */
+  --crema: #fff7e9;
+  --blanco: #ffffff;
+  --fondo-suave: #f1eff6;
+  --borde: #d9d3e6;
+  --borde-control: #847e99;
+  --tinta: #232036;
+  --tinta-suave: #5e5a72;
+  --sobre-tinta: #ffffff;
+  --turquesa: #18bfb0;
+  --turquesa-texto: #0b7a70;
+  --turquesa-suave: #ddf5f2;
+  --sobre-turquesa: var(--tinta);
+  --coral: #ff5d5d;
+  --coral-texto: #b83236;
+  --coral-suave: #ffe6e3;
+  --sol: #ffc23c;
+  --sol-texto: #8a5b00;
+  --sol-suave: #fff0cc;
+  --cielo: #2e9bec;
+  --cielo-texto: #1769aa;
+  --cielo-suave: #e1f0fc;
+  --uva: #8b5cf6;
+  --uva-texto: #6d3fd6;
+  --uva-suave: #eee7fe;
+  --rosa: #ff7bb0;
+  --rosa-texto: #b02a66;
+  --rosa-suave: #ffe6f0;
+  --foco: var(--turquesa-texto);
+  --clinico-caries: #16161a;
+  --clinico-extraccion: #1a5fb4;
+  --clinico-periodontal: #d7262b;
+
+  /* Familias */
+  --font-display: 'Fredoka', 'Hanken Grotesk', system-ui, sans-serif;
+  --font-sans: 'Hanken Grotesk', system-ui, -apple-system, 'Segoe UI', sans-serif;
+
+  /* Estilos de texto: --tipo-<nombre> es un shorthand de `font`. */
+  --tipo-titulo-pagina: 600 36px/40px var(--font-display);
+  --tipo-titulo-pagina-tamano: 36px;
+  --tipo-titulo-pagina-interlineado: 40px;
+  --tipo-titulo-pagina-peso: 600;
+  --tipo-titulo-pagina-espaciado: normal;
+  --tipo-titulo-pagina-movil: 600 28px/32px var(--font-display);
+  --tipo-titulo-pagina-movil-tamano: 28px;
+  --tipo-titulo-pagina-movil-interlineado: 32px;
+  --tipo-titulo-pagina-movil-peso: 600;
+  --tipo-titulo-pagina-movil-espaciado: normal;
+  --tipo-titulo-seccion: 600 22px/28px var(--font-display);
+  --tipo-titulo-seccion-tamano: 22px;
+  --tipo-titulo-seccion-interlineado: 28px;
+  --tipo-titulo-seccion-peso: 600;
+  --tipo-titulo-seccion-espaciado: normal;
+  --tipo-titulo-tarjeta: 500 18px/24px var(--font-display);
+  --tipo-titulo-tarjeta-tamano: 18px;
+  --tipo-titulo-tarjeta-interlineado: 24px;
+  --tipo-titulo-tarjeta-peso: 500;
+  --tipo-titulo-tarjeta-espaciado: normal;
+  --tipo-numero: 600 36px/40px var(--font-display);
+  --tipo-numero-tamano: 36px;
+  --tipo-numero-interlineado: 40px;
+  --tipo-numero-peso: 600;
+  --tipo-numero-espaciado: normal;
+  --tipo-cuerpo: 400 16px/24px var(--font-sans);
+  --tipo-cuerpo-tamano: 16px;
+  --tipo-cuerpo-interlineado: 24px;
+  --tipo-cuerpo-peso: 400;
+  --tipo-cuerpo-espaciado: normal;
+  --tipo-cuerpo-fuerte: 600 16px/24px var(--font-sans);
+  --tipo-cuerpo-fuerte-tamano: 16px;
+  --tipo-cuerpo-fuerte-interlineado: 24px;
+  --tipo-cuerpo-fuerte-peso: 600;
+  --tipo-cuerpo-fuerte-espaciado: normal;
+  --tipo-boton: 600 16px/20px var(--font-sans);
+  --tipo-boton-tamano: 16px;
+  --tipo-boton-interlineado: 20px;
+  --tipo-boton-peso: 600;
+  --tipo-boton-espaciado: normal;
+  --tipo-etiqueta: 600 14px/20px var(--font-sans);
+  --tipo-etiqueta-tamano: 14px;
+  --tipo-etiqueta-interlineado: 20px;
+  --tipo-etiqueta-peso: 600;
+  --tipo-etiqueta-espaciado: normal;
+  --tipo-secundario: 400 14px/20px var(--font-sans);
+  --tipo-secundario-tamano: 14px;
+  --tipo-secundario-interlineado: 20px;
+  --tipo-secundario-peso: 400;
+  --tipo-secundario-espaciado: normal;
+  --tipo-pequeno: 600 13px/18px var(--font-sans);
+  --tipo-pequeno-tamano: 13px;
+  --tipo-pequeno-interlineado: 18px;
+  --tipo-pequeno-peso: 600;
+  --tipo-pequeno-espaciado: normal;
+  --tipo-sobretitulo: 700 12px/16px var(--font-sans);
+  --tipo-sobretitulo-tamano: 12px;
+  --tipo-sobretitulo-interlineado: 16px;
+  --tipo-sobretitulo-peso: 700;
+  --tipo-sobretitulo-espaciado: 0.08em;
+
+  /* Espacio */
+  --espacio-1: 4px;
+  --espacio-2: 8px;
+  --espacio-3: 12px;
+  --espacio-4: 16px;
+  --espacio-5: 20px;
+  --espacio-6: 24px;
+  --espacio-8: 32px;
+  --espacio-12: 48px;
+
+  /* Radios */
+  --radio-sm: 8px;
+  --radio-control: 12px;
+  --radio-tarjeta: 16px;
+  --radio-hoja: 24px;
+  --radio-pill: 9999px;
+
+  /* Sombras */
+  --sombra-1: 0 1px 2px #2320360d, 0 2px 6px #2320360f;
+  --sombra-2: 0 4px 12px #23203614, 0 16px 32px -8px #23203626;
+
+  /* Tamaños */
+  --toque-minimo: 44px;
+  --control: 48px;
+  --control-grande: 56px;
+  --barra-lateral: 248px;
+  --barra-inferior: 64px;
+  --contenido-max: 1200px;
+}
+
+/* Clases de texto: .cn-texto-<nombre> aplica el estilo del token. */
+.cn-texto-titulo-pagina {
+  font: var(--tipo-titulo-pagina);
+}
+.cn-texto-titulo-pagina-movil {
+  font: var(--tipo-titulo-pagina-movil);
+}
+.cn-texto-titulo-seccion {
+  font: var(--tipo-titulo-seccion);
+}
+.cn-texto-titulo-tarjeta {
+  font: var(--tipo-titulo-tarjeta);
+}
+.cn-texto-numero {
+  font: var(--tipo-numero);
+}
+.cn-texto-cuerpo {
+  font: var(--tipo-cuerpo);
+}
+.cn-texto-cuerpo-fuerte {
+  font: var(--tipo-cuerpo-fuerte);
+}
+.cn-texto-boton {
+  font: var(--tipo-boton);
+}
+.cn-texto-etiqueta {
+  font: var(--tipo-etiqueta);
+}
+.cn-texto-secundario {
+  font: var(--tipo-secundario);
+}
+.cn-texto-pequeno {
+  font: var(--tipo-pequeno);
+}
+.cn-texto-sobretitulo {
+  font: var(--tipo-sobretitulo);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}

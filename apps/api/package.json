@@ -1,0 +1,40 @@
+{
+  "name": "@conecta/api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --env-file-if-exists=../../.env --conditions=@conecta/source --import @swc-node/register/esm-register --watch src/main.ts",
+    "start": "node dist/main.js",
+    "lint": "eslint .",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "build": "tsc -p tsconfig.build.json",
+    "dev:fijo": "node --env-file-if-exists=../../.env --conditions=@conecta/source --import @swc-node/register/esm-register src/main.ts"
+  },
+  "dependencies": {
+    "@conecta/db": "workspace:*",
+    "@conecta/shared": "workspace:*",
+    "@nestjs/common": "^12.5.1",
+    "@nestjs/core": "^12.5.1",
+    "@nestjs/platform-express": "^12.5.1",
+    "drizzle-orm": "^0.45.4",
+    "helmet": "^8.3.0",
+    "jose": "^6.2.18",
+    "pg": "^8.23.1",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.2",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@nestjs/testing": "^12.5.1",
+    "@swc-node/register": "^1.12.1",
+    "@swc/core": "^1.16.22",
+    "@types/express": "^5.0.6",
+    "@types/pg": "^8.23.1",
+    "@types/supertest": "^7.2.1",
+    "supertest": "^7.3.2",
+    "unplugin-swc": "^2.0.0",
+    "vitest": "^5.1.1"
+  }
+}

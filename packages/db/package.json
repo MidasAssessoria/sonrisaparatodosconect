@@ -1,0 +1,47 @@
+{
+  "name": "@conecta/db",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "@conecta/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./pruebas": {
+      "@conecta/source": "./src/pruebas/index.ts",
+      "types": "./dist/pruebas/index.d.ts",
+      "default": "./dist/pruebas/index.js"
+    },
+    "./pruebas/global-setup": {
+      "@conecta/source": "./src/pruebas/global-setup.ts",
+      "types": "./dist/pruebas/global-setup.d.ts",
+      "default": "./dist/pruebas/global-setup.js"
+    }
+  },
+  "files": [
+    "dist",
+    "migraciones"
+  ],
+  "scripts": {
+    "lint": "eslint .",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "build": "tsc -p tsconfig.build.json",
+    "migrar": "node --env-file-if-exists=../../.env --conditions=@conecta/source --import @swc-node/register/esm-register src/cli/migrar.ts",
+    "sembrar-dev": "node --env-file-if-exists=../../.env --conditions=@conecta/source --import @swc-node/register/esm-register src/cli/sembrar-dev.ts"
+  },
+  "dependencies": {
+    "@conecta/shared": "workspace:*",
+    "drizzle-orm": "^0.45.4",
+    "pg": "^8.23.1"
+  },
+  "devDependencies": {
+    "@swc-node/register": "1.12.1",
+    "@swc/core": "1.16.22",
+    "@types/pg": "^8.23.1",
+    "embedded-postgres": "17.11.0-beta.19",
+    "vitest": "^5.1.1"
+  }
+}

@@ -1,0 +1,9 @@
+referencia/
+packages/ui/origen/
+docs/
+CLAUDE.md
+README.md
+node_modules/
+dist/
+coverage/
+pnpm-lock.yaml
