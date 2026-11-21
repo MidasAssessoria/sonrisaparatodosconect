@@ -5,6 +5,7 @@
  * sistema) están en `@conecta/shared`. El banco de pruebas está en `@conecta/db/pruebas`.
  */
 export * from './esquema.js';
+export * from './cola.js';
 export {
   baseDeDatos,
   buscarMembresiaActiva,
