@@ -20,12 +20,20 @@ import {
 } from '@conecta/ui';
 import { useMutation } from '@tanstack/react-query';
 import { useId, useState, type FormEvent } from 'react';
-import { useSearchParams } from 'react-router';
+import { useNavigate, useSearchParams } from 'react-router';
 import { Esqueleto, MensajeError } from '../../componentes/estados.js';
 import { useEnvioUnico } from '../../componentes/useEnvioUnico.js';
 import { useSesionLista } from '../../sesion/ProveedorSesion.js';
-import { CasillaVerificacion } from './componentes.js';
-import { useActualizarEquipo, useApiPersonal, useRoles } from './consultas.js';
+import { CasillaVerificacion, HojaConMotivo } from './componentes.js';
+import {
+  limitesDe,
+  mensajeRechazo,
+  rolDentroDeLimites,
+  ROLES_CON_MFA_FIJO,
+  useActualizarEquipo,
+  useRoles,
+  type Limites,
+} from './consultas.js';
 import { NOMBRE_ACCION, NOMBRE_MODULO, T } from './textos.js';
 
 type Clave = `${Modulo}:${Accion}`;
@@ -45,9 +53,12 @@ export function matrizDe(marcadas: Set<string>): { modulo: Modulo; accion: Accio
 function MatrizPermisos({
   marcadas,
   onCambio,
+  permitido,
 }: {
   marcadas: Set<string>;
   onCambio?: (m: Modulo, a: Accion, valor: boolean) => void;
+  /** ¿Quien edita puede dar este permiso? Si no, la casilla queda fija (no se da lo que no se tiene). */
+  permitido?: ((m: Modulo, a: Accion) => boolean) | undefined;
 }) {
   return (
     <table className="w-matriz">
@@ -75,6 +86,7 @@ function MatrizPermisos({
                       etiqueta={<span className="w-matriz__accion">{NOMBRE_ACCION[a]}</span>}
                       etiquetaAccesible={`${NOMBRE_MODULO[m]}: ${NOMBRE_ACCION[a]}`}
                       marcada={si}
+                      disabled={permitido ? !permitido(m, a) && !si : false}
                       onCambio={(v) => onCambio(m, a, v)}
                     />
                   ) : (
@@ -96,7 +108,13 @@ function MatrizPermisos({
   );
 }
 
+/** Dueño/a y Administración exigen doble factor siempre, diga lo que diga el dato. */
+function exigeMfa(rol: Pick<Rol, 'codigo' | 'exigeMfa'>): boolean {
+  return rol.exigeMfa || (rol.codigo !== null && ROLES_CON_MFA_FIJO.has(rol.codigo));
+}
+
 function Propiedades({ rol }: { rol: Rol }) {
+  const mfa = exigeMfa(rol);
   return (
     <ul className="w-rol-propiedades">
       <li>
@@ -105,8 +123,8 @@ function Propiedades({ rol }: { rol: Rol }) {
         </Chip>
       </li>
       <li>
-        <Chip tono={rol.exigeMfa ? 'exito' : 'neutro'} icono={rol.exigeMfa ? 'check' : 'cerrar'}>
-          {rol.exigeMfa ? T.roles.exigeMfa : T.roles.noExigeMfa}
+        <Chip tono={mfa ? 'exito' : 'neutro'} icono={mfa ? 'check' : 'cerrar'}>
+          {mfa ? T.roles.exigeMfa : T.roles.noExigeMfa}
         </Chip>
       </li>
       <li>
@@ -129,6 +147,8 @@ interface DatosRol {
 function FormularioRol({
   inicial,
   esSistema,
+  mfaFijo,
+  limites,
   textoGuardar,
   guardando,
   error,
@@ -137,6 +157,9 @@ function FormularioRol({
 }: {
   inicial: DatosRol;
   esSistema: boolean;
+  /** Dueño/a y Administración: «exige doble factor» marcado y sin poder cambiarse. */
+  mfaFijo: boolean;
+  limites: Limites;
   textoGuardar: string;
   guardando: boolean;
   error?: unknown;
@@ -152,7 +175,7 @@ function FormularioRol({
     const r = crearRolSchema.safeParse({
       nombre: d.nombre,
       todasLasSedes: d.todasLasSedes,
-      exigeMfa: d.exigeMfa,
+      exigeMfa: mfaFijo || d.exigeMfa,
       inactividadMin: d.inactividadMin.trim() === '' ? NaN : minutos,
       permisos: matrizDe(d.marcadas),
     });
@@ -184,13 +207,19 @@ function FormularioRol({
       <CasillaVerificacion
         etiqueta={T.roles.campoTodasLasSedes}
         marcada={d.todasLasSedes}
+        disabled={!limites.dueno && !limites.todasLasSedes && !d.todasLasSedes}
         onCambio={(v) => setD({ ...d, todasLasSedes: v })}
       />
+      {!limites.dueno && !limites.todasLasSedes ? (
+        <p className="w-secundario">{T.roles.sinTodasLasSedes}</p>
+      ) : null}
       <CasillaVerificacion
         etiqueta={T.roles.campoExigeMfa}
-        marcada={d.exigeMfa}
+        marcada={mfaFijo || d.exigeMfa}
+        disabled={mfaFijo}
         onCambio={(v) => setD({ ...d, exigeMfa: v })}
       />
+      {mfaFijo ? <p className="w-secundario">{T.roles.mfaFijo}</p> : null}
       <Campo
         etiqueta={T.roles.campoInactividad}
         tipo="number"
@@ -203,8 +232,10 @@ function FormularioRol({
         error={errores.inactividadMin}
       />
       <h3 className="w-seccion__titulo">{T.roles.permisos}</h3>
+      {!limites.dueno ? <p className="w-secundario">{T.roles.soloLoQueTenes}</p> : null}
       <MatrizPermisos
         marcadas={d.marcadas}
+        permitido={limites.dueno ? undefined : (m, a) => limites.permisos.has(clave(m, a))}
         onCambio={(m, a, v) => {
           const nuevas = new Set(d.marcadas);
           if (v) nuevas.add(clave(m, a));
@@ -212,7 +243,7 @@ function FormularioRol({
           setD({ ...d, marcadas: nuevas });
         }}
       />
-      {error ? <MensajeError error={error} /> : null}
+      {error ? <MensajeError texto={mensajeRechazo(error)} /> : null}
       <div className="w-botonera">
         <Boton type="submit" variante="primario" cargando={guardando}>
           {textoGuardar}
@@ -236,8 +267,8 @@ function datosDe(rol?: Rol): DatosRol {
 }
 
 export function Roles() {
-  const { sesion, puede } = useSesionLista();
-  const api = useApiPersonal();
+  const { api, sesion, puede } = useSesionLista();
+  const navegar = useNavigate();
   const roles = useRoles();
   const actualizar = useActualizarEquipo();
   const unaVez = useEnvioUnico();
@@ -245,9 +276,12 @@ export function Roles() {
   const [params, setParams] = useSearchParams();
   const [modo, setModo] = useState<'ver' | 'editar' | 'crear'>('ver');
   const [aviso, setAviso] = useState<string | null>(null);
+  const [desactivando, setDesactivando] = useState(false);
 
   const puedeEditar = puede('configuracion', 'editar');
   const puedeCrear = puede('configuracion', 'crear');
+  const puedeAnular = puede('configuracion', 'anular');
+  const limites = limitesDe(sesion, roles.data);
   const elegidoId = params.get('rol');
   const elegido = roles.data?.find((r) => r.id === elegidoId) ?? null;
 
@@ -262,7 +296,7 @@ export function Roles() {
         // Los roles de sistema no se renombran: el nombre no viaja.
         ...(rol.esSistema ? {} : { nombre: datos.nombre }),
         todasLasSedes: datos.todasLasSedes,
-        exigeMfa: datos.exigeMfa,
+        exigeMfa: datos.exigeMfa || (rol.codigo !== null && ROLES_CON_MFA_FIJO.has(rol.codigo)),
         inactividadMin: datos.inactividadMin,
         // La matriz completa: lo que falta se revoca.
         permisos: datos.permisos,
@@ -270,6 +304,15 @@ export function Roles() {
     onSuccess: async (rol) => {
       setModo('ver');
       setAviso(T.roles.guardado(rol.nombre));
+      await actualizar();
+    },
+  });
+  const desactivar = useMutation({
+    mutationFn: ({ rol, motivo }: { rol: Rol; motivo: string }) =>
+      api.roles.desactivar(rol.id, { motivo }),
+    onSuccess: async (_r, { rol }) => {
+      setDesactivando(false);
+      setAviso(T.roles.desactivado(rol.nombre));
       await actualizar();
     },
   });
@@ -322,26 +365,36 @@ export function Roles() {
 
   const esDueno = elegido?.codigo === 'dueno';
   const esPropio = elegido?.id === sesion.rol.id;
-  const editable = !!elegido && puedeEditar && !esDueno && !esPropio;
+  // Los roles de sistema solo los toca un dueño; nadie toca un rol que da más de lo que tiene.
+  const sistemaAjeno = !!elegido?.esSistema && !limites.dueno;
+  const fueraDeLimites = !!elegido && !rolDentroDeLimites(elegido, limites);
+  const tocable = !!elegido && !esDueno && !esPropio && !sistemaAjeno && !fueraDeLimites;
+  const editable = tocable && puedeEditar;
+  const desactivable = tocable && puedeAnular && !elegido.esSistema && elegido.activo;
 
   return (
     <>
       <EncabezadoPagina
         titulo={T.roles.titulo}
         acciones={
-          puedeCrear ? (
-            <Boton
-              variante="primario"
-              icono="mas"
-              onClick={() => {
-                crear.reset();
-                setParams({});
-                setModo('crear');
-              }}
-            >
-              {T.roles.nuevo}
+          <>
+            <Boton variante="secundario" icono="personal" onClick={() => void navegar('/personal')}>
+              {T.roles.volverEquipo}
             </Boton>
-          ) : null
+            {puedeCrear ? (
+              <Boton
+                variante="primario"
+                icono="mas"
+                onClick={() => {
+                  crear.reset();
+                  setParams({});
+                  setModo('crear');
+                }}
+              >
+                {T.roles.nuevo}
+              </Boton>
+            ) : null}
+          </>
         }
       />
       {aviso ? <AvisoExito titulo={aviso} onCerrar={() => setAviso(null)} /> : null}
@@ -362,6 +415,8 @@ export function Roles() {
             <FormularioRol
               inicial={datosDe()}
               esSistema={false}
+              mfaFijo={false}
+              limites={limites}
               textoGuardar={T.roles.crear}
               guardando={crear.isPending}
               error={crear.error}
@@ -387,6 +442,17 @@ export function Roles() {
                     {T.roles.editar}
                   </Boton>
                 ) : null}
+                {desactivable && modo === 'ver' ? (
+                  <Boton
+                    variante="peligro"
+                    onClick={() => {
+                      desactivar.reset();
+                      setDesactivando(true);
+                    }}
+                  >
+                    {T.roles.desactivar}
+                  </Boton>
+                ) : null}
                 <Boton variante="fantasma" icono="cerrar" onClick={() => elegir(null)}>
                   {T.roles.cerrar}
                 </Boton>
@@ -400,12 +466,22 @@ export function Roles() {
               <p className="w-nota" role="note">
                 {T.roles.propioSoloLectura}
               </p>
+            ) : sistemaAjeno && puedeEditar ? (
+              <p className="w-nota" role="note">
+                {T.roles.sistemaSoloDueno}
+              </p>
+            ) : fueraDeLimites && (puedeEditar || puedeAnular) ? (
+              <p className="w-nota" role="note">
+                {T.roles.fueraDeLimites}
+              </p>
             ) : null}
             {modo === 'editar' && editable ? (
               <FormularioRol
                 key={elegido.id}
                 inicial={datosDe(elegido)}
                 esSistema={elegido.esSistema}
+                mfaFijo={elegido.codigo !== null && ROLES_CON_MFA_FIJO.has(elegido.codigo)}
+                limites={limites}
                 textoGuardar={T.roles.guardar}
                 guardando={editar.isPending}
                 error={editar.error}
@@ -426,6 +502,23 @@ export function Roles() {
           </section>
         ) : null}
       </div>
+
+      {elegido && desactivando && desactivable ? (
+        <HojaConMotivo
+          abierta
+          titulo={T.roles.tituloDesactivar(elegido.nombre)}
+          texto={T.roles.textoDesactivar}
+          confirmar={T.roles.confirmarDesactivar}
+          onCerrar={() => setDesactivando(false)}
+          onConfirmar={(motivo) =>
+            void unaVez(() =>
+              desactivar.mutateAsync({ rol: elegido, motivo }).catch(() => undefined),
+            )
+          }
+          enviando={desactivar.isPending}
+          error={desactivar.error}
+        />
+      ) : null}
     </>
   );
 }

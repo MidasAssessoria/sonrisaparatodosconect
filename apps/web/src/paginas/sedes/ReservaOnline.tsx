@@ -9,7 +9,7 @@ import { useState, type FormEvent } from 'react';
 import { Esqueleto, MensajeError } from '../../componentes/estados.js';
 import { useEnvioUnico } from '../../componentes/useEnvioUnico.js';
 import { useSesionLista } from '../../sesion/ProveedorSesion.js';
-import { claves, useApiCatalogos } from '../catalogos/api.js';
+import { claves } from '../catalogos/consultas.js';
 import { textoMinutos } from '../catalogos/formato.js';
 import { Interruptor } from '../catalogos/Interruptor.js';
 import '../catalogos/catalogos.css';
@@ -25,8 +25,7 @@ const MINUTOS = [0, 15, 30, 45];
 type Errores = Partial<Record<'anticipacionMin' | 'diasAdelante', string>>;
 
 function Formulario({ sedeId, inicial }: { sedeId: string; inicial: AgendaConfig }) {
-  const { sesion } = useSesionLista();
-  const api = useApiCatalogos();
+  const { api, sesion } = useSesionLista();
   const consultas = useQueryClient();
   const unaVez = useEnvioUnico();
   const [horas, setHoras] = useState(Math.floor(inicial.anticipacionMin / 60));
@@ -167,8 +166,7 @@ function Resumen({ c }: { c: AgendaConfig }) {
 
 /** Configuración de agenda y reserva online de la sede (`GET`/`PUT /sedes/:id/agenda`). */
 export function ReservaOnline({ sedeId }: { sedeId: string }) {
-  const { sesion, puede } = useSesionLista();
-  const api = useApiCatalogos();
+  const { api, sesion, puede } = useSesionLista();
   const consulta = useQuery({
     queryKey: claves.agenda(sesion.clinica.id, sedeId),
     queryFn: () => api.agenda.obtener(sedeId),

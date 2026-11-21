@@ -7,7 +7,7 @@ import { Esqueleto, MensajeError } from '../../componentes/estados.js';
 import { useEnvioUnico } from '../../componentes/useEnvioUnico.js';
 import { useSesionLista } from '../../sesion/ProveedorSesion.js';
 import { COLORES_SEDE } from '../sedes/estadoSede.js';
-import { claves, useApiCatalogos } from './api.js';
+import { claves } from './consultas.js';
 import { Bloqueos } from './Bloqueos.js';
 import { usePersonal, useProfesional, useSedesDetalle } from './consultas.js';
 import type { SedeDisponible } from './disponibilidad.js';
@@ -18,8 +18,7 @@ import './catalogos.css';
 
 export function DetalleProfesional() {
   const { id = '' } = useParams();
-  const { puede, sesion } = useSesionLista();
-  const api = useApiCatalogos();
+  const { api, puede, sesion } = useSesionLista();
   const consulta = useProfesional(id);
   const sedesDetalle = useSedesDetalle();
   const personal = usePersonal();

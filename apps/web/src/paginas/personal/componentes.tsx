@@ -2,7 +2,7 @@ import { bajaSchema, type EstadoMembresia, type InvitacionCreada } from '@conect
 import { Boton, Campo, Chip, HojaInferior, Icono } from '@conecta/ui';
 import { useId, useState, type FormEvent, type ReactNode } from 'react';
 import { MensajeError } from '../../componentes/estados.js';
-import { enlaceCompleto, fecha } from './consultas.js';
+import { enlaceCompleto, fecha, mensajeRechazo } from './consultas.js';
 import { infoEstadoPersona, T } from './textos.js';
 import './personal.css';
 
@@ -191,7 +191,7 @@ export function HojaConMotivo({
           onChange={(e) => setMotivo(e.target.value)}
           error={errorMotivo}
         />
-        {error ? <MensajeError error={error} /> : null}
+        {error ? <MensajeError texto={mensajeRechazo(error)} /> : null}
       </form>
     </HojaInferior>
   );
@@ -234,7 +234,7 @@ export function HojaConfirmar({
       }
     >
       <p>{texto}</p>
-      {error ? <MensajeError error={error} /> : null}
+      {error ? <MensajeError texto={mensajeRechazo(error)} /> : null}
     </HojaInferior>
   );
 }
@@ -292,6 +292,7 @@ export function EnlaceUnaVez({
           </p>
         </div>
       </div>
+      <p className="w-nota">{T.enlace.queRecibe}</p>
       <label className="w-enlace-invitacion__etiqueta" htmlFor={idEnlace}>
         {T.enlace.etiqueta}
       </label>

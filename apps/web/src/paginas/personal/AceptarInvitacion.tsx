@@ -1,9 +1,10 @@
 import type { InvitacionPublica } from '@conecta/shared';
-import { Boton, Campo, EncabezadoPagina, EstadoVacio } from '@conecta/ui';
+import { Boton, Campo, EstadoVacio } from '@conecta/ui';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
-import { Navigate, useNavigate, useSearchParams } from 'react-router';
+import { useLocation, useNavigate, useSearchParams } from 'react-router';
 import { ErrorConecta } from '../../api/errores.js';
+import { ErrorAuth } from '../../auth/servicioAuth.js';
 import { AvisoPersistente, MensajeError } from '../../componentes/estados.js';
 import { useEnvioUnico } from '../../componentes/useEnvioUnico.js';
 import { useTextos } from '../../i18n/idioma.js';
@@ -11,19 +12,31 @@ import { mensajeAuth, RE_CORREO } from '../acceso/textosError.js';
 import { MarcoAcceso } from '../acceso/MarcoAcceso.js';
 import { useSesion } from '../../sesion/ProveedorSesion.js';
 import { escribirEnSesion, leerDeSesion } from '../../sesion/preferencias.js';
-import { coincideConMascara, fecha, useApiPersonal } from './consultas.js';
+import { coincideConMascara, fecha, mensajeRechazo } from './consultas.js';
 import { T } from './textos.js';
 import './personal.css';
 
 /*
- * Aceptar una invitación (`/invitacion?token=…`). La ruta existe sin sesión y con sesión, y la
- * página pasa de una a otra mientras se ingresa: el estado que tiene que sobrevivir a ese cambio
- * va en sessionStorage, atado al token.
- *   - `invitacion.aceptada`: la cuenta nueva ya aceptó; al llegar con sesión se va al inicio.
- *   - `invitacion.ingreso`: la persona ingresó desde acá para aceptar; al llegar con sesión se
- *     acepta sola (una vez).
+ * Aceptar una invitación (`/invitacion?token=…`). Solo la acepta quien controla el correo
+ * invitado: `POST /invitaciones/aceptar` va SIEMPRE con `Authorization` (contrato/personal.ts).
+ *
+ * Mientras la persona está acá sin haber aceptado, `ProveedorSesion` no carga la sesión de la app
+ * (`GET /sesion`): con cuenta de Supabase la deja en la fase `invitacion`, y recién después de
+ * aceptar (`terminarInvitacion`) entra a la clínica nueva. Así sirve también para una cuenta sin
+ * ninguna clínica activa.
+ *
+ * Según `siguientePaso` y si hay cuenta de Supabase abierta:
+ *   - `revisa_tu_correo`, sin sesión: le mandamos el correo de Supabase; no hay formulario.
+ *   - `revisa_tu_correo`, con sesión (volvió desde ese correo): elige su contraseña dos veces
+ *     (`cambiarClave` → `updateUser`) y acepta.
+ *   - `cuenta_existente`, sin sesión: ingresa acá (con su segundo factor, si lo tiene, que el
+ *     proveedor pide primero) y al volver con sesión se acepta solo, una vez.
+ *   - `cuenta_existente`, con sesión: un botón para unirse.
+ *   - Sesión con otro correo: aviso y cerrar sesión.
+ *
+ * `invitacion.ingreso` (sessionStorage, atado al token) marca que la persona ingresó desde acá
+ * para aceptar: la página se vuelve a montar al cambiar de fase.
  */
-const MARCA_ACEPTADA = 'invitacion.aceptada';
 const MARCA_INGRESO = 'invitacion.ingreso';
 
 const MIN_CLAVE = 10;
@@ -40,25 +53,35 @@ function enlaceSinValor(e: unknown): boolean {
   );
 }
 
-function Marco({ conSesion, children }: { conSesion: boolean; children: ReactNode }) {
-  if (conSesion) {
-    return (
-      <>
-        <EncabezadoPagina titulo={T.aceptar.titulo} />
-        <div className="w-tarjeta">{children}</div>
-      </>
-    );
-  }
+/**
+ * Supabase vuelve con `#error=…&error_code=otp_expired…` cuando el enlace de su correo venció o ya
+ * se usó (y entonces no hay sesión).
+ */
+function errorDelCorreo(hash: string): boolean {
+  const p = new URLSearchParams(hash.replace(/^#/, ''));
+  return p.has('error') || p.has('error_code') || p.has('error_description');
+}
+
+function Marco({ children }: { children: ReactNode }) {
   return <MarcoAcceso titulo={T.aceptar.titulo}>{children}</MarcoAcceso>;
 }
 
-function EnlaceInvalido({ conSesion }: { conSesion: boolean }) {
+/** Un solo mensaje amable, sin detalles de por qué. */
+function MensajeUnico({
+  titulo,
+  texto,
+  conSesion,
+}: {
+  titulo: string;
+  texto: string;
+  conSesion: boolean;
+}) {
   const navegar = useNavigate();
   return (
-    <Marco conSesion={conSesion}>
+    <Marco>
       <EstadoVacio
-        titulo={T.aceptar.invalidoTitulo}
-        texto={T.aceptar.invalidoTexto}
+        titulo={titulo}
+        texto={texto}
         accion={
           conSesion ? undefined : (
             <Boton variante="secundario" onClick={() => void navegar('/acceso')}>
@@ -101,18 +124,36 @@ function DatosInvitacion({ inv }: { inv: InvitacionPublica }) {
   );
 }
 
-/** Correo sin cuenta: elegir contraseña, aceptar e ingresar. */
-function CuentaNueva({ token, onInvalido }: { token: string; onInvalido: () => void }) {
+/** Cuenta nueva sin sesión: el correo de Supabase es el único camino. */
+function RevisaTuCorreo({ inv }: { inv: InvitacionPublica }) {
+  return (
+    <>
+      <AvisoPersistente
+        titulo={T.aceptar.revisaTuCorreoTitulo}
+        texto={T.aceptar.revisaTuCorreo(inv.emailEnmascarado)}
+      />
+      <p className="w-nota">{T.aceptar.revisaTuCorreoAyuda}</p>
+    </>
+  );
+}
+
+/** Cuenta nueva, de vuelta desde el correo con sesión: elegir contraseña y aceptar. */
+function ElegirClaveYAceptar({
+  token,
+  onInvalido,
+  onAceptada,
+}: {
+  token: string;
+  onInvalido: () => void;
+  onAceptada: (clinicaId: string) => void;
+}) {
   const t = useTextos();
-  const { ingresar } = useSesion();
-  const api = useApiPersonal();
-  const navegar = useNavigate();
+  const { auth, api } = useSesion();
   const unaVez = useEnvioUnico();
   const [clave, setClave] = useState('');
   const [repetida, setRepetida] = useState('');
   const [errores, setErrores] = useState<{ clave?: string; repetida?: string }>({});
-  const [error, setError] = useState<unknown>(null);
-  const [sinIngreso, setSinIngreso] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [enviando, setEnviando] = useState(false);
 
   function enviar(e: FormEvent) {
@@ -127,42 +168,27 @@ function CuentaNueva({ token, onInvalido }: { token: string; onInvalido: () => v
     if (nuevos.clave || nuevos.repetida) return;
     void unaVez(async () => {
       setEnviando(true);
-      let email: string;
       try {
-        email = (await api.invitaciones.aceptar({ token, clave }, false)).email;
+        await auth.cambiarClave(clave);
       } catch (err) {
-        setEnviando(false);
-        if (enlaceSinValor(err) && !(err instanceof ErrorConecta && err.detalles.length)) {
-          onInvalido();
+        // Ya la había guardado (p. ej. recargó la página después de elegirla): sigue igual.
+        if (!(err instanceof ErrorAuth && err.tipo === 'clave_repetida')) {
+          setEnviando(false);
+          setErrores({ clave: mensajeAuth(err, t) });
           return;
         }
-        const campo =
-          err instanceof ErrorConecta ? err.detalles.find((d) => d.campo === 'clave') : undefined;
-        if (campo) setErrores({ clave: campo.mensaje });
-        else setError(err);
+      }
+      let clinicaId: string;
+      try {
+        clinicaId = (await api.invitaciones.aceptar(token)).clinicaId;
+      } catch (err) {
+        setEnviando(false);
+        if (enlaceSinValor(err)) onInvalido();
+        else setError(mensajeRechazo(err));
         return;
       }
-      // Al ingresar, la página se vuelve a montar con sesión: que vaya directo al inicio.
-      escribirEnSesion(MARCA_ACEPTADA, token);
-      try {
-        await ingresar(email, clave);
-      } catch (err) {
-        escribirEnSesion(MARCA_ACEPTADA, null);
-        setEnviando(false);
-        setSinIngreso(T.aceptar.cuentaCreadaSinIngreso(mensajeAuth(err, t)));
-      }
+      onAceptada(clinicaId);
     });
-  }
-
-  if (sinIngreso) {
-    return (
-      <>
-        <MensajeError texto={sinIngreso} />
-        <Boton variante="primario" bloque onClick={() => void navegar('/acceso')}>
-          {T.aceptar.irAIngresar}
-        </Boton>
-      </>
-    );
   }
 
   return (
@@ -187,7 +213,7 @@ function CuentaNueva({ token, onInvalido }: { token: string; onInvalido: () => v
         onChange={(e) => setRepetida(e.target.value)}
         error={errores.repetida}
       />
-      {error ? <MensajeError error={error} /> : null}
+      {error ? <MensajeError texto={error} /> : null}
       <Boton type="submit" variante="primario" tamano="lg" bloque cargando={enviando}>
         {T.aceptar.crearYEntrar}
       </Boton>
@@ -195,7 +221,7 @@ function CuentaNueva({ token, onInvalido }: { token: string; onInvalido: () => v
   );
 }
 
-/** Correo con cuenta y sin sesión: ingresar acá; al volver con sesión se acepta solo. */
+/** Cuenta existente sin sesión: ingresar acá; al volver con sesión se acepta solo. */
 function IngresarParaAceptar({ token, inv }: { token: string; inv: InvitacionPublica }) {
   const t = useTextos();
   const { ingresar } = useSesion();
@@ -222,6 +248,7 @@ function IngresarParaAceptar({ token, inv }: { token: string; inv: InvitacionPub
       setEnviando(true);
       escribirEnSesion(MARCA_INGRESO, token);
       try {
+        // El proveedor pide el segundo factor (si lo tiene) y vuelve a esta página con sesión.
         await ingresar(correo, clave);
       } catch (err) {
         escribirEnSesion(MARCA_INGRESO, null);
@@ -260,27 +287,23 @@ function IngresarParaAceptar({ token, inv }: { token: string; inv: InvitacionPub
   );
 }
 
-/** Con sesión abierta y el mismo correo: aceptar con el token de la sesión y pasar a esa clínica. */
+/** Con cuenta abierta y el mismo correo: aceptar con su token y pasar a esa clínica. */
 function AceptarConSesion({
   token,
   inv,
   onInvalido,
+  onAceptada,
 }: {
   token: string;
   inv: InvitacionPublica;
   onInvalido: () => void;
+  onAceptada: (clinicaId: string) => void;
 }) {
-  const { elegirClinica } = useSesion();
-  const api = useApiPersonal();
-  const navegar = useNavigate();
+  const { api } = useSesion();
   const unaVez = useEnvioUnico();
   const aceptar = useMutation({
-    mutationFn: () => api.invitaciones.aceptar({ token }, true),
-    onSuccess: async (r) => {
-      void navegar('/', { replace: true });
-      // Recarga la sesión ya en la clínica nueva.
-      await elegirClinica(r.clinicaId);
-    },
+    mutationFn: () => api.invitaciones.aceptar(token),
+    onSuccess: (r) => onAceptada(r.clinicaId),
     onError: (e) => {
       if (enlaceSinValor(e)) onInvalido();
     },
@@ -300,13 +323,15 @@ function AceptarConSesion({
 
   return (
     <>
-      {aceptar.isError ? <MensajeError error={aceptar.error} /> : null}
+      {aceptar.isError && !enlaceSinValor(aceptar.error) ? (
+        <MensajeError texto={mensajeRechazo(aceptar.error)} />
+      ) : null}
       {aceptar.isPending ? (
         <p className="w-nota" role="status">
           {T.aceptar.uniendo}
         </p>
       ) : null}
-      <Boton variante="primario" tamano="lg" cargando={aceptar.isPending} onClick={enviar}>
+      <Boton variante="primario" tamano="lg" bloque cargando={aceptar.isPending} onClick={enviar}>
         {T.aceptar.unirme(inv.clinica)}
       </Boton>
     </>
@@ -315,33 +340,53 @@ function AceptarConSesion({
 
 export function AceptarInvitacion() {
   const [params] = useSearchParams();
+  const { hash } = useLocation();
+  const navegar = useNavigate();
   const token = params.get('token');
-  const { estado, sesion, cerrarSesion } = useSesion();
-  const api = useApiPersonal();
-  const conSesion = estado.fase === 'lista';
+  const { estado, api, cerrarSesion, terminarInvitacion } = useSesion();
+  // Cuenta de Supabase abierta, todavía sin la sesión de la app.
+  const usuario = estado.fase === 'invitacion' ? estado.usuario : null;
   const [invalido, setInvalido] = useState(false);
-  const [yaAceptada] = useState(() => tokenValido(token) && leerDeSesion(MARCA_ACEPTADA) === token);
   const [cerrando, setCerrando] = useState(false);
-
-  useEffect(() => {
-    if (yaAceptada) escribirEnSesion(MARCA_ACEPTADA, null);
-  }, [yaAceptada]);
 
   const consulta = useQuery({
     queryKey: ['invitacion', token],
     queryFn: () => api.invitaciones.consultar(token ?? ''),
-    enabled: tokenValido(token) && !yaAceptada,
+    enabled: tokenValido(token),
     retry: false,
-    staleTime: 0,
+    // La página se vuelve a montar al ingresar o al volver del segundo factor: no hace falta
+    // volver a consultar.
+    staleTime: 60_000,
   });
 
-  if (yaAceptada) return <Navigate to="/" replace />;
+  const aceptada = (clinicaId: string) => {
+    escribirEnSesion(MARCA_INGRESO, null);
+    // Primero el proveedor pasa a cargar la sesión en la clínica nueva; después se sale de acá.
+    void terminarInvitacion(clinicaId);
+    void navegar('/', { replace: true });
+  };
+
   if (!tokenValido(token) || invalido || (consulta.isError && enlaceSinValor(consulta.error))) {
-    return <EnlaceInvalido conSesion={conSesion} />;
+    return (
+      <MensajeUnico
+        titulo={T.aceptar.invalidoTitulo}
+        texto={T.aceptar.invalidoTexto}
+        conSesion={!!usuario}
+      />
+    );
+  }
+  if (!usuario && errorDelCorreo(hash)) {
+    return (
+      <MensajeUnico
+        titulo={T.aceptar.correoVencidoTitulo}
+        texto={T.aceptar.correoVencidoTexto}
+        conSesion={false}
+      />
+    );
   }
   if (consulta.isPending) {
     return (
-      <Marco conSesion={conSesion}>
+      <Marco>
         <p className="w-nota" role="status">
           {T.aceptar.cargando}
         </p>
@@ -350,7 +395,7 @@ export function AceptarInvitacion() {
   }
   if (consulta.isError) {
     return (
-      <Marco conSesion={conSesion}>
+      <Marco>
         <MensajeError error={consulta.error} onReintentar={() => void consulta.refetch()} />
       </Marco>
     );
@@ -358,15 +403,11 @@ export function AceptarInvitacion() {
 
   const inv = consulta.data;
   let cuerpo: ReactNode;
-  if (conSesion && sesion) {
-    const mismoCorreo =
-      inv.requiereIngreso && coincideConMascara(sesion.usuario.email, inv.emailEnmascarado);
-    cuerpo = mismoCorreo ? (
-      <AceptarConSesion token={token} inv={inv} onInvalido={() => setInvalido(true)} />
-    ) : (
+  if (usuario && !coincideConMascara(usuario.email, inv.emailEnmascarado)) {
+    cuerpo = (
       <AvisoPersistente
         titulo={T.aceptar.otraCuentaTitulo}
-        texto={T.aceptar.otraCuentaTexto(sesion.usuario.email, inv.emailEnmascarado)}
+        texto={T.aceptar.otraCuentaTexto(usuario.email, inv.emailEnmascarado)}
         accion={
           <Boton
             variante="primario"
@@ -374,7 +415,8 @@ export function AceptarInvitacion() {
             cargando={cerrando}
             onClick={() => {
               setCerrando(true);
-              void cerrarSesion();
+              escribirEnSesion(MARCA_INGRESO, null);
+              void cerrarSesion().finally(() => setCerrando(false));
             }}
           >
             {T.aceptar.cerrarYSeguir}
@@ -382,14 +424,31 @@ export function AceptarInvitacion() {
         }
       />
     );
-  } else if (inv.requiereIngreso) {
-    cuerpo = <IngresarParaAceptar token={token} inv={inv} />;
+  } else if (usuario && inv.siguientePaso === 'revisa_tu_correo') {
+    cuerpo = (
+      <ElegirClaveYAceptar
+        token={token}
+        onInvalido={() => setInvalido(true)}
+        onAceptada={aceptada}
+      />
+    );
+  } else if (usuario) {
+    cuerpo = (
+      <AceptarConSesion
+        token={token}
+        inv={inv}
+        onInvalido={() => setInvalido(true)}
+        onAceptada={aceptada}
+      />
+    );
+  } else if (inv.siguientePaso === 'revisa_tu_correo') {
+    cuerpo = <RevisaTuCorreo inv={inv} />;
   } else {
-    cuerpo = <CuentaNueva token={token} onInvalido={() => setInvalido(true)} />;
+    cuerpo = <IngresarParaAceptar token={token} inv={inv} />;
   }
 
   return (
-    <Marco conSesion={conSesion}>
+    <Marco>
       <DatosInvitacion inv={inv} />
       {cuerpo}
     </Marco>

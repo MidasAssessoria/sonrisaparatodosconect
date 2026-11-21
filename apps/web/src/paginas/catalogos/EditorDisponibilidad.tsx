@@ -6,7 +6,7 @@ import { ErrorConecta } from '../../api/errores.js';
 import { MensajeError } from '../../componentes/estados.js';
 import { useEnvioUnico } from '../../componentes/useEnvioUnico.js';
 import { useSesionLista } from '../../sesion/ProveedorSesion.js';
-import { claves, useApiCatalogos } from './api.js';
+import { claves } from './consultas.js';
 import {
   claveTramo,
   franjasDelDia,
@@ -72,8 +72,7 @@ export function EditorDisponibilidad({
   sedes: SedeDisponible[];
   editable: boolean;
 }) {
-  const { sesion, sedeActiva } = useSesionLista();
-  const api = useApiCatalogos();
+  const { api, sesion, sedeActiva } = useSesionLista();
   const consultas = useQueryClient();
   const unaVez = useEnvioUnico();
   const idsVisibles = new Set(sedes.map((s) => s.id));

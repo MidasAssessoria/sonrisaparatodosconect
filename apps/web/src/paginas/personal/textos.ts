@@ -72,6 +72,7 @@ export const T = {
     vencido: 'El enlace ya venció',
     reenviar: 'Reenviar',
     anular: 'Anular',
+    roles: 'Roles y permisos',
   },
   invitar: {
     titulo: 'Invitar a una persona',
@@ -94,6 +95,8 @@ export const T = {
     tituloReenvio: (nombre: string) => `Enlace nuevo para ${nombre}`,
     unaVez:
       'Este enlace se muestra una sola vez. Copialo o mandalo ahora: si lo perdés, usá «Reenviar» para generar otro.',
+    queRecibe:
+      'Si esa persona todavía no tiene cuenta en Conecta, le llega un correo para crear su contraseña. Si ya tiene cuenta, entra con su correo y su contraseña de siempre.',
     anteriorAnulado: 'El enlace anterior ya no sirve.',
     vence: (fecha: string) => `Vence el ${fecha}.`,
     etiqueta: 'Enlace de la invitación',
@@ -104,7 +107,9 @@ export const T = {
     listo: 'Listo, ya lo mandé',
     mensajeWhatsapp: (nombre: string, clinica: string, url: string, vence: string) =>
       `Hola ${nombre}, te invitamos a sumarte al equipo de ${clinica} en Sonrisa Para Todos Conecta. ` +
-      `Entrá a este enlace para crear tu acceso: ${url} (vence el ${vence}).`,
+      `Si todavía no tenés cuenta, te va a llegar un correo para crear tu contraseña: abrilo desde este mismo teléfono o computadora. ` +
+      `Si ya tenés cuenta, entrá con tu correo y tu contraseña. ` +
+      `La invitación está en este enlace: ${url} (vence el ${vence}).`,
   },
   reenviar: {
     titulo: (nombre: string) => `Reenviar la invitación de ${nombre}`,
@@ -154,6 +159,8 @@ export const T = {
     anuladaSinUsuario:
       'La invitación se anuló antes de que la aceptara. Para sumarla, invitala de nuevo desde Equipo.',
     sedesOcultas: 'Además trabaja en sedes que vos no ves; esas no cambian.',
+    fueraDeAlcance:
+      'Esta persona trabaja también en sedes que vos no ves: sus cambios los hace alguien que vea todas sus sedes.',
   },
   roles: {
     titulo: 'Roles y permisos',
@@ -193,6 +200,19 @@ export const T = {
     guardado: (nombre: string) => `Rol «${nombre}» guardado`,
     creado: (nombre: string) => `Rol «${nombre}» creado`,
     marcarFila: (modulo: string) => `Todo ${modulo}`,
+    volverEquipo: 'Volver al equipo',
+    sistemaSoloDueno: 'Es un rol de sistema: solo lo edita el Dueño/a de la clínica.',
+    fueraDeLimites:
+      'Este rol da permisos que vos no tenés: lo edita alguien que los tenga (o el Dueño/a).',
+    soloLoQueTenes: 'Solo podés dar los permisos que vos tenés; los demás quedan sin marcar.',
+    sinTodasLasSedes: 'Vos no ves todas las sedes, así que tampoco podés darlo.',
+    mfaFijo: 'Este rol siempre exige doble factor.',
+    desactivar: 'Desactivar rol',
+    tituloDesactivar: (nombre: string) => `Desactivar el rol «${nombre}»`,
+    textoDesactivar:
+      'No se puede asignar a nadie más. No se borra: queda en la lista como inactivo y en la auditoría.',
+    confirmarDesactivar: 'Confirmar desactivación',
+    desactivado: (nombre: string) => `El rol «${nombre}» quedó desactivado.`,
   },
   aceptar: {
     titulo: 'Invitación al equipo',
@@ -200,15 +220,24 @@ export const T = {
     invalidoTitulo: 'Este enlace ya no sirve',
     invalidoTexto:
       'Puede que haya vencido, que ya se haya usado o que te hayan mandado uno más nuevo. Pedile a quien te invitó que te mande un enlace nuevo.',
+    correoVencidoTitulo: 'El enlace del correo ya no sirve',
+    correoVencidoTexto:
+      'Los enlaces del correo se usan una sola vez y vencen. Pedile a quien te invitó que reenvíe la invitación: te llega un correo nuevo.',
     irAIngresar: 'Ir a ingresar',
     teInvitan: (clinica: string) => `Te invitan a sumarte a ${clinica}`,
     clinica: 'Clínica',
     rol: 'Rol',
     nombre: 'Nombre',
     correo: 'Correo',
-    vence: 'El enlace vence',
-    // Cuenta nueva
-    crearClave: 'Elegí tu contraseña para entrar.',
+    vence: 'La invitación vence',
+    // Cuenta nueva, sin sesión: el correo de Supabase trae la sesión.
+    revisaTuCorreoTitulo: 'Revisá tu correo',
+    revisaTuCorreo: (mascara: string) =>
+      `Te mandamos un correo a ${mascara}: abrilo para crear tu contraseña.`,
+    revisaTuCorreoAyuda:
+      'Abrilo en este mismo dispositivo. Si no lo ves en unos minutos, buscá en la carpeta de correo no deseado.',
+    // Cuenta nueva, de vuelta desde el correo (ya con sesión)
+    crearClave: 'Elegí tu contraseña para entrar a Conecta.',
     clave: 'Contraseña',
     claveAyuda: 'Al menos 10 caracteres.',
     repetir: 'Repetí la contraseña',
@@ -216,9 +245,7 @@ export const T = {
     claveCorta: 'Usá al menos 10 caracteres.',
     claveLarga: 'Usá hasta 72 caracteres.',
     noCoinciden: 'Las contraseñas no coinciden. Escribilas de nuevo.',
-    crearYEntrar: 'Crear mi acceso',
-    cuentaCreadaSinIngreso: (motivo: string) =>
-      `Tu acceso quedó creado, pero no pudimos iniciar la sesión: ${motivo} Ingresá con tu correo y la contraseña que elegiste.`,
+    crearYEntrar: 'Guardar contraseña y unirme',
     // Cuenta existente
     yaTenesCuenta:
       'Ese correo ya tiene una cuenta en Conecta. Ingresá con tu contraseña de siempre para sumar esta clínica.',

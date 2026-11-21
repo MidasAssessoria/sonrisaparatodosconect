@@ -1,5 +1,6 @@
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { moduloDeRuta } from '../modulos.js';
 import { sedeInicial } from '../sesion/ProveedorSesion.js';
 import {
   crearAuthFalso,
@@ -64,6 +65,14 @@ describe('navegación y acciones según permisos', () => {
           horarios: [{ diaSemana: 1, horaInicio: '08:00', horaFin: '12:00', intervaloMin: 30 }],
           sillones: [{ id: IDS.factor, sedeId: IDS.sedeCentro, nombre: 'Sillón 1', activo: true }],
         }),
+      },
+      'GET /sedes/:id/agenda': {
+        cuerpo: {
+          sedeId: IDS.sedeCentro,
+          anticipacionMin: 120,
+          diasAdelante: 14,
+          reservaOnlineActiva: false,
+        },
       },
     });
     const { unmount } = renderApp({ auth, fetch: f.fetch, ruta: '/sedes' });
@@ -312,5 +321,27 @@ describe('selector de clínica', () => {
     fireEvent.click(screen.getByRole('menuitem', { name: 'Cerrar sesión' }));
     expect(await screen.findByRole('heading', { name: 'Ingresá a Conecta' })).toBeInTheDocument();
     expect(auth.cerrarSesion).toHaveBeenCalled();
+  });
+});
+
+describe('Experimentos', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('/experimentos/odontograma no existe fuera de desarrollo, ni siquiera para un dueño', async () => {
+    vi.stubEnv('DEV', false);
+    const auth = crearAuthFalso({ conSesion: true });
+    const f = crearFetchFalso({ 'GET /sesion': { cuerpo: sesionDe() } });
+    renderApp({ auth, fetch: f.fetch, ruta: '/experimentos/odontograma' });
+    expect(await screen.findByText('No encontramos esta página.')).toBeInTheDocument();
+  });
+});
+
+describe('moduloDeRuta', () => {
+  it('Roles cuelga de Equipo en la navegación', () => {
+    expect(moduloDeRuta('/roles')).toBe('personal');
+    expect(moduloDeRuta('/personal/abc')).toBe('personal');
+    expect(moduloDeRuta('/rolesx')).toBeUndefined();
   });
 });

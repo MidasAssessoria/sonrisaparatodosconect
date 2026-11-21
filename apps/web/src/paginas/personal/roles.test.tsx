@@ -1,26 +1,22 @@
 import { ACCIONES, MODULOS, type CrearRol, type EditarRol } from '@conecta/shared';
-import { fireEvent, screen, within } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { describe, expect, it } from 'vitest';
 import {
   crearAuthFalso,
   crearFetchFalso,
   IDS,
+  matriz as permisos,
   PERMISOS_ADMINISTRACION,
+  PERMISOS_SOLO_VER_EQUIPO,
+  renderApp as renderPersonal,
+  rolDe,
+  ROL_ADMINISTRACION_COMPLETO,
+  ROL_DUENO_COMPLETO,
   ROL_RECEPCION,
+  ROL_SESION_ADMINISTRACION,
   sesionDe,
   uuid,
 } from '../../test/fabricas.js';
-import {
-  permisos,
-  PERMISOS_SOLO_VER_EQUIPO,
-  renderPersonal,
-  rolDe,
-  ROL_DUENO_COMPLETO,
-} from './pruebas.js';
-
-afterEach(() => {
-  vi.unstubAllGlobals();
-});
 
 const ROLES = [ROL_DUENO_COMPLETO, rolDe()];
 
@@ -166,5 +162,143 @@ describe('Roles', () => {
       inactividadMin: 30,
       permisos: [{ modulo: 'inventario', accion: 'ver' }],
     });
+  });
+
+  it('desde Equipo se llega a Roles', async () => {
+    const auth = crearAuthFalso({ conSesion: true });
+    const f = crearFetchFalso({
+      'GET /sesion': { cuerpo: sesionDe({ permisos: PERMISOS_SOLO_VER_EQUIPO }) },
+      'GET /personal': { cuerpo: [] },
+      'GET /roles': { cuerpo: ROLES },
+    });
+    renderPersonal({ auth, fetch: f.fetch, ruta: '/personal' });
+    fireEvent.click(await screen.findByRole('button', { name: 'Roles y permisos' }));
+    expect(
+      await screen.findByRole('heading', { name: 'Roles y permisos', level: 1 }),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Volver al equipo' }));
+    expect(await screen.findByRole('heading', { name: 'Equipo', level: 1 })).toBeInTheDocument();
+  });
+
+  it('desactivar un rol de la clínica pide motivo y manda DELETE una sola vez', async () => {
+    const auth = crearAuthFalso({ conSesion: true });
+    const propio = rolDe({
+      id: uuid(80),
+      codigo: null,
+      nombre: 'Laboratorio',
+      esSistema: false,
+      personas: 0,
+      permisos: [{ modulo: 'inventario', accion: 'ver' }],
+    });
+    let activo = true;
+    const f = crearFetchFalso({
+      'GET /sesion': { cuerpo: sesionDe() },
+      'GET /roles': () => ({ cuerpo: [...ROLES, { ...propio, activo }] }),
+      'DELETE /roles/:id': () => {
+        activo = false;
+        return { estado: 204 };
+      },
+    });
+    renderPersonal({ auth, fetch: f.fetch, ruta: `/roles?rol=${uuid(80)}` });
+    const detalle = within(await screen.findByRole('region', { name: 'Rol Laboratorio' }));
+    fireEvent.click(detalle.getByRole('button', { name: 'Desactivar rol' }));
+    const hoja = within(
+      await screen.findByRole('dialog', { name: 'Desactivar el rol «Laboratorio»' }),
+    );
+    fireEvent.click(hoja.getByRole('button', { name: 'Confirmar desactivación' }));
+    expect(await hoja.findByText('Contanos el motivo de la baja.')).toBeInTheDocument();
+    fireEvent.change(hoja.getByLabelText(/^Motivo/), { target: { value: 'Ya no tercerizamos' } });
+    const confirmar = hoja.getByRole('button', { name: 'Confirmar desactivación' });
+    fireEvent.click(confirmar);
+    fireEvent.click(confirmar);
+    expect(await screen.findByText('El rol «Laboratorio» quedó desactivado.')).toBeInTheDocument();
+    const bajas = f.pedidos.filter((p) => p.metodo === 'DELETE');
+    expect(bajas).toHaveLength(1);
+    expect(bajas[0]?.url.pathname).toBe(`/api/v1/roles/${uuid(80)}`);
+    expect(bajas[0]?.cuerpo).toEqual({ motivo: 'Ya no tercerizamos' });
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: 'Desactivar rol' })).toBeNull(),
+    );
+  });
+
+  it('los roles de sistema son de solo lectura para quien no es Dueño/a', async () => {
+    const auth = crearAuthFalso({ conSesion: true });
+    const f = crearFetchFalso({
+      'GET /sesion': {
+        cuerpo: sesionDe({ rol: ROL_SESION_ADMINISTRACION, permisos: PERMISOS_ADMINISTRACION }),
+      },
+      'GET /roles': { cuerpo: [...ROLES, ROL_ADMINISTRACION_COMPLETO] },
+    });
+    renderPersonal({ auth, fetch: f.fetch, ruta: `/roles?rol=${IDS.rolRecepcion}` });
+    const detalle = within(await screen.findByRole('region', { name: 'Rol Recepción y caja' }));
+    expect(detalle.getByText(/solo lo edita el Dueño\/a/)).toBeInTheDocument();
+    expect(detalle.queryByRole('button', { name: 'Editar rol' })).toBeNull();
+    expect(detalle.queryByRole('button', { name: 'Desactivar rol' })).toBeNull();
+  });
+
+  it('Administración muestra «Exige doble factor» fijo y lo manda siempre al guardar', async () => {
+    const auth = crearAuthFalso({ conSesion: true });
+    // Un dato viejo sin doble factor: la pantalla igual lo muestra exigido.
+    const admin = { ...ROL_ADMINISTRACION_COMPLETO, exigeMfa: false };
+    const f = crearFetchFalso({
+      'GET /sesion': { cuerpo: sesionDe() },
+      'GET /roles': { cuerpo: [...ROLES, admin] },
+      'PATCH /roles/:id': ({ cuerpo }) => ({ cuerpo: { ...admin, ...(cuerpo as EditarRol) } }),
+    });
+    renderPersonal({ auth, fetch: f.fetch, ruta: `/roles?rol=${IDS.rolAdministracion}` });
+    const detalle = within(await screen.findByRole('region', { name: 'Rol Administración' }));
+    expect(detalle.getByText('Exige doble factor')).toBeInTheDocument();
+    fireEvent.click(detalle.getByRole('button', { name: 'Editar rol' }));
+    const mfa = detalle.getByRole('checkbox', { name: 'Exige doble factor para entrar' });
+    expect(mfa).toBeChecked();
+    expect(mfa).toBeDisabled();
+    fireEvent.click(detalle.getByRole('button', { name: 'Guardar rol' }));
+    expect(await screen.findByText('Rol «Administración» guardado')).toBeInTheDocument();
+    expect(f.pedidos.find((p) => p.metodo === 'PATCH')?.cuerpo).toMatchObject({ exigeMfa: true });
+  });
+
+  it('quien no es Dueño/a solo puede dar los permisos que tiene, y no «todas las sedes» si no lo tiene', async () => {
+    const auth = crearAuthFalso({ conSesion: true });
+    const consulta = rolDe({
+      id: uuid(81),
+      codigo: null,
+      nombre: 'Consulta',
+      esSistema: false,
+      permisos: permisos([['personal', ['ver']]]),
+    });
+    const cajero = rolDe({
+      id: uuid(82),
+      codigo: null,
+      nombre: 'Cajero',
+      esSistema: false,
+      permisos: permisos([['caja', ['ver', 'crear']]]),
+    });
+    const f = crearFetchFalso({
+      'GET /sesion': {
+        cuerpo: sesionDe({ rol: ROL_SESION_ADMINISTRACION, permisos: PERMISOS_ADMINISTRACION }),
+      },
+      'GET /roles': {
+        cuerpo: [
+          ...ROLES,
+          { ...ROL_ADMINISTRACION_COMPLETO, todasLasSedes: false },
+          consulta,
+          cajero,
+        ],
+      },
+    });
+    renderPersonal({ auth, fetch: f.fetch, ruta: `/roles?rol=${uuid(82)}` });
+    // Un rol que da algo que Administración no tiene (caja:crear): no se edita.
+    const cajeroDetalle = within(await screen.findByRole('region', { name: 'Rol Cajero' }));
+    expect(cajeroDetalle.getByText(/da permisos que vos no tenés/)).toBeInTheDocument();
+    expect(cajeroDetalle.queryByRole('button', { name: 'Editar rol' })).toBeNull();
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Ver permisos de Consulta' })[0]!);
+    const detalle = within(await screen.findByRole('region', { name: 'Rol Consulta' }));
+    fireEvent.click(detalle.getByRole('button', { name: 'Editar rol' }));
+    expect(detalle.getByRole('checkbox', { name: 'Caja: Crear' })).toBeDisabled();
+    expect(detalle.getByRole('checkbox', { name: 'Caja: Ver' })).toBeEnabled();
+    expect(
+      detalle.getByRole('checkbox', { name: 'Ve todas las sedes de la clínica' }),
+    ).toBeDisabled();
   });
 });

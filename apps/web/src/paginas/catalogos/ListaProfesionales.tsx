@@ -15,8 +15,7 @@ import { Link, useNavigate } from 'react-router';
 import { Esqueleto, MensajeError } from '../../componentes/estados.js';
 import { useEnvioUnico } from '../../componentes/useEnvioUnico.js';
 import { useSesionLista } from '../../sesion/ProveedorSesion.js';
-import { claves, useApiCatalogos } from './api.js';
-import { usePersonal, useProfesionales } from './consultas.js';
+import { claves, usePersonal, useProfesionales } from './consultas.js';
 import { resumenDias } from './formato.js';
 import { datosProfesional, FormularioProfesional } from './FormularioProfesional.js';
 import './catalogos.css';
@@ -56,8 +55,7 @@ export function ordenarProfesionales(lista: Profesional[]): Profesional[] {
 }
 
 export function ListaProfesionales() {
-  const { puede, sesion } = useSesionLista();
-  const api = useApiCatalogos();
+  const { api, puede, sesion } = useSesionLista();
   const profesionales = useProfesionales();
   const puedeCrear = puede('personal', 'crear');
   const personal = usePersonal();

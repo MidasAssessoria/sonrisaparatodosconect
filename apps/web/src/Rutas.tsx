@@ -1,5 +1,5 @@
 import { Boton, EstadoVacio } from '@conecta/ui';
-import { lazy, Suspense } from 'react';
+import { lazy, Suspense, useEffect } from 'react';
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router';
 import { Armazon, RUTA_SEGURIDAD } from './armazon/Armazon.js';
 import { RutaModulo } from './armazon/RutaModulo.js';
@@ -14,7 +14,12 @@ import { PantallaCarga, PantallaErrorSesion } from './paginas/acceso/PantallasEs
 import { Recuperar } from './paginas/acceso/Recuperar.js';
 import { SegundoFactor } from './paginas/acceso/SegundoFactor.js';
 import { Inicio } from './paginas/Inicio.js';
-import { RUTA_NUEVA_CLAVE, useSesion, useSesionLista } from './sesion/ProveedorSesion.js';
+import {
+  RUTA_INVITACION,
+  RUTA_NUEVA_CLAVE,
+  useSesion,
+  useSesionLista,
+} from './sesion/ProveedorSesion.js';
 
 // Módulos que no hacen falta para entrar: se bajan recién cuando se visitan.
 const ListaSedes = lazy(() =>
@@ -49,9 +54,15 @@ const DetalleProfesional = lazy(() =>
 const Tratamientos = lazy(() =>
   import('./paginas/catalogos/Tratamientos.js').then((m) => ({ default: m.Tratamientos })),
 );
-const PruebaOdontograma = lazy(() =>
-  import('./experimentos/index.js').then((m) => ({ default: m.PruebaOdontograma })),
-);
+/*
+ * Prueba técnica del odontograma 3D: solo en desarrollo. Es un experimento con datos de ejemplo,
+ * no una pantalla del producto, así que no existe en producción para nadie (tampoco para un
+ * dueño). Con `import.meta.env.DEV` falso en el build, Vite descarta este `import()` y three.js
+ * ni siquiera viaja en el bundle de producción.
+ */
+const PruebaOdontograma = import.meta.env.DEV
+  ? lazy(() => import('./experimentos/index.js').then((m) => ({ default: m.PruebaOdontograma })))
+  : null;
 const Seguridad = lazy(() =>
   import('./paginas/Seguridad.js').then((m) => ({ default: m.Seguridad })),
 );
@@ -91,6 +102,25 @@ function VolverTrasIngresar() {
   return <Navigate to={desde && !desde.startsWith('/acceso') ? desde : '/'} replace />;
 }
 
+/** Fuera de la página de invitación sin haber aceptado: sigue el flujo normal de la sesión. */
+function SeguirSinInvitacion() {
+  const t = useTextos();
+  const { seguirSinInvitacion } = useSesion();
+  useEffect(() => {
+    void seguirSinInvitacion();
+  }, [seguirSinInvitacion]);
+  return <PantallaCarga texto={t.armazon.cargandoSesion} />;
+}
+
+/** Invitación abierta con la app ya cargada: se acepta antes de seguir (fase `invitacion`). */
+function AbrirInvitacion() {
+  const { abrirInvitacion } = useSesion();
+  useEffect(() => {
+    abrirInvitacion();
+  }, [abrirInvitacion]);
+  return null;
+}
+
 function IrAAcceso() {
   const ubicacion = useLocation();
   const estado: EstadoDesde = { desde: ubicacion.pathname + ubicacion.search };
@@ -116,6 +146,20 @@ export function Rutas() {
       return <NuevaClave />;
     case 'error':
       return <PantallaErrorSesion mensaje={estado.mensaje} />;
+    case 'invitacion':
+      return (
+        <Routes>
+          <Route
+            path={RUTA_INVITACION}
+            element={
+              <Suspense fallback={<PantallaCarga texto={t.comun.cargando} />}>
+                <AceptarInvitacion />
+              </Suspense>
+            }
+          />
+          <Route path="*" element={<SeguirSinInvitacion />} />
+        </Routes>
+      );
     case 'sin_sesion':
       return (
         <Routes>
@@ -123,7 +167,7 @@ export function Rutas() {
           <Route path="/acceso/recuperar" element={<Recuperar />} />
           <Route path={RUTA_NUEVA_CLAVE} element={<NuevaClave />} />
           <Route
-            path="/invitacion"
+            path={RUTA_INVITACION}
             element={
               <Suspense fallback={<PantallaCarga texto={t.comun.cargando} />}>
                 <AceptarInvitacion />
@@ -211,10 +255,12 @@ export function Rutas() {
                   </RutaModulo>
                 }
               />
-              {/* Prueba técnica del Sprint 2: el odontograma 3D de la maqueta como componente. */}
-              <Route path="/experimentos/odontograma" element={<PruebaOdontograma />} />
-              {/* Invitación abierta con una sesión ya iniciada (cuenta existente). */}
-              <Route path="/invitacion" element={<AceptarInvitacion />} />
+              {/* Prueba técnica del Sprint 2 (odontograma 3D): solo en desarrollo. */}
+              {import.meta.env.DEV && PruebaOdontograma ? (
+                <Route path="/experimentos/odontograma" element={<PruebaOdontograma />} />
+              ) : null}
+              {/* Invitación abierta con la app cargada: se acepta fuera del armazón. */}
+              <Route path={RUTA_INVITACION} element={<AbrirInvitacion />} />
               <Route path={RUTA_SEGURIDAD} element={<Seguridad />} />
               <Route path="/acceso/*" element={<VolverTrasIngresar />} />
               <Route path="*" element={<NoEncontrada />} />

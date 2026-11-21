@@ -9,9 +9,10 @@ import { useSesionLista } from '../../sesion/ProveedorSesion.js';
 import { useAccionesInvitacion } from './AccionesInvitacion.js';
 import { ChipEstadoPersona, ElegirSedes, EnlaceUnaVez, HojaConMotivo } from './componentes.js';
 import {
+  mensajeRechazo,
+  personaAlAlcance,
   rolesAsignables,
   useActualizarEquipo,
-  useApiPersonal,
   usePersonal,
   useRoles,
 } from './consultas.js';
@@ -44,18 +45,19 @@ function FormularioEditarPersona({
   const opciones = roles.some((r) => r.id === persona.rol.id)
     ? roles
     : [{ id: persona.rol.id, nombre: persona.rol.nombre } as Rol, ...roles];
-  // Si la sede por defecto actual es una que quien edita no ve, se conserva.
-  const defectoOculto =
-    persona.sedeDefectoId && !visibles.has(persona.sedeDefectoId) ? persona.sedeDefectoId : null;
+  // La sede por defecto actual es una que quien edita no ve: no se toca (no se manda).
+  const defectoOculto = !!persona.sedeDefectoId && !visibles.has(persona.sedeDefectoId);
 
   function enviar(e: FormEvent) {
     e.preventDefault();
-    onGuardar({
-      rolId,
-      // Las sedes que quien edita no ve no se tocan.
-      sedeIds: [...ocultas, ...elegidas],
-      sedeDefectoId: defecto || defectoOculto || null,
-    });
+    const datos: EditarPersona = {
+      // Solo las sedes que quien edita ve: las otras las conserva la API, y mandarlas da 403.
+      sedeIds: elegidas,
+    };
+    if (rolId !== persona.rol.id) datos.rolId = rolId;
+    if (defecto) datos.sedeDefectoId = defecto;
+    else if (!defectoOculto) datos.sedeDefectoId = null;
+    onGuardar(datos);
   }
 
   return (
@@ -77,15 +79,14 @@ function FormularioEditarPersona({
         }}
       />
       {ocultas.length > 0 ? <p className="w-secundario">{T.persona.sedesOcultas}</p> : null}
-      {error ? <MensajeError error={error} /> : null}
+      {error ? <MensajeError texto={mensajeRechazo(error)} /> : null}
     </form>
   );
 }
 
 export function DetallePersona() {
   const { id = '' } = useParams();
-  const { sesion, puede } = useSesionLista();
-  const api = useApiPersonal();
+  const { api, sesion, puede } = useSesionLista();
   const personal = usePersonal();
   const actualizar = useActualizarEquipo();
   const navegar = useNavigate();
@@ -112,17 +113,17 @@ export function DetallePersona() {
   });
   const desactivar = useMutation({
     mutationFn: (motivo: string) => api.personal.desactivar(id, { motivo }),
-    onSuccess: async () => {
+    onSuccess: async (p) => {
       setDesactivando(false);
       setAviso(T.persona.desactivada);
-      await actualizar();
+      await actualizar(p);
     },
   });
   const reactivar = useMutation({
     mutationFn: () => api.personal.reactivar(id),
-    onSuccess: async () => {
+    onSuccess: async (p) => {
       setAviso(T.persona.reactivada);
-      await actualizar();
+      await actualizar(p);
     },
   });
   const acciones = useAccionesInvitacion({
@@ -152,58 +153,61 @@ export function DetallePersona() {
   }
 
   const esPropia = persona.usuarioId !== null && persona.usuarioId === sesion.usuario.id;
+  // Una persona con sedes que quien mira no ve: sin acciones (la API las rechazaría).
+  const alAlcance = personaAlAlcance(persona, sesion);
   const nombreSede = (sid: string | null) =>
     sid ? (sesion.sedes.find((s) => s.id === sid)?.nombre ?? T.equipo.sedeOculta(1)) : '—';
 
-  const botones = esPropia ? null : (
-    <>
-      {puedeEditar && persona.estado !== 'inactivo' ? (
-        <Boton
-          variante="secundario"
-          onClick={() => {
-            editar.reset();
-            setEditando(true);
-          }}
-        >
-          {T.persona.editar}
-        </Boton>
-      ) : null}
-      {persona.estado === 'pendiente' && puede('personal', 'crear') ? (
-        <Boton
-          variante="secundario"
-          icono="sincronizar"
-          onClick={() => acciones.abrirReenviar(persona)}
-        >
-          {T.equipo.reenviar}
-        </Boton>
-      ) : null}
-      {persona.estado === 'pendiente' && puedeAnular ? (
-        <Boton variante="peligro" onClick={() => acciones.abrirAnular(persona)}>
-          {T.equipo.anular}
-        </Boton>
-      ) : null}
-      {persona.estado === 'activo' && puedeAnular ? (
-        <Boton
-          variante="peligro"
-          onClick={() => {
-            desactivar.reset();
-            setDesactivando(true);
-          }}
-        >
-          {T.persona.desactivar}
-        </Boton>
-      ) : null}
-      {persona.estado === 'inactivo' && persona.usuarioId && puedeEditar ? (
-        <Boton
-          variante="primario"
-          cargando={reactivar.isPending}
-          onClick={() => void unaVez(() => reactivar.mutateAsync().catch(() => undefined))}
-        >
-          {T.persona.reactivar}
-        </Boton>
-      ) : null}
-    </>
-  );
+  const botones =
+    esPropia || !alAlcance ? null : (
+      <>
+        {puedeEditar && persona.estado !== 'inactivo' ? (
+          <Boton
+            variante="secundario"
+            onClick={() => {
+              editar.reset();
+              setEditando(true);
+            }}
+          >
+            {T.persona.editar}
+          </Boton>
+        ) : null}
+        {persona.estado === 'pendiente' && puede('personal', 'crear') ? (
+          <Boton
+            variante="secundario"
+            icono="sincronizar"
+            onClick={() => acciones.abrirReenviar(persona)}
+          >
+            {T.equipo.reenviar}
+          </Boton>
+        ) : null}
+        {persona.estado === 'pendiente' && puedeAnular ? (
+          <Boton variante="peligro" onClick={() => acciones.abrirAnular(persona)}>
+            {T.equipo.anular}
+          </Boton>
+        ) : null}
+        {persona.estado === 'activo' && puedeAnular ? (
+          <Boton
+            variante="peligro"
+            onClick={() => {
+              desactivar.reset();
+              setDesactivando(true);
+            }}
+          >
+            {T.persona.desactivar}
+          </Boton>
+        ) : null}
+        {persona.estado === 'inactivo' && persona.usuarioId && puedeEditar ? (
+          <Boton
+            variante="primario"
+            cargando={reactivar.isPending}
+            onClick={() => void unaVez(() => reactivar.mutateAsync().catch(() => undefined))}
+          >
+            {T.persona.reactivar}
+          </Boton>
+        ) : null}
+      </>
+    );
 
   return (
     <>
@@ -218,10 +222,15 @@ export function DetallePersona() {
         />
       ) : null}
       {aviso ? <AvisoExito titulo={aviso} onCerrar={() => setAviso(null)} /> : null}
-      {reactivar.isError ? <MensajeError error={reactivar.error} /> : null}
+      {reactivar.isError ? <MensajeError texto={mensajeRechazo(reactivar.error)} /> : null}
       {esPropia ? (
         <p className="w-nota" role="note">
           {T.persona.propia}
+        </p>
+      ) : null}
+      {!esPropia && !alAlcance && (puedeEditar || puedeAnular) ? (
+        <p className="w-nota" role="note">
+          {T.persona.fueraDeAlcance}
         </p>
       ) : null}
       {persona.estado === 'inactivo' && !persona.usuarioId ? (
@@ -289,7 +298,7 @@ export function DetallePersona() {
         </dl>
       </section>
 
-      {puedeEditar && !esPropia ? (
+      {puedeEditar && !esPropia && alAlcance ? (
         <HojaInferior
           abierta={editando}
           titulo={T.persona.tituloEditar}
@@ -319,7 +328,7 @@ export function DetallePersona() {
             <FormularioEditarPersona
               id={idForm}
               persona={persona}
-              roles={rolesAsignables(roles.data, sesion.rol.codigo)}
+              roles={rolesAsignables(roles.data, sesion)}
               sedes={sesion.sedes}
               onGuardar={(d) => void unaVez(() => editar.mutateAsync(d).catch(() => undefined))}
               error={editar.error}
@@ -328,7 +337,7 @@ export function DetallePersona() {
         </HojaInferior>
       ) : null}
 
-      {puedeAnular && desactivando ? (
+      {puedeAnular && desactivando && alAlcance ? (
         <HojaConMotivo
           abierta
           titulo={T.persona.tituloDesactivar(persona.nombre)}

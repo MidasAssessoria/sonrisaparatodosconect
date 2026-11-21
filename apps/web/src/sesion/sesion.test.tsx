@@ -1,6 +1,7 @@
 import { QueryClientProvider } from '@tanstack/react-query';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { useEffect } from 'react';
+import { MemoryRouter } from 'react-router';
 import { describe, expect, it } from 'vitest';
 import { crearClienteConsultas } from '../App.js';
 import { ProveedorIdioma } from '../i18n/idioma.js';
@@ -25,7 +26,7 @@ const DOS_CLINICAS = [
 ];
 
 /** Proveedor con un espía que deja usar el contexto desde la prueba. */
-function renderProveedor(auth: AuthFalso, fetchFalso: typeof fetch) {
+function renderProveedor(auth: AuthFalso, fetchFalso: typeof fetch, ruta = '/') {
   const ref: { actual: ValorSesion | null } = { actual: null };
   function Espia() {
     const v = useSesion();
@@ -37,13 +38,15 @@ function renderProveedor(auth: AuthFalso, fetchFalso: typeof fetch) {
     return <p data-testid="fase">{texto}</p>;
   }
   render(
-    <ProveedorIdioma>
-      <QueryClientProvider client={crearClienteConsultas()}>
-        <ProveedorSesion auth={auth} fetch={fetchFalso}>
-          <Espia />
-        </ProveedorSesion>
-      </QueryClientProvider>
-    </ProveedorIdioma>,
+    <MemoryRouter initialEntries={[ruta]}>
+      <ProveedorIdioma>
+        <QueryClientProvider client={crearClienteConsultas()}>
+          <ProveedorSesion auth={auth} fetch={fetchFalso}>
+            <Espia />
+          </ProveedorSesion>
+        </QueryClientProvider>
+      </ProveedorIdioma>
+    </MemoryRouter>,
   );
   return () => {
     if (!ref.actual) throw new Error('El proveedor todavía no montó');

@@ -1,12 +1,13 @@
 import { fireEvent, screen, within } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { IDS, PERMISOS_LECTURA_SEDES, ROL_LECTURA_SEDES, sedeDe } from '../../test/fabricas.js';
+import { describe, expect, it } from 'vitest';
+import {
+  IDS,
+  montar,
+  PERMISOS_LECTURA_SEDES,
+  ROL_LECTURA_SEDES,
+  sedeDe,
+} from '../../test/fabricas.js';
 import { textoAnticipacion } from '../sedes/ReservaOnline.js';
-import { montar } from './ayudasPrueba.js';
-
-afterEach(() => {
-  vi.unstubAllGlobals();
-});
 
 /** Lo que devuelve la API si la sede todavía no tiene configuración. */
 const POR_DEFECTO = {

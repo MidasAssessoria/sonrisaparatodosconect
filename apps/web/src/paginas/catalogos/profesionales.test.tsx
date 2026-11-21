@@ -1,15 +1,31 @@
-import type { Bloqueo, Permiso, Profesional, TramoDisponibilidad } from '@conecta/shared';
+import type { Bloqueo, Permiso, Persona, Profesional, TramoDisponibilidad } from '@conecta/shared';
 import { COLORES } from '@conecta/ui';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { IDS, sedeDe, uuid } from '../../test/fabricas.js';
-import { IDS_CATALOGO, montar, personaDe, profesionalDe } from './ayudasPrueba.js';
+import { describe, expect, it } from 'vitest';
+import {
+  IDS,
+  IDS_CATALOGO,
+  montar,
+  personaDe as personaBase,
+  profesionalDe,
+  sedeDe,
+  uuid,
+} from '../../test/fabricas.js';
+
+/** Gloria, asistente sin profesional asociado. */
+function personaDe(parcial: Partial<Persona> = {}): Persona {
+  return personaBase({
+    membresiaId: IDS_CATALOGO.membresiaGloria,
+    usuarioId: uuid(541),
+    nombre: 'Gloria Páez',
+    email: 'gloria@ejemplo.test',
+    rol: { id: IDS.rol, codigo: 'asistente', nombre: 'Asistente' },
+    ultimoAcceso: null,
+    ...parcial,
+  });
+}
 import { validarDisponibilidad, type SedeDisponible } from './disponibilidad.js';
 import { instanteLocal, resumenDias } from './formato.js';
-
-afterEach(() => {
-  vi.unstubAllGlobals();
-});
 
 const SILLON = {
   id: IDS_CATALOGO.sillonCentro,

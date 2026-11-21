@@ -10,7 +10,7 @@ import {
 } from '@conecta/ui';
 import { useMutation } from '@tanstack/react-query';
 import { useId, useState } from 'react';
-import { Link } from 'react-router';
+import { Link, useNavigate } from 'react-router';
 import { Esqueleto, MensajeError } from '../../componentes/estados.js';
 import { useEnvioUnico } from '../../componentes/useEnvioUnico.js';
 import { useSesionLista } from '../../sesion/ProveedorSesion.js';
@@ -18,9 +18,9 @@ import { useAccionesInvitacion } from './AccionesInvitacion.js';
 import { ChipEstadoPersona, EnlaceUnaVez, Segmento } from './componentes.js';
 import { textoAcceso, textoSedes } from './formato.js';
 import {
+  personaAlAlcance,
   rolesAsignables,
   useActualizarEquipo,
-  useApiPersonal,
   usePersonal,
   useRoles,
 } from './consultas.js';
@@ -30,8 +30,8 @@ import { T, TEXTO_ESTADO_PERSONA } from './textos.js';
 type Filtro = 'todos' | EstadoMembresia;
 
 export function ListaPersonal() {
-  const { sesion, puede } = useSesionLista();
-  const api = useApiPersonal();
+  const { api, sesion, puede } = useSesionLista();
+  const navegar = useNavigate();
   const personal = usePersonal();
   const actualizar = useActualizarEquipo();
   const unaVez = useEnvioUnico();
@@ -52,7 +52,7 @@ export function ListaPersonal() {
       setHojaAbierta(false);
       setAviso(null);
       setEnlace({ inv, reenvio: false });
-      await actualizar();
+      await actualizar(inv.persona);
     },
   });
 
@@ -92,7 +92,7 @@ export function ListaPersonal() {
       clave: 'acciones',
       titulo: 'Acciones',
       render: (p) =>
-        p.estado === 'pendiente' ? (
+        p.estado === 'pendiente' && personaAlAlcance(p, sesion) ? (
           <span className="w-acciones-fila">
             {puedeCrear ? (
               <Boton
@@ -129,11 +129,16 @@ export function ListaPersonal() {
       <EncabezadoPagina
         titulo={T.equipo.titulo}
         acciones={
-          puedeCrear ? (
-            <Boton variante="primario" icono="mas" onClick={abrirInvitar}>
-              {T.equipo.invitar}
+          <>
+            <Boton variante="secundario" icono="candado" onClick={() => void navegar('/roles')}>
+              {T.equipo.roles}
             </Boton>
-          ) : null
+            {puedeCrear ? (
+              <Boton variante="primario" icono="mas" onClick={abrirInvitar}>
+                {T.equipo.invitar}
+              </Boton>
+            ) : null}
+          </>
         }
       />
 
@@ -211,7 +216,7 @@ export function ListaPersonal() {
           {hojaAbierta && roles.isSuccess ? (
             <FormularioInvitacion
               id={idForm}
-              roles={rolesAsignables(roles.data, sesion.rol.codigo)}
+              roles={rolesAsignables(roles.data, sesion)}
               sedes={sesion.sedes}
               onEnviar={(d) => void unaVez(() => invitar.mutateAsync(d).catch(() => undefined))}
               error={invitar.error}

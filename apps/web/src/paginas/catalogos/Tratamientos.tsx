@@ -16,8 +16,7 @@ import { useId, useState } from 'react';
 import { Esqueleto, MensajeError } from '../../componentes/estados.js';
 import { useEnvioUnico } from '../../componentes/useEnvioUnico.js';
 import { useSesionLista } from '../../sesion/ProveedorSesion.js';
-import { claves, useApiCatalogos } from './api.js';
-import { useTratamientos } from './consultas.js';
+import { claves, useTratamientos } from './consultas.js';
 import { TEXTO_IVA, textoMinutos } from './formato.js';
 import { datosTratamiento, FormularioTratamiento } from './FormularioTratamiento.js';
 import { EstadoActivo } from './ListaProfesionales.js';
@@ -46,8 +45,7 @@ function aEdicion(d: CrearTratamiento): EditarTratamiento {
 }
 
 export function Tratamientos() {
-  const { puede, sesion } = useSesionLista();
-  const api = useApiCatalogos();
+  const { api, puede, sesion } = useSesionLista();
   const tratamientos = useTratamientos();
   const consultas = useQueryClient();
   const idForm = useId();

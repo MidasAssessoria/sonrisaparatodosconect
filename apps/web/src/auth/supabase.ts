@@ -156,7 +156,17 @@ export function crearServicioAuthDesdeEntorno(): ServicioAuth | null {
   const clave = import.meta.env['VITE_SUPABASE_PUBLISHABLE_KEY'] as string | undefined;
   if (!url || !clave) return null;
   const cliente = createClient(url, clave, {
-    auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
+    auth: {
+      persistSession: true,
+      autoRefreshToken: true,
+      // Los enlaces de los correos de Supabase (invitación y recuperación) vuelven con la sesión
+      // en el hash (`#access_token=…&type=invite`). Tienen que ser `implicit`: la invitación la
+      // inicia la API con `inviteUserByEmail`, así que en el navegador no hay `code_verifier`
+      // para un `?code=` de PKCE. `detectSessionInUrl` la toma al iniciar, antes de que
+      // `getSession()` responda, y limpia el hash; el `?token=` de la invitación queda.
+      detectSessionInUrl: true,
+      flowType: 'implicit',
+    },
   });
   return crearServicioAuthSupabase(cliente);
 }

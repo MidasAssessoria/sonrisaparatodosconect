@@ -6,7 +6,7 @@ import { MensajeError } from '../../componentes/estados.js';
 import { useEnvioUnico } from '../../componentes/useEnvioUnico.js';
 import { useSesionLista } from '../../sesion/ProveedorSesion.js';
 import { formatoFechaHora } from '../../utilidades/fechas.js';
-import { claves, useApiCatalogos } from './api.js';
+import { claves } from './consultas.js';
 import { instanteLocal } from './formato.js';
 
 interface DatosBloqueo {
@@ -101,9 +101,8 @@ export function Bloqueos({
   bloqueos: Bloqueo[];
   editable: boolean;
 }) {
-  const { sesion } = useSesionLista();
+  const { api, sesion } = useSesionLista();
   const zona = sesion.clinica.zonaHoraria;
-  const api = useApiCatalogos();
   const consultas = useQueryClient();
   const unaVezAlta = useEnvioUnico();
   const unaVezBaja = useEnvioUnico();

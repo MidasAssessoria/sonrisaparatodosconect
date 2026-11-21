@@ -3,7 +3,8 @@ import { useMutation } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useEnvioUnico } from '../../componentes/useEnvioUnico.js';
 import { HojaConfirmar, HojaConMotivo } from './componentes.js';
-import { useActualizarEquipo, useApiPersonal } from './consultas.js';
+import { useSesionLista } from '../../sesion/ProveedorSesion.js';
+import { useActualizarEquipo } from './consultas.js';
 import { T } from './textos.js';
 
 type Objetivo = { tipo: 'reenviar' | 'anular'; persona: Persona } | null;
@@ -16,7 +17,7 @@ export function useAccionesInvitacion({
   onEnlace: (inv: InvitacionCreada) => void;
   onAnulada: (persona: Persona) => void;
 }) {
-  const api = useApiPersonal();
+  const { api } = useSesionLista();
   const actualizar = useActualizarEquipo();
   const unaVez = useEnvioUnico();
   const [objetivo, setObjetivo] = useState<Objetivo>(null);

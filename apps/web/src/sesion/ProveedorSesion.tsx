@@ -10,6 +10,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
+import { useLocation } from 'react-router';
 import { crearClienteApi, type ClienteApi } from '../api/cliente.js';
 import { ErrorConecta, reaccionPorCodigo } from '../api/errores.js';
 import type { ServicioAuth, SesionAuth } from '../auth/servicioAuth.js';
@@ -30,6 +31,12 @@ import {
 /** Ruta a la que vuelve el enlace del correo de recuperación. */
 export const RUTA_NUEVA_CLAVE = '/acceso/nueva-clave';
 
+/**
+ * Página de invitación. Mientras la persona está acá sin haber aceptado, la sesión de la app
+ * (`GET /sesion`) no se carga: puede no ser miembro de ninguna clínica todavía.
+ */
+export const RUTA_INVITACION = '/invitacion';
+
 /** Cuánto se espera el aviso de cierre a la API antes de salir igual. */
 const ESPERA_AVISO_CIERRE_MS = 3000;
 
@@ -46,6 +53,11 @@ export type Fase =
   | { fase: 'activar_segundo_factor' }
   | { fase: 'cargando_sesion' }
   | { fase: 'elegir_clinica'; clinicas: { id: string; nombre: string }[]; actualId: string | null }
+  /**
+   * Con cuenta de Supabase (ingresó acá o volvió del correo de invitación) pero sin cargar la
+   * sesión de la app: primero acepta la invitación, después entra a esa clínica.
+   */
+  | { fase: 'invitacion'; usuario: SesionAuth }
   | { fase: 'error'; mensaje: string }
   | { fase: 'lista'; sesion: Sesion };
 
@@ -88,6 +100,12 @@ export interface ValorSesion {
   /** Reintento manual desde la pantalla de error (p. ej. 503 al arrancar). */
   reintentar: () => void;
   terminarRecuperacion: () => Promise<void>;
+  /** Invitación aceptada: entra a la clínica nueva (recién ahora pide `GET /sesion`). */
+  terminarInvitacion: (clinicaId: string) => Promise<void>;
+  /** Salió de la página de invitación sin aceptar: sigue el flujo normal de la sesión. */
+  seguirSinInvitacion: () => Promise<void>;
+  /** Abrió una invitación con la app ya cargada: vuelve a la fase de invitación. */
+  abrirInvitacion: () => void;
   cerrarSesion: (motivo?: MotivoCierre) => Promise<void>;
 }
 
@@ -169,6 +187,13 @@ interface PropsProveedor {
 export function ProveedorSesion({ auth, fetch: fetchImpl, baseApi, children }: PropsProveedor) {
   const t = useTextos();
   const consultas = useQueryClient();
+  const { pathname } = useLocation();
+  const refRuta = useRef(pathname);
+  useEffect(() => {
+    refRuta.current = pathname;
+  }, [pathname]);
+  /** ¿La persona está en la página de invitación (sin haber aceptado)? */
+  const enInvitacion = useCallback(() => refRuta.current === RUTA_INVITACION, []);
   const [estado, setEstado] = useState<Fase>({ fase: 'iniciando' });
   const [sedeActiva, setSedeActiva] = useState<SedeActiva>({ tipo: 'ninguna' });
 
@@ -360,13 +385,26 @@ export function ProveedorSesion({ auth, fetch: fetchImpl, baseApi, children }: P
       refUsuario.current = usuario;
       const nivel = await auth.nivel();
       if (!vigente(g)) return;
+      // Con doble factor, el código se pide primero (también antes de aceptar una invitación).
       if (nivel.actual === 'aal1' && nivel.siguiente === 'aal2') {
         await pasarASegundoFactor(g);
         return;
       }
+      if (enInvitacion()) {
+        cambiarEstado({ fase: 'invitacion', usuario });
+        return;
+      }
       await cargarSesion(opciones);
     },
-    [auth, cargarSesion, pasarASegundoFactor, nuevaGeneracion, vigente],
+    [
+      auth,
+      cargarSesion,
+      pasarASegundoFactor,
+      nuevaGeneracion,
+      vigente,
+      enInvitacion,
+      cambiarEstado,
+    ],
   );
 
   /** Arranque: ¿hay sesión guardada por Supabase? */
@@ -524,6 +562,12 @@ export function ProveedorSesion({ auth, fetch: fetchImpl, baseApi, children }: P
       verificarSegundoFactor: async (codigo) => {
         if (estado.fase !== 'segundo_factor') return;
         await auth.verificarCodigo(estado.factorId, codigo);
+        const usuario = refUsuario.current;
+        if (usuario && enInvitacion()) {
+          nuevaGeneracion();
+          cambiarEstado({ fase: 'invitacion', usuario });
+          return;
+        }
         await cargarSesion();
       },
       terminarActivacion: async () => {
@@ -561,6 +605,26 @@ export function ProveedorSesion({ auth, fetch: fetchImpl, baseApi, children }: P
         marcarActividad();
         await continuarTrasAutenticar(usuario);
       },
+      terminarInvitacion: async (clinicaId) => {
+        const usuario = refUsuario.current;
+        if (!usuario) return;
+        // Aceptar cuenta como actividad, y la clínica nueva queda como la recordada.
+        marcarActividad();
+        escribir(claves.clinica(usuario.usuarioId), clinicaId);
+        consultas.clear();
+        await cargarSesion({ clinicaElegida: clinicaId });
+      },
+      seguirSinInvitacion: async () => {
+        if (refEstado.current.fase !== 'invitacion') return;
+        await cargarSesion();
+      },
+      abrirInvitacion: () => {
+        const usuario = refUsuario.current;
+        if (!usuario || refEstado.current.fase !== 'lista') return;
+        nuevaGeneracion();
+        enlace.fijarClinica(null);
+        cambiarEstado({ fase: 'invitacion', usuario });
+      },
       cerrarSesion,
     };
   }, [
@@ -578,6 +642,8 @@ export function ProveedorSesion({ auth, fetch: fetchImpl, baseApi, children }: P
     consultas,
     nuevaGeneracion,
     cambiarEstado,
+    enInvitacion,
+    enlace,
   ]);
 
   return <ContextoSesion.Provider value={valor}>{children}</ContextoSesion.Provider>;

@@ -3,6 +3,7 @@ import { Campo } from '@conecta/ui';
 import { useState, type FormEvent } from 'react';
 import { MensajeError } from '../../componentes/estados.js';
 import { ElegirSedes } from './componentes.js';
+import { mensajeRechazo } from './consultas.js';
 import { T } from './textos.js';
 
 type Errores = Partial<Record<'nombre' | 'email' | 'rolId' | 'sedeDefectoId', string>>;
@@ -113,7 +114,7 @@ export function FormularioInvitacion({
         onCambio={(sedeIds, sedeDefectoId) => setD({ ...d, sedeIds, sedeDefectoId })}
         error={errores.sedeDefectoId}
       />
-      {error ? <MensajeError error={error} /> : null}
+      {error ? <MensajeError texto={mensajeRechazo(error)} /> : null}
     </form>
   );
 }

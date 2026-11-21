@@ -1,13 +1,19 @@
 import type { Permiso, Tratamiento } from '@conecta/shared';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { PERMISOS_ADMINISTRACION } from '../../test/fabricas.js';
-import { IDS_CATALOGO, montar, tratamientoDe } from './ayudasPrueba.js';
+import { describe, expect, it } from 'vitest';
+import { TEXTO_SERVICIO_NO_DISPONIBLE } from '../../api/errores.js';
+import {
+  crearAuthFalso,
+  crearFetchFalso,
+  IDS,
+  IDS_CATALOGO,
+  montar,
+  PERMISOS_ADMINISTRACION,
+  renderApp,
+  sesionDe,
+  tratamientoDe,
+} from '../../test/fabricas.js';
 import { conMiles, montoDesdeTexto, soloDigitos, textoMinutos } from './formato.js';
-
-afterEach(() => {
-  vi.unstubAllGlobals();
-});
 
 const CATALOGO: Tratamiento[] = [
   tratamientoDe(),
@@ -212,5 +218,33 @@ describe('Tratamientos', () => {
     expect(screen.queryByRole('button', { name: /^Editar/ })).toBeNull();
     expect(screen.queryByRole('button', { name: /^Desactivar/ })).toBeNull();
     expect(t.queryByRole('columnheader', { name: 'Acciones' })).toBeNull();
+  });
+});
+
+describe('Tratamientos con el cliente de API único', () => {
+  it('un 503 sin cuerpo muestra «el servicio no responde» y no se reintenta solo', async () => {
+    const f = montar({ 'GET /tratamientos': { estado: 503 } }, '/tratamientos');
+    expect(await screen.findByText(TEXTO_SERVICIO_NO_DISPONIBLE)).toBeInTheDocument();
+    await new Promise((r) => setTimeout(r, 300));
+    expect(f.pedidos.filter((p) => p.url.pathname === '/api/v1/tratamientos')).toHaveLength(1);
+    // Reintento manual.
+    expect(screen.getByRole('button', { name: 'Probá de nuevo' })).toBeInTheDocument();
+  });
+
+  it('mfa_requerido lleva a pedir el código, como en el resto de la app', async () => {
+    const auth = crearAuthFalso({
+      conSesion: true,
+      factores: [{ id: IDS.factor, nombre: 'Conecta', verificado: true }],
+    });
+    const f = crearFetchFalso({
+      'GET /sesion': { cuerpo: sesionDe() },
+      'GET /tratamientos': {
+        estado: 401,
+        cuerpo: { codigo: 'mfa_requerido', mensaje: 'Confirmá el código de tu app.' },
+      },
+    });
+    renderApp({ auth, fetch: f.fetch, ruta: '/tratamientos' });
+    expect(await screen.findByLabelText('Código de 6 dígitos')).toBeInTheDocument();
+    expect(f.pedidos.filter((p) => p.url.pathname === '/api/v1/sesion')).toHaveLength(1);
   });
 });
