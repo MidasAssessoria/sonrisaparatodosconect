@@ -11,6 +11,7 @@ import { DarDeBaja } from './DarDeBaja.js';
 import { EditorHorarios } from './EditorHorarios.js';
 import { infoEstadoSede, COLORES_SEDE } from './estadoSede.js';
 import { datosIniciales, FormularioSede } from './FormularioSede.js';
+import { ReservaOnline } from './ReservaOnline.js';
 import { Sillones } from './Sillones.js';
 import type { EstadoNavegacionSedes } from './ListaSedes.js';
 
@@ -192,6 +193,15 @@ export function DetalleSede() {
               await actualizar();
             }}
           />
+        </div>
+      </section>
+
+      <section className="w-seccion" aria-labelledby="w-sede-reserva">
+        <h2 id="w-sede-reserva" className="w-seccion__titulo">
+          Reserva online
+        </h2>
+        <div className="w-tarjeta">
+          <ReservaOnline key={sede.id} sedeId={sede.id} />
         </div>
       </section>
 
