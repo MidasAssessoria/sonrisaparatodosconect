@@ -1,0 +1,239 @@
+/* Equipo, Roles e Invitación. Mobile-first; zonas táctiles de 44 px. */
+
+/* ---------- Segmento (filtro) ---------- */
+.w-segmento {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--espacio-2);
+  margin-bottom: var(--espacio-6);
+}
+.w-segmento__opcion {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--espacio-1);
+  min-height: var(--toque-minimo);
+  padding: var(--espacio-2) var(--espacio-4);
+  border: 1px solid var(--borde-control);
+  border-radius: var(--radio-pill);
+  background: var(--blanco);
+  color: var(--tinta);
+  font: var(--tipo-cuerpo-fuerte);
+  cursor: pointer;
+}
+.w-segmento__opcion[aria-pressed='true'] {
+  background: var(--turquesa-suave);
+  border-color: var(--turquesa-texto);
+}
+.w-segmento__opcion:focus-visible {
+  outline: 3px solid var(--foco);
+  outline-offset: 2px;
+}
+
+/* ---------- Casillas ---------- */
+.w-grupo-casillas {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--espacio-1);
+}
+.w-grupo-casillas__leyenda {
+  font: var(--tipo-etiqueta);
+  padding: 0;
+  margin-bottom: var(--espacio-1);
+}
+.w-casilla {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--espacio-3);
+  min-height: var(--toque-minimo);
+  cursor: pointer;
+}
+.w-casilla input {
+  width: 22px;
+  height: 22px;
+  flex: none;
+  accent-color: var(--turquesa-texto);
+}
+.w-casilla input:focus-visible {
+  outline: 3px solid var(--foco);
+  outline-offset: 2px;
+}
+
+/* ---------- Persona en la lista ---------- */
+.w-persona-nombre {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.w-acciones-fila {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--espacio-2);
+}
+
+/* ---------- Enlace que se muestra una vez ---------- */
+.w-enlace-invitacion {
+  display: flex;
+  flex-direction: column;
+  gap: var(--espacio-3);
+  background: var(--blanco);
+  border: 1px solid var(--borde);
+  border-radius: var(--radio-tarjeta);
+  box-shadow: var(--sombra-2);
+  padding: var(--espacio-4);
+  margin-bottom: var(--espacio-6);
+}
+.w-enlace-invitacion__cabecera {
+  display: flex;
+  align-items: center;
+  gap: var(--espacio-3);
+}
+.w-enlace-invitacion__sello {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radio-pill);
+  background: var(--turquesa);
+  color: var(--sobre-turquesa);
+  flex: none;
+}
+.w-enlace-invitacion__titulo {
+  margin: 0;
+  font: var(--tipo-titulo-tarjeta);
+}
+.w-enlace-invitacion__etiqueta {
+  font: var(--tipo-etiqueta);
+}
+.w-enlace-invitacion__url {
+  width: 100%;
+  min-height: var(--control);
+  padding: var(--espacio-2) var(--espacio-3);
+  border: 1px solid var(--borde-control);
+  border-radius: var(--radio-control);
+  background: var(--fondo-suave);
+  color: var(--tinta);
+  font: var(--tipo-cuerpo);
+}
+.w-enlace-invitacion .cn-boton {
+  text-decoration: none;
+}
+
+/* ---------- Matriz de permisos ---------- */
+/* Escritorio: tabla módulo × acción. Celular: una tarjeta por módulo con las acciones en fila. */
+.w-matriz {
+  width: 100%;
+  border-collapse: collapse;
+}
+.w-matriz th,
+.w-matriz td {
+  text-align: left;
+}
+.w-matriz thead {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
+.w-matriz tbody tr {
+  display: block;
+  padding: var(--espacio-3) 0;
+  border-bottom: 1px solid var(--borde);
+}
+.w-matriz tbody th {
+  display: block;
+  font: var(--tipo-cuerpo-fuerte);
+  margin-bottom: var(--espacio-1);
+}
+.w-matriz tbody td {
+  display: inline-block;
+  margin-right: var(--espacio-3);
+}
+.w-matriz__accion {
+  font: var(--tipo-secundario);
+}
+.w-permiso {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--espacio-1);
+  min-height: var(--toque-minimo);
+}
+.w-permiso--si {
+  color: var(--turquesa-texto);
+}
+.w-permiso--no {
+  color: var(--tinta-suave);
+}
+@media (min-width: 768px) {
+  .w-matriz thead {
+    position: static;
+    width: auto;
+    height: auto;
+    overflow: visible;
+    clip: auto;
+    display: table-header-group;
+  }
+  .w-matriz thead th {
+    font: var(--tipo-etiqueta);
+    color: var(--tinta-suave);
+    padding: var(--espacio-2);
+    border-bottom: 1px solid var(--borde);
+  }
+  .w-matriz tbody tr {
+    display: table-row;
+    padding: 0;
+  }
+  .w-matriz tbody th,
+  .w-matriz tbody td {
+    display: table-cell;
+    padding: var(--espacio-1) var(--espacio-2);
+    border-bottom: 1px solid var(--borde);
+    margin: 0;
+  }
+  .w-matriz__accion {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+}
+
+/* ---------- Detalle de rol ---------- */
+.w-rol-propiedades {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--espacio-2);
+  margin: 0 0 var(--espacio-4);
+  padding: 0;
+  list-style: none;
+}
+.w-boton-enlace {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--toque-minimo);
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--turquesa-texto);
+  font: inherit;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-align: left;
+  cursor: pointer;
+}
+.w-boton-enlace:focus-visible {
+  outline: 3px solid var(--foco);
+  outline-offset: 2px;
+}
+
+/* ---------- Invitación ---------- */
+.w-invitacion-datos {
+  margin: var(--espacio-4) 0;
+}
