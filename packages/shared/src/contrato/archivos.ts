@@ -23,7 +23,7 @@ export const CATEGORIAS_ARCHIVO = {
   /** Logo de la clínica para documentos impresos. */
   logo_clinica: {
     modulo: 'configuracion',
-    tipos: ['image/png', 'image/jpeg', 'image/webp', 'image/svg+xml'],
+    tipos: ['image/png', 'image/jpeg', 'image/webp'],
     maxBytes: 2 * 1024 * 1024,
   },
 } as const;
@@ -38,6 +38,10 @@ export const NOMBRES_CATEGORIA_ARCHIVO = Object.keys(CATEGORIAS_ARCHIVO) as [
  * permiso es `<modulo de la categoría>:crear`. La API comprueba el tipo real por el contenido (no
  * por la extensión ni por lo que diga el navegador), el tamaño, calcula el SHA-256 y, en
  * imágenes, el ancho y el alto.
+ *
+ * El campo `categoria` tiene que ir ANTES que `archivo` en el formulario: la API exige el permiso
+ * apenas lo lee, antes de aceptar un solo byte del archivo. SVG no se acepta en ninguna categoría
+ * (revisión de seguridad del Sprint 2).
  */
 export const subirArchivoCamposSchema = z.object({
   categoria: z.enum(NOMBRES_CATEGORIA_ARCHIVO),
@@ -56,7 +60,11 @@ export const archivoSchema = z.object({
 });
 export type Archivo = z.infer<typeof archivoSchema>;
 
-/** `GET /api/v1/archivos/:id/url` — permiso `<modulo de la categoría>:ver`. */
+/**
+ * `GET /api/v1/archivos/:id/url` — permiso `<modulo de la categoría>:ver`. `url` es absoluta (la
+ * API la arma con su propio origen o con la de Storage) y se usa tal cual. La descarga vuelve a
+ * comprobar membresía y permiso, y queda en auditoría.
+ */
 export const urlArchivoSchema = z.object({
   url: z.string(),
   venceEn: fechaHoraSchema,

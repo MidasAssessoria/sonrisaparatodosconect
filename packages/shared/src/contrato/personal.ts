@@ -6,32 +6,53 @@ import { fechaHoraSchema, idSchema } from './comun.js';
 /*
  * Personal, invitaciones y roles (módulos `personal` y `configuracion`).
  *
- * Una persona entra a una clínica solo por invitación:
+ * Una persona entra a una clínica solo por invitación, y **solo quien controla el correo
+ * invitado puede usarla** (revisión de seguridad del Sprint 2: el enlace solo, que viaja por
+ * WhatsApp, no prueba nada):
  *   1. Quien tiene `personal:crear` invita con nombre, correo, rol y sedes. Nace una membresía
  *      `pendiente` y una invitación con un token aleatorio del que la base guarda solo el hash.
- *      La respuesta trae el enlace UNA sola vez; no hay correo automático todavía: quien invita lo
- *      copia o lo manda por WhatsApp (decisión del Sprint 2, se revisa cuando haya proveedor de
- *      correo).
- *   2. La persona abre el enlace (`/invitacion?token=…` en la web). `POST /invitaciones/consultar`
- *      muestra a qué clínica y con qué rol la invitan, sin revelar datos de nadie más.
- *   3. `POST /invitaciones/aceptar`:
- *      - si el correo no tiene cuenta en Supabase Auth, la persona elige su contraseña en ese
- *        pedido y la API crea la cuenta ya confirmada (tener el enlace prueba el acceso a la
- *        invitación);
- *      - si el correo ya tiene cuenta (trabaja en otra clínica), la web primero inicia sesión y
- *        manda el token con `Authorization`; la API exige que el correo del token sea el de la
- *        invitación.
- *      En los dos casos la membresía pasa a `activo` y la invitación queda usada.
- *   4. Un token vence (`vence_en`, 7 días), se usa una sola vez y queda anulado si se reenvía o se
- *      anula la invitación. Un token inválido, vencido o usado responde siempre lo mismo
- *      (`no_encontrado`), para no revelar cuál de los tres casos es.
+ *      - Si el correo no tiene cuenta en Supabase Auth, la API le pide a Supabase que le mande el
+ *        correo de invitación (`inviteUserByEmail`) con vuelta a `/invitacion?token=…`.
+ *      - Si ya tiene cuenta, no se manda correo de Supabase: la persona entra con su contraseña.
+ *      La respuesta trae además el enlace `/invitacion?token=…` UNA sola vez, para avisarle por
+ *      WhatsApp; ese enlace solo muestra la invitación y no crea ni activa nada por sí solo.
+ *   2. La persona abre el enlace. `POST /invitaciones/consultar` muestra a qué clínica y con qué
+ *      rol la invitan, sin revelar datos de nadie más.
+ *   3. `POST /invitaciones/aceptar` exige SIEMPRE `Authorization` con un JWT cuyo correo sea el
+ *      de la invitación y esté **confirmado** en Supabase Auth (la API lo verifica con la Admin
+ *      API, no con el cuerpo ni con el JWT solo):
+ *      - cuenta nueva: la persona llega desde el correo de Supabase ya con sesión, elige su
+ *        contraseña en la web (`updateUser`) y acepta;
+ *      - cuenta existente: ingresa con su contraseña (y su segundo factor si lo tiene) y acepta.
+ *      Se acepta con un token aal1: la persona todavía no es miembro de esta clínica. Una cuenta
+ *      sin ninguna clínica activa tiene que poder aceptar sin pasar por `GET /sesion`.
+ *      La membresía pasa a `activo` y la invitación queda usada.
+ *   4. Un token vence a las 72 horas, se usa una sola vez y queda anulado si se reenvía o se anula
+ *      la invitación. Reenviar vuelve a pedir a Supabase el correo si la cuenta todavía no está
+ *      confirmada. Un token inválido, vencido o usado responde siempre lo mismo (`no_encontrado`).
+ *
+ * `/invitaciones/:id` (reenviar, anular) y `/personal/:id` reciben el id de la **membresía**.
+ * Desactivar y reactivar responden 200 con la `Persona` actualizada.
+ *
+ * Límites de quien administra (revisión de seguridad del Sprint 2):
+ *   - nadie da a un rol, ni asigna a una persona un rol con, permisos que no tiene él mismo
+ *     (incluido `todasLasSedes`); el dueño no tiene límite;
+ *   - los roles de sistema solo los edita un dueño, y Dueño/a y Administración siempre exigen
+ *     doble factor;
+ *   - quien no ve todas las sedes solo ve, edita, desactiva, reenvía o anula a personas cuyas
+ *     sedes estén todas entre las suyas.
  */
 
 export const ESTADOS_MEMBRESIA = ['pendiente', 'activo', 'inactivo'] as const;
 export type EstadoMembresia = (typeof ESTADOS_MEMBRESIA)[number];
 
 const nombrePersonaSchema = z.string().trim().min(2, 'Poné el nombre.').max(120);
-const emailSchema = z.email('Escribí un correo válido.').trim().toLowerCase().max(254);
+const emailSchema = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .max(254)
+  .pipe(z.email('Escribí un correo válido.'));
 
 export const rolResumenSchema = z.object({
   id: idSchema,
@@ -93,19 +114,20 @@ export const invitacionPublicaSchema = z.object({
   nombre: z.string(),
   /** Correo con la parte local enmascarada: «ma***@gmail.com». */
   emailEnmascarado: z.string(),
-  /** El correo ya tiene cuenta: hay que iniciar sesión antes de aceptar. */
-  requiereIngreso: z.boolean(),
+  /**
+   * `cuenta_existente`: entrá con tu contraseña y aceptá. `revisa_tu_correo`: abrí el correo de
+   * invitación que te mandamos (desde ahí volvés ya con sesión y elegís tu contraseña).
+   */
+  siguientePaso: z.enum(['cuenta_existente', 'revisa_tu_correo']),
   venceEn: fechaHoraSchema,
 });
 export type InvitacionPublica = z.infer<typeof invitacionPublicaSchema>;
 
 /**
- * `POST /api/v1/invitaciones/aceptar` — público; con `Authorization` si `requiereIngreso`.
- * `clave` es obligatoria cuando el correo no tiene cuenta (mínimo 10 caracteres).
+ * `POST /api/v1/invitaciones/aceptar` — ruta pública que exige `Authorization` (ver arriba).
  */
 export const aceptarInvitacionSchema = z.object({
   token: z.string().min(20).max(200),
-  clave: z.string().min(10, 'Usá al menos 10 caracteres.').max(72).optional(),
 });
 export type AceptarInvitacion = z.infer<typeof aceptarInvitacionSchema>;
 export const invitacionAceptadaSchema = z.object({
