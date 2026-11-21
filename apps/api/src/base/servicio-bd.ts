@@ -4,7 +4,13 @@
  * para el paso previo a elegir clínica (listar las membresías propias).
  */
 import { Inject, Injectable, type OnApplicationShutdown } from '@nestjs/common';
-import { conContexto, conUsuario, crearPool, type TransaccionConecta } from '@conecta/db';
+import {
+  conContexto,
+  conUsuario,
+  crearPool,
+  sinContexto,
+  type TransaccionConecta,
+} from '@conecta/db';
 import type pg from 'pg';
 import { CONFIG, type Config } from '../config.js';
 import { REGISTRO, type Registro } from '../comun/registro.js';
@@ -47,6 +53,15 @@ export class ServicioBd implements OnApplicationShutdown {
     fn: (tx: TransaccionConecta) => Promise<T>,
   ): Promise<T> {
     return conUsuario(this.pool, usuarioId, fn, { ip });
+  }
+
+  /**
+   * Transacción sin usuario ni clínica: SOLO para las rutas públicas de invitación, cuyas funciones
+   * SECURITY DEFINER (`consultarInvitacion`, `aceptarInvitacion`) resuelven la clínica por el token.
+   * Las tablas de negocio no devuelven nada en esta transacción.
+   */
+  sinContexto<T>(ip: string | null, fn: (tx: TransaccionConecta) => Promise<T>): Promise<T> {
+    return sinContexto(this.pool, fn, { ip });
   }
 
   async onApplicationShutdown(): Promise<void> {
