@@ -4,12 +4,19 @@
  * de regla que la base pone en `constraint`, ver `RESTRICCIONES_ACCESO` de `@conecta/db`).
  */
 import { HttpException } from '@nestjs/common';
-import { ErrorDeContexto, ErrorDeMembresia, type RestriccionAcceso } from '@conecta/db';
+import {
+  ErrorDeContexto,
+  ErrorDeMembresia,
+  RESTRICCIONES_COLA,
+  type RestriccionAcceso,
+} from '@conecta/db';
 import type { ErrorApi as CuerpoErrorApi } from '@conecta/shared';
 import type { DatoRegistro } from '../comun/registro.js';
 import { ErrorApi, errores } from './error-api.js';
 import { MENSAJES_ARCHIVOS } from './restricciones/archivos.js';
 import { MENSAJES_CATALOGOS } from './restricciones/catalogos.js';
+import { MENSAJES_COLA } from './restricciones/cola.js';
+import { MENSAJES_LIMITES, MENSAJES_LIMITES_COLUMNAS } from './restricciones/limites.js';
 import { MENSAJES_PERSONAL } from './restricciones/personal.js';
 import { MENSAJES_PROFESIONALES } from './restricciones/profesionales.js';
 
@@ -138,9 +145,17 @@ const MENSAJES_ACCESO: Record<RestriccionAcceso, () => ErrorApi> = {
     ),
 };
 
-/** Mensajes por restricción de datos: lo que la persona tiene que corregir. */
-const MENSAJES_RESTRICCION: Record<string, () => ErrorApi> = {
+/**
+ * Mensajes por restricción de datos: lo que la persona tiene que corregir. Algunos usan el mensaje
+ * de la base para repetir un dato validado (p. ej. la lista de permisos que sobran, ver
+ * restricciones/limites.ts); ninguno lo copia tal cual.
+ */
+const MENSAJES_RESTRICCION: Record<string, (error: ErrorPostgres) => ErrorApi> = {
   ...MENSAJES_ACCESO,
+  // Revisión del Sprint 2: límites de quien administra (0015) y cola (0018).
+  ...MENSAJES_LIMITES,
+  ...MENSAJES_LIMITES_COLUMNAS,
+  ...MENSAJES_COLA,
   // Sprint 2: un archivo por módulo, para que cada módulo agregue los suyos sin pisar a otro.
   ...MENSAJES_PERSONAL,
   ...MENSAJES_PROFESIONALES,
@@ -154,12 +169,18 @@ const MENSAJES_RESTRICCION: Record<string, () => ErrorApi> = {
   sede_color_check: () => errores.datosInvalidos('Elegí un color válido (por ejemplo, #1A7F5A).'),
 };
 
+/**
+ * Restricciones que, si saltan, son un error de la API (no del pedido): se responden con su mensaje
+ * y además se registran (sin el mensaje de la base).
+ */
+const RESTRICCIONES_INESPERADAS: ReadonlySet<string> = new Set(RESTRICCIONES_COLA);
+
 function traducirPostgres(error: ErrorPostgres): ErrorApi | null {
   const porRestriccion =
     error.constraint && Object.hasOwn(MENSAJES_RESTRICCION, error.constraint)
       ? MENSAJES_RESTRICCION[error.constraint]
       : undefined;
-  if (porRestriccion) return porRestriccion();
+  if (porRestriccion) return porRestriccion(error);
   if (esPostgresNoDisponible(error.code)) return errores.servicioNoDisponible();
   switch (error.code) {
     case '23505':
@@ -293,6 +314,9 @@ export function traducirError(error: unknown): ErrorTraducido {
         ...desdeErrorApi(traducido),
         ...(traducido.estado === 503
           ? { registrar: { tipo: 'base_no_disponible', codigoPg: pg.code } }
+          : {}),
+        ...(pg.constraint && RESTRICCIONES_INESPERADAS.has(pg.constraint)
+          ? { registrar: { tipo: 'postgres', codigoPg: pg.code, restriccion: pg.constraint } }
           : {}),
       };
     }

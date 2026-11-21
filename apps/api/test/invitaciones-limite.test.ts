@@ -43,13 +43,11 @@ describe('límite de pedidos de consultar y aceptar', () => {
     expect(espera).toBeGreaterThan(0);
     expect(espera).toBeLessThanOrEqual(60);
 
-    // La otra ruta pública tiene su propio contador.
+    // La otra ruta pública tiene su propio contador (sin Authorization: 401, no 429).
     await esperarError(
-      prueba.pedir('post', '/invitaciones/aceptar', {
-        cuerpo: { token: inventado(), clave: 'una-clave-larga-123' },
-      }),
-      404,
-      'no_encontrado',
+      prueba.pedir('post', '/invitaciones/aceptar', { cuerpo: { token: inventado() } }),
+      401,
+      'no_autenticado',
     );
   });
 
@@ -58,7 +56,7 @@ describe('límite de pedidos de consultar y aceptar', () => {
     for (let i = 1; i < LIMITE; i++) {
       await prueba
         .pedir('post', '/invitaciones/aceptar', { cuerpo: { token: inventado() } })
-        .expect(404);
+        .expect(401);
     }
     await esperarError(
       prueba.pedir('post', '/invitaciones/aceptar', { cuerpo: { token: inventado() } }),

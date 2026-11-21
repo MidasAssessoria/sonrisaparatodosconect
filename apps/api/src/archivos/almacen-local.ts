@@ -1,7 +1,7 @@
 /**
  * Almacén local (desarrollo y pruebas): `<directorio>/<bucket>/<clinica_id>/<uuid>`, archivos con
- * permisos 0600. La URL firmada es de la propia API: `/api/v1/archivos/descarga?t=<token>` (relativa
- * a la API; la web le antepone la dirección de la API), con el token HMAC de `firma.ts`.
+ * permisos 0600. La URL firmada es de la propia API, absoluta (contrato de archivos):
+ * `<API_ORIGEN_PUBLICO>/api/v1/archivos/descarga?t=<token>`, con el token HMAC de `firma.ts`.
  */
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -25,6 +25,8 @@ export class AlmacenLocal implements AlmacenArchivos {
     directorio: string,
     readonly bucket: string,
     private readonly secretoFirma: string,
+    /** Origen público de la API (`https://api.example.com`), sin barra final. */
+    private readonly origen: string,
   ) {
     this.raiz = path.resolve(directorio);
   }
@@ -65,6 +67,6 @@ export class AlmacenLocal implements AlmacenArchivos {
       usuarioId: archivo.usuarioId,
       venceEn: Math.floor(venceEn.getTime() / 1000),
     });
-    return Promise.resolve(`${RUTA_DESCARGA}?t=${token}`);
+    return Promise.resolve(`${this.origen}${RUTA_DESCARGA}?t=${token}`);
   }
 }

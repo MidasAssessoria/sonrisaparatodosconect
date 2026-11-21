@@ -1,12 +1,13 @@
 /**
  * Archivos privados con el almacén local: matriz de permisos por categoría y sede, aislamiento,
  * URL firmada (token, vencimiento, cabeceras de la descarga), validación del contenido, multipart,
- * compensación, auditoría `ver` y encolado en la misma transacción.
+ * compensación, auditoría `ver` (también de cada descarga, que vuelve a comprobar el permiso) y
+ * encolado con `app.encolar` en la misma transacción. SVG no se acepta en ninguna categoría.
  */
 import { createHash, randomUUID } from 'node:crypto';
 import { archivoSchema, urlArchivoSchema, type Archivo } from '@conecta/shared';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { crearArchivoDePrueba } from '@conecta/db/pruebas';
+import { crearArchivoDePrueba, crearRolDePrueba, crearUsuarioDePrueba } from '@conecta/db/pruebas';
 import { firmarToken } from '../src/archivos/firma.js';
 import {
   comoSistema,
@@ -23,6 +24,7 @@ import {
 import {
   archivosEnDisco,
   configLocal,
+  escribirEnDisco,
   jpeg,
   PDF,
   png,
@@ -75,9 +77,16 @@ async function pedirUrl(persona: Persona, id: string) {
   return prueba.pedir('get', `/archivos/${id}/url`, { token: await persona.token() });
 }
 
+/** La URL es absoluta (contrato): `<API_ORIGEN_PUBLICO>/api/v1/archivos/descarga?t=…`. */
+function rutaDe(url: string): string {
+  const u = new URL(url);
+  expect(u.origin).toBe(prueba.config.apiOrigenPublico);
+  expect(u.pathname).toBe('/api/v1/archivos/descarga');
+  return `/archivos/descarga${u.search}`;
+}
+
 async function descargar(url: string) {
-  // La URL local es relativa a la API: /api/v1/archivos/descarga?t=…
-  const ruta = url.replace(/^\/api\/v1/, '');
+  const ruta = rutaDe(url);
   return prueba
     .pedir('get', ruta)
     .buffer(true)
@@ -103,7 +112,9 @@ describe('subida y URL: matriz de permisos por categoría', () => {
     });
 
     const url = segun(urlArchivoSchema, (await pedirUrl(adminA, archivo.id)).body);
-    expect(url.url).toMatch(/^\/api\/v1\/archivos\/descarga\?t=[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
+    expect(url.url).toMatch(
+      /^http:\/\/api\.prueba\.localhost\/api\/v1\/archivos\/descarga\?t=[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/,
+    );
     const vence = new Date(url.venceEn).getTime() - Date.now();
     expect(vence).toBeGreaterThan(250_000);
     expect(vence).toBeLessThanOrEqual(300_000);
@@ -121,13 +132,15 @@ describe('subida y URL: matriz de permisos por categoría', () => {
     );
   });
 
-  it('logo_clinica (configuracion): el dueño sube; administración solo ve; recepción nada', async () => {
+  it('logo_clinica (configuracion): el dueño y administración suben y ven; recepción nada', async () => {
     const archivo = await subida(A.dueno, 'logo_clinica', jpeg(120, 80), 'logo.jpg');
     expect(archivo).toMatchObject({ tipo: 'image/jpeg', ancho: 120, alto: 80 });
     expect((await pedirUrl(A.dueno, archivo.id)).status).toBe(200);
     expect((await pedirUrl(adminA, archivo.id)).status).toBe(200);
+    // Administración tiene configuracion:crear desde la migración 0015.
+    await subida(adminA, 'logo_clinica', png(5, 5), 'logo.png');
     await esperarError(
-      subir(prueba, await adminA.token(), 'logo_clinica', png(5, 5)),
+      subir(prueba, await recepcionA.token(), 'logo_clinica', png(5, 5)),
       403,
       'sin_permiso',
     );
@@ -302,14 +315,81 @@ describe('descarga con la URL firmada', () => {
     expect(archivo.nombreOriginal).not.toContain('‮');
   });
 
-  it('un SVG también se descarga como adjunto (nunca en línea)', async () => {
-    const svg = await subida(A.dueno, 'logo_clinica', SVG_LIMPIO, 'logo.svg');
-    expect(svg).toMatchObject({ tipo: 'image/svg+xml', ancho: null, alto: null });
-    const url = segun(urlArchivoSchema, (await pedirUrl(A.dueno, svg.id)).body).url;
-    const r = await descargar(url);
-    expect(r.status).toBe(200);
-    expect(r.headers['content-disposition']).toMatch(/^attachment;/);
-    expect(r.headers['content-security-policy']).toContain('sandbox');
+  it('cada descarga queda en auditoría (ver, medio descarga) con quien pidió la URL', async () => {
+    const url = segun(urlArchivoSchema, (await pedirUrl(adminA, archivo.id)).body).url;
+    const contar = async () => {
+      const { rows } = await comoSistema<{ n: number; usuario: string | null; modulo: string }>(
+        prueba.admin,
+        A.clinicaId,
+        `select count(*)::int as n, max(usuario_id::text) as usuario, max(modulo) as modulo
+         from app.audit_log
+         where entidad = 'archivo' and accion = 'ver' and entidad_id = $1
+           and despues ->> 'medio' = 'descarga'`,
+        [archivo.id],
+      );
+      return rows[0]!;
+    };
+    const antes = (await contar()).n;
+    expect((await descargar(url)).status).toBe(200);
+    expect((await descargar(url)).status).toBe(200);
+    const despues = await contar();
+    expect(despues.n).toBe(antes + 2);
+    expect(despues.usuario).toBe(adminA.usuarioId);
+    expect(despues.modulo).toBe('personal');
+  });
+
+  it('si le quitan el permiso (o la sede) después de pedir la URL, la URL ya no descarga', async () => {
+    const C = await crearClinica(prueba, { sedes: 2 });
+    const [sede1] = C.sedes.map((s) => s.sedeId) as [string, string];
+    const { rolId } = await crearRolDePrueba(prueba.admin, {
+      clinicaId: C.clinicaId,
+      permisos: ['personal:ver'],
+    });
+    const creado = await crearUsuarioDePrueba(prueba.admin, {
+      clinicaId: C.clinicaId,
+      rolId,
+      sedeIds: [sede1],
+    });
+    const token = await prueba.token({ sub: creado.usuarioId, email: creado.email });
+    const enSede1 = await crearArchivoDePrueba(prueba.admin, {
+      clinicaId: C.clinicaId,
+      categoria: 'firma_profesional',
+      sedeId: sede1,
+    });
+    await escribirEnDisco(directorio, enSede1);
+    const urlDe = async () =>
+      segun(
+        urlArchivoSchema,
+        (await prueba.pedir('get', `/archivos/${enSede1.archivoId}/url`, { token })).body,
+      ).url;
+
+    // Sin el permiso.
+    const url = await urlDe();
+    expect((await descargar(url)).status).toBe(200);
+    await comoSistema(
+      prueba.admin,
+      C.clinicaId,
+      'update app.rol_permiso set activo = false where rol_id = $1',
+      [rolId],
+    );
+    await esperarError(prueba.pedir('get', rutaDe(url)), 403, 'sin_permiso');
+    await comoSistema(
+      prueba.admin,
+      C.clinicaId,
+      'update app.rol_permiso set activo = true where rol_id = $1',
+      [rolId],
+    );
+
+    // Sin la sede.
+    const otra = await urlDe();
+    expect((await descargar(otra)).status).toBe(200);
+    await comoSistema(
+      prueba.admin,
+      C.clinicaId,
+      'update app.usuario_sede set activo = false where membresia_id = $1',
+      [creado.membresiaId],
+    );
+    await esperarError(prueba.pedir('get', rutaDe(otra)), 403, 'sede_no_permitida');
   });
 
   it('vencido, alterado, de otro secreto, demasiado largo o ausente: rechazado', async () => {
@@ -352,13 +432,13 @@ describe('descarga con la URL firmada', () => {
       "update app.membresia set estado = 'inactivo' where id = $1",
       [persona.membresiaId],
     );
-    await esperarError(prueba.pedir('get', url.replace(/^\/api\/v1/, '')), 403, 'sin_membresia');
+    await esperarError(prueba.pedir('get', rutaDe(url)), 403, 'sin_membresia');
   });
 
   it('si el archivo falta en el almacén, 404', async () => {
     const sinArchivo = await crearArchivoDePrueba(prueba.admin, { clinicaId: A.clinicaId });
     const url = segun(urlArchivoSchema, (await pedirUrl(A.dueno, sinArchivo.archivoId)).body).url;
-    await esperarError(prueba.pedir('get', url.replace(/^\/api\/v1/, '')), 404, 'no_encontrado');
+    await esperarError(prueba.pedir('get', rutaDe(url)), 404, 'no_encontrado');
   });
 });
 
@@ -380,16 +460,8 @@ describe('contenido y formulario', () => {
         415,
         'datos_invalidos',
       );
-      expect((e.body as { mensaje: string }).mensaje).toContain('PNG, JPEG, WebP o SVG');
+      expect((e.body as { mensaje: string }).mensaje).toContain('PNG, JPEG o WebP');
     }
-    // SVG solo donde la categoría lo acepta.
-    await esperarError(
-      subir(prueba, await adminA.token(), 'firma_profesional', SVG_LIMPIO, {
-        tipoDeclarado: 'image/svg+xml',
-      }),
-      415,
-      'datos_invalidos',
-    );
     // Un PNG roto (sin IHDR).
     const roto = Buffer.concat([
       png(4, 4).subarray(0, 8),
@@ -402,29 +474,26 @@ describe('contenido y formulario', () => {
     );
   });
 
-  it('SVG con scripts, eventos o referencias externas: rechazado', async () => {
-    const malos = [
-      '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>',
-      '<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"><rect/></svg>',
-      '<svg xmlns="http://www.w3.org/2000/svg"><a href="javascript:alert(1)"><text>x</text></a></svg>',
-      '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"><image xlink:href="https://otro.example/x.png"/></svg>',
-      '<svg xmlns="http://www.w3.org/2000/svg"><foreignObject><div>x</div></foreignObject></svg>',
-      '<!DOCTYPE svg [<!ENTITY x SYSTEM "file:///etc/passwd">]><svg xmlns="http://www.w3.org/2000/svg">&x;</svg>',
-      '<svg xmlns="http://www.w3.org/2000/svg"><style>@import url(https://otro.example/x.css);</style></svg>',
-      '<svg xmlns="http://www.w3.org/2000/svg"><set attributeName="href" to="javascript:alert(1)"/></svg>',
-      '<SVG xmlns="http://www.w3.org/2000/svg"><SCRIPT>alert(1)</SCRIPT></SVG>',
+  it('SVG: rechazado en todas las categorías, aun el más inofensivo, sin guardar nada', async () => {
+    const antes = await archivosEnDisco(directorio, A.clinicaId);
+    const svgs = [
+      SVG_LIMPIO,
+      Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>'),
     ];
-    for (const texto of malos) {
-      const r = await subir(prueba, await A.dueno.token(), 'logo_clinica', Buffer.from(texto), {
-        nombre: 'logo.svg',
-        tipoDeclarado: 'image/svg+xml',
-      });
-      expect({ texto, estado: r.status, codigo: (r.body as { codigo?: string }).codigo }).toEqual({
-        texto,
-        estado: 400,
-        codigo: 'datos_invalidos',
-      });
+    for (const categoria of ['logo_clinica', 'firma_profesional']) {
+      for (const contenido of svgs) {
+        const e = await esperarError(
+          subir(prueba, await A.dueno.token(), categoria, contenido, {
+            nombre: 'logo.svg',
+            tipoDeclarado: 'image/svg+xml',
+          }),
+          415,
+          'datos_invalidos',
+        );
+        expect((e.body as { mensaje: string }).mensaje).toContain('PNG, JPEG o WebP');
+      }
     }
+    expect(await archivosEnDisco(directorio, A.clinicaId)).toEqual(antes);
   });
 
   it('más grande que el máximo de la categoría: 413 y no se guarda nada', async () => {
@@ -512,7 +581,7 @@ describe('compensación, auditoría y cola', () => {
     expect(await trabajosDeClinica(prueba.admin, A.clinicaId)).toHaveLength(trabajosAntes);
   });
 
-  it('la subida de una imagen encola archivo.verificar con solo los ids, en la misma transacción', async () => {
+  it('la subida de una imagen encola archivo.verificar con app.encolar: solo los ids y la clínica del contexto', async () => {
     const archivo = await subida(A.dueno, 'logo_clinica', png(12, 12), 'logo.png');
     const trabajos = await trabajosDe(prueba.admin, archivo.id);
     expect(trabajos.map(({ state, data }) => ({ state, data }))).toEqual([

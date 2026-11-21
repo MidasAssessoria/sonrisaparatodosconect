@@ -50,7 +50,6 @@ const NOMBRE_TIPO: Record<string, string> = {
   'image/png': 'PNG',
   'image/jpeg': 'JPEG',
   'image/webp': 'WebP',
-  'image/svg+xml': 'SVG',
   'application/pdf': 'PDF',
 };
 
@@ -84,11 +83,6 @@ export const erroresArchivo = {
     errores.datosInvalidos(
       'El archivo parece dañado o incompleto. Abrilo, guardalo de nuevo y subilo otra vez.',
       [{ campo: 'archivo', mensaje: 'No se pudo leer.' }],
-    ),
-  svgInseguro: () =>
-    errores.datosInvalidos(
-      'Ese SVG trae scripts, enlaces o contenido externo, y no lo podemos aceptar. Exportalo como SVG simple o subí un PNG.',
-      [{ campo: 'archivo', mensaje: 'El SVG tiene contenido no permitido.' }],
     ),
   vacio: () =>
     errores.datosInvalidos('El archivo está vacío. Elegí otro archivo y probá de nuevo.', [

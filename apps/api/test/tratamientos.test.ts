@@ -276,7 +276,7 @@ const CASOS: Caso[] = [
     noPuede: 'recepcion',
   },
   {
-    // configuracion:crear solo lo tiene el dueño en la matriz inicial (administración tiene ver y editar).
+    // configuracion:crear lo tienen el dueño y, desde la migración 0015, administración.
     nombre: 'POST /tratamientos',
     metodo: 'post',
     preparar: () => ({
@@ -285,8 +285,8 @@ const CASOS: Caso[] = [
     }),
     estadoOk: 201,
     esquema: tratamientoSchema,
-    puede: 'dueno',
-    noPuede: 'administracion',
+    puede: 'administracion',
+    noPuede: 'recepcion',
   },
   {
     nombre: 'PATCH /tratamientos/:id',

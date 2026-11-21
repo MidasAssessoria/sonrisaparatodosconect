@@ -2,7 +2,7 @@
  * Límite de pedidos propio de las rutas públicas de invitación (`consultar` y `aceptar`): por IP y
  * por ruta, más estricto que el límite general por IP del middleware (que sigue aplicándose antes).
  * Un token tiene 256 bits y no se adivina, pero estas rutas no tienen usuario que limitar y
- * `aceptar` crea cuentas: no se las deja martillar.
+ * consultan la Admin API de Supabase (que tiene sus propios límites): no se las deja martillar.
  *
  * El contador es el mismo de `comun/limite-pedidos.ts` (ventana fija de un minuto, en memoria, por
  * instancia de la API).

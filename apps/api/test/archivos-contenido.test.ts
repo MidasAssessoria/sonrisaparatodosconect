@@ -1,4 +1,4 @@
-/** Unidad: tipo por contenido, tamaño en píxeles, SVG, nombres y token firmado. */
+/** Unidad: tipo por contenido (SVG nunca), tamaño en píxeles, nombres y token firmado. */
 import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { analizarContenido, disposicionAdjunto, sanearNombre } from '../src/archivos/contenido.js';
@@ -6,59 +6,31 @@ import { firmarToken, verificarToken } from '../src/archivos/firma.js';
 import { jpeg, PDF, png, SVG_LIMPIO, webp } from './archivos-ayudas.js';
 
 describe('analizarContenido', () => {
-  it('reconoce PNG, JPEG, WebP, PDF y SVG por el contenido', () => {
-    expect(analizarContenido(png(640, 480), false)).toEqual({
-      tipo: 'image/png',
-      ancho: 640,
-      alto: 480,
-    });
-    expect(analizarContenido(jpeg(1024, 768), false)).toEqual({
+  it('reconoce PNG, JPEG, WebP y PDF por el contenido', () => {
+    expect(analizarContenido(png(640, 480))).toEqual({ tipo: 'image/png', ancho: 640, alto: 480 });
+    expect(analizarContenido(jpeg(1024, 768))).toEqual({
       tipo: 'image/jpeg',
       ancho: 1024,
       alto: 768,
     });
-    expect(analizarContenido(webp(16383, 1), false)).toEqual({
+    expect(analizarContenido(webp(16383, 1))).toEqual({
       tipo: 'image/webp',
       ancho: 16383,
       alto: 1,
     });
-    expect(analizarContenido(PDF, false)).toEqual({
-      tipo: 'application/pdf',
-      ancho: null,
-      alto: null,
-    });
-    expect(analizarContenido(SVG_LIMPIO, true)).toEqual({
-      tipo: 'image/svg+xml',
-      ancho: null,
-      alto: null,
-    });
+    expect(analizarContenido(PDF)).toEqual({ tipo: 'application/pdf', ancho: null, alto: null });
   });
 
-  it('un SVG cuenta como desconocido donde no se acepta, y lo irreconocible se rechaza', () => {
-    expect(() => analizarContenido(SVG_LIMPIO, false)).toThrow('desconocido');
-    expect(() => analizarContenido(Buffer.from('GIF89a......'), true)).toThrow('desconocido');
-    expect(() => analizarContenido(Buffer.from([0xff, 0xd8, 0xff, 0xd9]), false)).toThrow('danado');
-    expect(() => analizarContenido(png(0, 10), false)).toThrow('danado');
-    expect(() => analizarContenido(Buffer.from('<svg\u0000>'), true)).toThrow('desconocido');
-  });
-
-  it('SVG: acepta lo inofensivo y rechaza lo que ejecuta o trae contenido de afuera', () => {
-    const ok = [
-      '<svg xmlns="http://www.w3.org/2000/svg"><!-- logo --><g><circle r="3"/></g></svg>',
-      '<svg xmlns="http://www.w3.org/2000/svg"><metadata>datos</metadata><rect fill="url(#a)"/></svg>',
+  it('SVG no se reconoce nunca (ni el más inofensivo), y lo irreconocible se rechaza', () => {
+    const svgs = [
+      SVG_LIMPIO,
+      Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><g><circle r="3"/></g></svg>'),
+      Buffer.from('<svg><script>alert(1)</script></svg>'),
     ];
-    for (const s of ok) expect(analizarContenido(Buffer.from(s), true).tipo).toBe('image/svg+xml');
-    const malos = [
-      '<svg><svg:script>x</svg:script></svg>',
-      '<svg><rect ONCLICK="x"/></svg>',
-      '<svg><a xlink:href = "java&#x73;cript:alert(1)"/></svg>',
-      '<svg><image href="data:image/png;base64,AAAA"/></svg>',
-      '<svg><rect style="fill:url(https://x.example/a)"/></svg>',
-      '<svg><iframe src="https://x.example"/></svg>',
-      '<svg><animate attributeName="href" values="javascript:alert(1)"/></svg>',
-      '<?xml-stylesheet href="https://x.example/a.css"?><svg></svg>',
-    ];
-    for (const s of malos) expect(() => analizarContenido(Buffer.from(s), true), s).toThrow();
+    for (const svg of svgs) expect(() => analizarContenido(svg)).toThrow('desconocido');
+    expect(() => analizarContenido(Buffer.from('GIF89a......'))).toThrow('desconocido');
+    expect(() => analizarContenido(Buffer.from([0xff, 0xd8, 0xff, 0xd9]))).toThrow('danado');
+    expect(() => analizarContenido(png(0, 10))).toThrow('danado');
   });
 });
 

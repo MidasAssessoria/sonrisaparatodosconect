@@ -4,6 +4,10 @@
  * contexto (RLS, solo lectura) y no escribe en app: el resultado queda en el registro (ids y
  * resultado, nada personal) y como salida del trabajo en la cola.
  *
+ * El `clinicaId` del trabajo es confiable: desde la migración 0018 la API solo encola con
+ * `app.encolar`, que lo toma de la clínica del contexto del pedido (app_api no puede escribir en la
+ * cola). Igual se valida la forma de los datos y se lee con RLS (defensa en profundidad).
+ *
  *   ok            mismo SHA-256 y mismo tamaño.
  *   distinto      el contenido cambió: error en el registro, sin reintentos (no se arregla solo).
  *   no_encontrado no hay fila vigente en esa clínica (otra clínica, dada de baja, o datos falsos).

@@ -22,7 +22,8 @@ export class ArchivosController {
 
   /**
    * Descarga del almacén local con la URL firmada (`?t=`). Pública: la autorización viaja en el
-   * token, que vence en 5 minutos. Siempre como adjunto; nunca en línea (tampoco un SVG).
+   * token, que vence en 5 minutos. Siempre como adjunto, nunca en línea. Vuelve a comprobar
+   * membresía, permiso y sede, y queda en auditoría (ver `ArchivosService.descargar`).
    */
   @Get('descarga')
   @Publica()

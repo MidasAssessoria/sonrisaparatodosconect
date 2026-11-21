@@ -5,6 +5,7 @@
 import { personaSchema, type Persona as PersonaApi } from '@conecta/shared';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { z } from 'zod';
+import { crearRolDePrueba, crearUsuarioDePrueba } from '@conecta/db/pruebas';
 import {
   comoSistema,
   crearClinica,
@@ -177,7 +178,7 @@ describe('personal', () => {
       );
     });
 
-    it('dimensión sede: quien edita solo asigna sus sedes y no toca las que no ve', async () => {
+    it('dimensión sede: quien edita solo asigna sus sedes; alguien de otra sede no existe para él', async () => {
       const c = await crearClinica(prueba, { sedes: 2 });
       const [s1, s2] = c.sedes;
       await otorgarPermiso(prueba, c.clinicaId, c.roles.odontologo, 'personal', 'editar');
@@ -187,30 +188,47 @@ describe('personal', () => {
         sedes: [s1!.sedeId],
       });
       const t = await editora.token();
-      const objetivo = await crearPersona(prueba, c.clinicaId, {
+      const deSuSede = await crearPersona(prueba, c.clinicaId, {
+        rol: 'asistente',
+        sedes: [s1!.sedeId],
+      });
+      const deOtraSede = await crearPersona(prueba, c.clinicaId, {
         rol: 'asistente',
         sedes: [s2!.sedeId],
       });
 
+      // Fuera de su alcance: no la lista y no la puede tocar (404, como si no existiera).
+      const ids = (await listar(t)).map((p) => p.membresiaId);
+      expect(ids).toContain(deSuSede.membresiaId);
+      expect(ids).not.toContain(deOtraSede.membresiaId);
       await esperarError(
-        prueba.pedir('patch', `/personal/${objetivo.membresiaId}`, {
+        prueba.pedir('patch', `/personal/${deOtraSede.membresiaId}`, {
+          token: t,
+          cuerpo: { sedeIds: [s1!.sedeId] },
+        }),
+        404,
+        'no_encontrado',
+      );
+
+      // Dentro de su alcance: no le puede dar una sede que no ve.
+      await esperarError(
+        prueba.pedir('patch', `/personal/${deSuSede.membresiaId}`, {
           token: t,
           cuerpo: { sedeIds: [s1!.sedeId, s2!.sedeId] },
         }),
         403,
         'sede_no_permitida',
       );
-      // Agrega la suya; la que no ve (s2) queda como estaba aunque no venga en la lista.
-      const editada = await editar(t, objetivo.membresiaId, { sedeIds: [s1!.sedeId] });
-      expect(editada.sedeIds).toEqual([s1!.sedeId, s2!.sedeId].sort());
       await esperarError(
-        prueba.pedir('patch', `/personal/${objetivo.membresiaId}`, {
+        prueba.pedir('patch', `/personal/${deSuSede.membresiaId}`, {
           token: t,
           cuerpo: { sedeDefectoId: s2!.sedeId },
         }),
         403,
         'sede_no_permitida',
       );
+      const editada = await editar(t, deSuSede.membresiaId, { sedeDefectoId: s1!.sedeId });
+      expect(editada).toMatchObject({ sedeIds: [s1!.sedeId], sedeDefectoId: s1!.sedeId });
     });
 
     it('autoescalada: editarse a sí mismo, darse el rol dueño o dárselo a otro sin ser dueño → rechazado', async () => {
@@ -351,6 +369,24 @@ describe('personal', () => {
         ).body,
       );
       expect(inactiva.estado).toBe('inactivo');
+      // El motivo queda en la membresía y en la auditoría (la base registra la fila con autor).
+      const { rows: baja } = await comoSistema<{ motivo_baja: string | null }>(
+        prueba.admin,
+        a.clinicaId,
+        'select motivo_baja from app.membresia where id = $1',
+        [persona.membresiaId],
+      );
+      expect(baja).toEqual([{ motivo_baja: 'Dejó de trabajar en la clínica' }]);
+      const { rows: auditoria } = await comoSistema<{ usuario_id: string; motivo: string }>(
+        prueba.admin,
+        a.clinicaId,
+        `select usuario_id, despues ->> 'motivo_baja' as motivo from app.audit_log
+         where entidad = 'membresia' and entidad_id = $1 and accion = 'anular'`,
+        [persona.membresiaId],
+      );
+      expect(auditoria).toEqual([
+        { usuario_id: a.duenoId, motivo: 'Dejó de trabajar en la clínica' },
+      ]);
 
       // Mismo token, siguiente pedido: sin membresía.
       await esperarError(prueba.pedir('get', '/sesion', { token: t }), 403, 'sin_membresia');
@@ -369,6 +405,13 @@ describe('personal', () => {
         (await prueba.pedir('post', `${ruta}/reactivar`, { token: duenoA }).expect(200)).body,
       );
       expect(activa).toMatchObject({ estado: 'activo', sedeIds: [a.sedes[0]!.sedeId] });
+      const { rows: reactivada } = await comoSistema<{ motivo_baja: string | null }>(
+        prueba.admin,
+        a.clinicaId,
+        'select motivo_baja from app.membresia where id = $1',
+        [persona.membresiaId],
+      );
+      expect(reactivada).toEqual([{ motivo_baja: null }]);
       await prueba.pedir('get', '/sesion', { token: t }).expect(200);
       await esperarError(
         prueba.pedir('post', `${ruta}/reactivar`, { token: duenoA }),
@@ -410,7 +453,12 @@ describe('personal', () => {
     });
 
     it('permisos y autoescalada: recepción no; administración sí; nadie se desactiva a sí mismo ni a un dueño sin serlo', async () => {
-      const objetivo = await crearPersona(prueba, a.clinicaId, { rol: 'asistente' });
+      // Un rol con menos permisos que Administración: Administración lo puede volver a asignar.
+      const { rolId } = await crearRolDePrueba(prueba.admin, {
+        clinicaId: a.clinicaId,
+        permisos: ['inicio:ver', 'agenda:ver'],
+      });
+      const objetivo = await crearUsuarioDePrueba(prueba.admin, { clinicaId: a.clinicaId, rolId });
       const recepcion = await crearPersona(prueba, a.clinicaId, { rol: 'recepcion' });
       const administracion = await crearPersona(prueba, a.clinicaId, { rol: 'administracion' });
       const tRec = await recepcion.token();
@@ -439,6 +487,21 @@ describe('personal', () => {
       await prueba
         .pedir('post', `/personal/${objetivo.membresiaId}/reactivar`, { token: tAdm })
         .expect(200);
+
+      // Reactivar es volver a dar el rol: Administración no reactiva a alguien con un rol que da
+      // más que el suyo (Asistente tiene agenda:crear, ficha_clinica:ver…).
+      const asistente = await crearPersona(prueba, a.clinicaId, {
+        rol: 'asistente',
+        estado: 'inactivo',
+      });
+      const superior = await esperarError(
+        prueba.pedir('post', `/personal/${asistente.membresiaId}/reactivar`, { token: tAdm }),
+        403,
+        'sin_permiso',
+      );
+      expect((superior.body as { mensaje: string }).mensaje).toBe(
+        'Ese rol da permisos que tu rol no tiene: agenda:crear, agenda:editar, ficha_clinica:ver, inventario:crear, inventario:editar. Pedile al dueño que lo asigne.',
+      );
 
       await esperarError(
         prueba.pedir('post', `/personal/${administracion.membresiaId}/desactivar`, {

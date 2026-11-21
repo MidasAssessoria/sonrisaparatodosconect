@@ -1,5 +1,5 @@
 /** Ayudas de las pruebas de archivos: contenidos de prueba, subidas y lectura de la cola. */
-import { mkdtemp, readdir, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { crc32, deflateSync } from 'node:zlib';
@@ -34,6 +34,20 @@ export async function archivosEnDisco(directorio: string, clinicaId: string): Pr
   } catch {
     return [];
   }
+}
+
+/**
+ * Escribe en el almacén local el contenido de un archivo creado con `crearArchivoDePrueba` (bucket
+ * `pruebas`), para que la descarga lo encuentre.
+ */
+export async function escribirEnDisco(
+  directorio: string,
+  archivo: { ruta: string },
+  contenido: Buffer = png(4, 4),
+): Promise<void> {
+  const camino = path.join(directorio, 'pruebas', ...archivo.ruta.split('/'));
+  await mkdir(path.dirname(camino), { recursive: true });
+  await writeFile(camino, contenido);
 }
 
 function bloque(tipo: string, datos: Buffer): Buffer {

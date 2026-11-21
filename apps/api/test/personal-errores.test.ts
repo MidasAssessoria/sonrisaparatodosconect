@@ -3,7 +3,7 @@
  * invitaciones y roles) tiene su respuesta del contrato, con un mensaje que dice qué hacer y sin
  * detalles internos.
  */
-import { RESTRICCIONES_PERSONAL } from '@conecta/db';
+import { RESTRICCIONES_COLA, RESTRICCIONES_LIMITES, RESTRICCIONES_PERSONAL } from '@conecta/db';
 import { errorApiSchema } from '@conecta/shared';
 import { describe, expect, it } from 'vitest';
 import { MENSAJE_INVITACION_NO_VIGENTE } from '../src/errores/restricciones/personal.js';
@@ -77,5 +77,82 @@ describe('errores de personal, invitaciones y roles', () => {
     const t = traducirError(errorPg('P0002', 'invitacion_no_vigente'));
     expect(t.cuerpo).toEqual({ codigo: 'no_encontrado', mensaje: MENSAJE_INVITACION_NO_VIGENTE });
     expect(MENSAJE_INVITACION_NO_VIGENTE).toMatch(/Pedile un enlace nuevo/);
+  });
+});
+
+describe('errores de los límites de quien administra (0015) y de la cola (0018)', () => {
+  function errorPgCon(code: string, constraint: string, message: string): Error {
+    return Object.assign(new Error(message), { code, severity: 'ERROR', constraint });
+  }
+
+  it('cada regla de RESTRICCIONES_LIMITES responde lo esperado, sin detalles internos', () => {
+    const esperado: Record<string, [string, number, string]> = {
+      rol_permisos_ajenos: ['42501', 403, 'sin_permiso'],
+      rol_todas_las_sedes_ajeno: ['42501', 403, 'sin_permiso'],
+      asignacion_rol_superior: ['42501', 403, 'sin_permiso'],
+      asignacion_todas_las_sedes: ['42501', 403, 'sin_permiso'],
+      rol_sistema_solo_dueno: ['42501', 403, 'sin_permiso'],
+      rol_mfa_obligatorio: ['23514', 400, 'datos_invalidos'],
+      acceso_fuera_de_sedes: ['42501', 403, 'sede_no_permitida'],
+      baja_sin_motivo: ['23514', 400, 'datos_invalidos'],
+      membresia_no_activa: ['P0002', 409, 'conflicto'],
+    };
+    expect(Object.keys(esperado).sort()).toEqual([...RESTRICCIONES_LIMITES].sort());
+    for (const restriccion of RESTRICCIONES_LIMITES) {
+      const [codigoPg, estado, codigo] = esperado[restriccion]!;
+      const t = traducirError(errorPg(codigoPg, restriccion));
+      expect({ restriccion, estado: t.estado, codigo: t.cuerpo.codigo }).toEqual({
+        restriccion,
+        estado,
+        codigo,
+      });
+      expect(errorApiSchema.parse(t.cuerpo).mensaje).not.toMatch(SIN_DETALLES_INTERNOS);
+      expect(t.registrar).toBeUndefined();
+    }
+  });
+
+  it('los permisos que sobran se repiten solo si son permisos del contrato', () => {
+    const t = traducirError(
+      errorPgCon(
+        '42501',
+        'asignacion_rol_superior',
+        'Ese rol tiene permisos que tu rol no tiene (agenda:crear, caja:crear): no lo podés asignar.',
+      ),
+    );
+    expect(t.cuerpo.mensaje).toBe(
+      'Ese rol da permisos que tu rol no tiene: agenda:crear, caja:crear. Pedile al dueño que lo asigne.',
+    );
+    const r = traducirError(
+      errorPgCon(
+        '42501',
+        'rol_permisos_ajenos',
+        'Ese rol quedaría con permisos que tu rol no tiene (ficha_clinica:exportar): quitáselos o pedíselo a un dueño.',
+      ),
+    );
+    expect(r.cuerpo.mensaje).toBe(
+      'Ese rol quedaría con permisos que tu rol no tiene: ficha_clinica:exportar. Quitáselos o pedile al dueño que haga el cambio.',
+    );
+    // Cualquier otra cosa entre paréntesis no se copia.
+    for (const raro of [
+      'Ese rol tiene permisos que tu rol no tiene (secreto@x.test): no.',
+      'Ese rol tiene permisos que tu rol no tiene (agenda:crear, select 1): no.',
+      'Ese rol tiene permisos que tu rol no tiene (otro_modulo:ver): no.',
+      'sin paréntesis',
+    ]) {
+      const x = traducirError(errorPgCon('42501', 'asignacion_rol_superior', raro));
+      expect(x.cuerpo.mensaje).toBe(
+        'Ese rol da permisos que tu rol no tiene. Pedile al dueño que lo asigne.',
+      );
+    }
+  });
+
+  it('las reglas de la cola responden con un mensaje que dice qué hacer y quedan registradas', () => {
+    for (const restriccion of RESTRICCIONES_COLA) {
+      const t = traducirError(errorPg('22023', restriccion));
+      expect(t.estado).toBe(409);
+      expect(t.cuerpo.mensaje).toMatch(/Probá de nuevo/);
+      expect(t.cuerpo.mensaje).not.toMatch(SIN_DETALLES_INTERNOS);
+      expect(t.registrar).toEqual({ tipo: 'postgres', codigoPg: '22023', restriccion });
+    }
   });
 });

@@ -1,12 +1,23 @@
 /**
  * Worker contra el Postgres del banco, con el rol app_worker: procesa archivo.verificar, reintenta
  * con espera creciente, respeta RLS, no registra datos personales y cierra en orden.
+ *
+ * Los trabajos se encolan como la API: con `encolar` (`app.encolar`, migración 0018) dentro de una
+ * transacción con contexto de app_api; la base pone la clínica del contexto en el trabajo y el
+ * worker la usa. Para probar la defensa en profundidad del worker, un «falsificador» (pg-boss como
+ * administración, fuera de app.encolar) escribe trabajos que la API no puede escribir.
  */
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { COLA_ARCHIVO_VERIFICAR, conContextoCliente, SCHEMA_COLA } from '@conecta/db';
+import {
+  COLA_ARCHIVO_VERIFICAR,
+  conContexto,
+  conContextoCliente,
+  encolar as encolarEnTx,
+  SCHEMA_COLA,
+} from '@conecta/db';
 import { crearClinicaDePrueba, urlCon, type ClinicaDePrueba } from '@conecta/db/pruebas';
 import pg from 'pg';
 import { PgBoss } from 'pg-boss';
@@ -40,7 +51,10 @@ function registroEnMemoria(): Registro & { lineas: Linea[] } {
 }
 
 let admin: pg.Pool;
-let productor: PgBoss;
+/** Pool de app_api: encola como la API. */
+let api: pg.Pool;
+/** pg-boss como administración: escribe trabajos que app.encolar no deja escribir. */
+let falsificador: PgBoss;
 let config: ConfigWorker;
 let directorio: string;
 let A: ClinicaDePrueba;
@@ -114,8 +128,20 @@ async function crearArchivo(
   return { id, camino, contenido };
 }
 
-async function encolar(datos: object, opciones: object = {}): Promise<string> {
-  const id = await productor.send(COLA_ARCHIVO_VERIFICAR.nombre, datos, opciones);
+/** Encola como la API: `app.encolar` en una transacción con el contexto de esa clínica. */
+async function encolar(clinica: ClinicaDePrueba, archivoId: string): Promise<string> {
+  const id = await conContexto(
+    api,
+    { clinicaId: clinica.clinicaId, usuarioId: clinica.duenoId },
+    (tx) => encolarEnTx(tx, COLA_ARCHIVO_VERIFICAR.nombre, { archivoId }),
+  );
+  if (!id) throw new Error('No se encoló.');
+  return id;
+}
+
+/** Un trabajo escrito fuera de app.encolar (como administración), con cualquier dato. */
+async function falsificar(datos: object): Promise<string> {
+  const id = await falsificador.send(COLA_ARCHIVO_VERIFICAR.nombre, datos);
   if (!id) throw new Error('No se encoló.');
   return id;
 }
@@ -155,9 +181,10 @@ beforeAll(async () => {
     cierreMs: 10_000,
     archivos: { almacen: 'local', directorio },
   };
-  // Productor como la API: app_api, solo encola.
-  productor = new PgBoss({
-    connectionString: urlApi,
+  api = new pg.Pool({ connectionString: urlApi, max: 2 });
+  api.on('error', () => undefined);
+  falsificador = new PgBoss({
+    connectionString: urlAdmin,
     schema: SCHEMA_COLA,
     migrate: false,
     createSchema: false,
@@ -167,13 +194,14 @@ beforeAll(async () => {
     max: 2,
     openTelemetry: { enabled: false },
   });
-  productor.on('error', () => undefined);
-  await productor.start();
+  falsificador.on('error', () => undefined);
+  await falsificador.start();
   [A, B] = await Promise.all([crearClinicaDePrueba(admin), crearClinicaDePrueba(admin)]);
 });
 
 afterAll(async () => {
-  await productor.stop({ graceful: false, close: true });
+  await falsificador.stop({ graceful: false, close: true });
+  await api.end();
   await admin.end();
   await rm(directorio, { recursive: true, force: true });
 });
@@ -181,7 +209,7 @@ afterAll(async () => {
 describe('worker: archivo.verificar', () => {
   it('relee el archivo, recalcula el SHA-256 y registra ok', async () => {
     const archivo = await crearArchivo(A.clinicaId);
-    const id = await encolar({ clinicaId: A.clinicaId, archivoId: archivo.id });
+    const id = await encolar(A, archivo.id);
     await conWorker(async (_w, registro) => {
       const fin = await esperar(async () => {
         const t = await trabajo(id);
@@ -204,7 +232,7 @@ describe('worker: archivo.verificar', () => {
   it('contenido cambiado: distinto, como error y sin reintentos', async () => {
     const archivo = await crearArchivo(A.clinicaId);
     await writeFile(archivo.camino, Buffer.concat([archivo.contenido, Buffer.from('x')]));
-    const id = await encolar({ clinicaId: A.clinicaId, archivoId: archivo.id });
+    const id = await encolar(A, archivo.id);
     await conWorker(async (_w, registro) => {
       const fin = await esperar(async () => {
         const t = await trabajo(id);
@@ -217,10 +245,27 @@ describe('worker: archivo.verificar', () => {
     });
   });
 
-  it('respeta RLS: un archivo de otra clínica no existe para el trabajo', async () => {
+  it('la API no puede encolar para otra clínica; un trabajo falsificado igual choca con RLS', async () => {
     const deA = await crearArchivo(A.clinicaId);
-    const id = await encolar({ clinicaId: B.clinicaId, archivoId: deA.id });
-    const invalido = await encolar({ clinicaId: B.clinicaId, archivoId: '../../etc/passwd' });
+    // Desde el contexto de B, app.encolar no acepta un archivo de A (ni elegir otra clínica).
+    await expect(encolar(B, deA.id)).rejects.toMatchObject({
+      cause: { code: '22023', constraint: 'cola_datos_invalidos' },
+    });
+    await expect(
+      conContexto(api, { clinicaId: B.clinicaId, usuarioId: B.duenoId }, (tx) =>
+        encolarEnTx(tx, COLA_ARCHIVO_VERIFICAR.nombre, {
+          archivoId: deA.id,
+          clinicaId: A.clinicaId,
+        } as { archivoId: string }),
+      ),
+    ).rejects.toMatchObject({ cause: { constraint: 'cola_datos_invalidos' } });
+    // app_api no tiene nada en el schema cola.
+    await expect(api.query('select id from cola.job limit 1')).rejects.toMatchObject({
+      code: '42501',
+    });
+    // Defensa en profundidad del worker: trabajos escritos fuera de app.encolar.
+    const id = await falsificar({ clinicaId: B.clinicaId, archivoId: deA.id });
+    const invalido = await falsificar({ clinicaId: B.clinicaId, archivoId: '../../etc/passwd' });
     await conWorker(async () => {
       const fin = await esperar(async () => {
         const t = await trabajo(id);
@@ -237,15 +282,14 @@ describe('worker: archivo.verificar', () => {
 
   it('si el archivo falta en el almacén, reintenta con espera creciente y termina cuando aparece', async () => {
     const archivo = await crearArchivo(A.clinicaId, { escribir: false });
-    // retryDelay de 1 s para la prueba; el resto (espera creciente, tope) viene de la cola.
-    const id = await encolar(
-      { clinicaId: A.clinicaId, archivoId: archivo.id },
-      { retryDelay: 1, retryLimit: 3 },
-    );
+    // Las opciones las pone app.encolar desde la cola; para la prueba se acorta la espera a 1 s
+    // (como administración). El resto (espera creciente, tope) es el de la cola.
+    const id = await encolar(A, archivo.id);
     expect(await trabajo(id)).toMatchObject({
       retry_backoff: COLA_ARCHIVO_VERIFICAR.opciones.retryBackoff,
       retry_delay_max: COLA_ARCHIVO_VERIFICAR.opciones.retryDelayMax,
     });
+    await admin.query('update cola.job set retry_delay = 1, retry_limit = 3 where id = $1', [id]);
     await conWorker(async (_w, registro) => {
       await esperar(async () => {
         const t = await trabajo(id);
@@ -283,7 +327,7 @@ describe('worker: archivo.verificar', () => {
         return real.leer(ubicacion);
       },
     };
-    const id = await encolar({ clinicaId: A.clinicaId, archivoId: archivo.id });
+    const id = await encolar(A, archivo.id);
     await conWorker(async (worker) => {
       await empezo;
       let cerro = false;
@@ -303,22 +347,42 @@ describe('worker: archivo.verificar', () => {
   });
 
   it('encolar en una transacción revertida no deja el trabajo', async () => {
-    const api = new pg.Pool({ connectionString: inject('conectaDb').urlApi, max: 1 });
-    const cliente = await api.connect();
-    try {
-      await cliente.query('BEGIN');
-      const id = await productor.send(
-        COLA_ARCHIVO_VERIFICAR.nombre,
-        { clinicaId: A.clinicaId, archivoId: randomUUID() },
-        { db: { executeSql: (texto, valores) => cliente.query(texto, valores) } },
+    const archivo = await crearArchivo(A.clinicaId);
+    let id: string | null = null;
+    await expect(
+      conContexto(api, { clinicaId: A.clinicaId, usuarioId: A.duenoId }, async (tx) => {
+        id = await encolarEnTx(tx, COLA_ARCHIVO_VERIFICAR.nombre, { archivoId: archivo.id });
+        throw new Error('revertir');
+      }),
+    ).rejects.toThrow('revertir');
+    expect(id).toEqual(expect.any(String));
+    expect(await trabajo(id ?? '')).toBeUndefined();
+  });
+
+  it('app.encolar guarda la clínica del contexto en el trabajo, y el worker lee con ella', async () => {
+    const archivo = await crearArchivo(B.clinicaId);
+    const id = await encolar(B, archivo.id);
+    const { rows } = await admin.query<{ data: unknown }>(
+      'select data from cola.job where id = $1',
+      [id],
+    );
+    expect(rows[0]?.data).toEqual({ clinicaId: B.clinicaId, archivoId: archivo.id });
+    await conWorker(async (_w, registro) => {
+      const fin = await esperar(async () => {
+        const t = await trabajo(id);
+        return t?.state === 'completed' ? t : null;
+      });
+      expect(fin.output).toEqual({ resultado: 'ok' });
+      expect(registro.lineas).toContainEqual(
+        expect.objectContaining({
+          evento: 'archivo_verificacion',
+          datos: expect.objectContaining({ clinica: B.clinicaId, resultado: 'ok' }) as Record<
+            string,
+            DatoRegistro
+          >,
+        }),
       );
-      expect(id).toEqual(expect.any(String));
-      await cliente.query('ROLLBACK');
-      expect(await trabajo(id ?? '')).toBeUndefined();
-    } finally {
-      cliente.release();
-      await api.end();
-    }
+    });
   });
 });
 

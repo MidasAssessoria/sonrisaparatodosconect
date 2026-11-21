@@ -31,7 +31,7 @@ import { LIMITE_INVITACIONES_POR_MINUTO } from '../src/personal/limite-invitacio
 import { AUDIENCIA, generarClaves, segun, type OpcionesToken, type Prueba } from './ayudas.js';
 
 export interface PruebaPersonal extends Prueba {
-  /** Cuentas de Supabase Auth en memoria (lo que crea y borra la aceptación). */
+  /** Cuentas de Supabase Auth en memoria (lo que crea la invitación por correo) y sus llamadas. */
   adminAuth: AdminAuthFalso;
 }
 
@@ -157,4 +157,27 @@ export async function invitar(
 export async function listarRoles(prueba: Prueba, token: string): Promise<Rol[]> {
   const respuesta = await prueba.pedir('get', '/roles', { token });
   return segun(z.array(rolSchema), respuesta.body);
+}
+
+/**
+ * Lo que hace una persona invitada sin cuenta previa: abre el correo de invitación de Supabase (la
+ * cuenta queda confirmada), vuelve con sesión (JWT aal1 de esa cuenta) y acepta. Devuelve el id de
+ * la cuenta y su token.
+ */
+export async function aceptarDesdeCorreo(
+  prueba: PruebaPersonal,
+  inv: { token: string; persona: { email: string } },
+): Promise<{ cuentaId: string; jwt: string }> {
+  const cuenta = prueba.adminAuth.confirmar(inv.persona.email);
+  const jwt = await prueba.token({ sub: cuenta.id, email: cuenta.email });
+  const respuesta = await prueba.pedir('post', '/invitaciones/aceptar', {
+    token: jwt,
+    cuerpo: { token: inv.token },
+  });
+  if (respuesta.status !== 200) {
+    throw new Error(
+      `Aceptar respondió ${String(respuesta.status)}: ${JSON.stringify(respuesta.body)}`,
+    );
+  }
+  return { cuentaId: cuenta.id, jwt };
 }

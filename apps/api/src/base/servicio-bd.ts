@@ -11,6 +11,7 @@ import {
   sinContexto,
   type TransaccionConecta,
 } from '@conecta/db';
+import { sql } from 'drizzle-orm';
 import type pg from 'pg';
 import { CONFIG, type Config } from '../config.js';
 import { REGISTRO, type Registro } from '../comun/registro.js';
@@ -21,6 +22,31 @@ export interface ContextoBd {
   /** `sub` del JWT verificado. */
   usuarioId: string;
   ip: string | null;
+}
+
+/**
+ * Clínica, usuario e IP de un pedido cuyo permiso todavía no se exigió (rutas `archivo`: el permiso
+ * depende de la categoría, que se lee de la base). Solo lo acepta `ServicioBd.enLectura`, que abre
+ * una transacción de SOLO LECTURA: con esto no se puede escribir nada (ni la auditoría) antes de
+ * exigir el permiso. No es un `ContextoBd` (no expone usuario ni IP), así que `enContexto` no lo
+ * acepta.
+ */
+export class ContextoLectura {
+  readonly #contexto: ContextoBd;
+
+  constructor(contexto: ContextoBd) {
+    this.#contexto = { ...contexto };
+  }
+
+  /** Clínica del pedido (para filtrar las consultas). */
+  get clinicaId(): string {
+    return this.#contexto.clinicaId;
+  }
+
+  /** Solo para `ServicioBd`. */
+  static datos(lectura: ContextoLectura): ContextoBd {
+    return lectura.#contexto;
+  }
 }
 
 @Injectable()
@@ -45,6 +71,17 @@ export class ServicioBd implements OnApplicationShutdown {
       { clinicaId: contexto.clinicaId, usuarioId: contexto.usuarioId, ip: contexto.ip },
       fn,
     );
+  }
+
+  /**
+   * Como `enContexto` (también comprueba la membresía activa), pero la transacción pasa a
+   * `READ ONLY` antes de `fn`: cualquier escritura falla (25006).
+   */
+  enLectura<T>(lectura: ContextoLectura, fn: (tx: TransaccionConecta) => Promise<T>): Promise<T> {
+    return conContexto(this.pool, ContextoLectura.datos(lectura), async (tx) => {
+      await tx.execute(sql`set transaction read only`);
+      return fn(tx);
+    });
   }
 
   comoUsuario<T>(

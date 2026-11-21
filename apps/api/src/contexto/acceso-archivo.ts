@@ -7,8 +7,9 @@
  *      (`@AccesoArchivo()`). El contexto completo (el que pide `ServicioBd.enContexto` para escribir
  *      y el que lleva los permisos y sedes) solo sale de `exigir()`, que comprueba el permiso
  *      `<modulo de la categoría>:<accion>` y la sede.
- *   2. Antes de exigir, el handler solo tiene `contextoBd` (clínica, usuario e IP) para LEER la
- *      categoría de un archivo pedido; no le alcanza para responder: `InterceptorAccesoArchivo`
+ *   2. Antes de exigir, el handler solo tiene `contextoLectura` para LEER la categoría de un
+ *      archivo pedido, y solo en una transacción de solo lectura (`ServicioBd.enLectura`): no puede
+ *      escribir nada, ni la auditoría. Tampoco le alcanza para responder: `InterceptorAccesoArchivo`
  *      cambia por un 500 cualquier respuesta de una ruta `archivo` que no haya pasado por `exigir()`.
  */
 import {
@@ -22,7 +23,7 @@ import {
 import { Reflector } from '@nestjs/core';
 import { CATEGORIAS_ARCHIVO, type CategoriaArchivo } from '@conecta/shared';
 import { map, type Observable } from 'rxjs';
-import type { ContextoBd } from '../base/servicio-bd.js';
+import { ContextoLectura } from '../base/servicio-bd.js';
 import { idPedidoDe } from '../comun/pedido.js';
 import { REGISTRO, type Registro } from '../comun/registro.js';
 import { errores } from '../errores/error-api.js';
@@ -41,12 +42,13 @@ export class AccesoPorCategoria {
   }
 
   /**
-   * Clínica (de una membresía activa verificada), usuario e IP del pedido. Sirve para leer la
-   * categoría del archivo pedido antes de exigir el permiso; no para responder (ver arriba).
+   * Clínica (de una membresía activa verificada), usuario e IP del pedido, solo para
+   * `ServicioBd.enLectura` (transacción de solo lectura): sirve para leer la categoría del archivo
+   * pedido antes de exigir el permiso; no para escribir ni para responder (ver arriba).
    */
-  get contextoBd(): ContextoBd {
+  get contextoLectura(): ContextoLectura {
     const { clinicaId, usuarioId, ip } = this.#contexto;
-    return { clinicaId, usuarioId, ip };
+    return new ContextoLectura({ clinicaId, usuarioId, ip });
   }
 
   /** `true` después de un `exigir()` que pasó. */

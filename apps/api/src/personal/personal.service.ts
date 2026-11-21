@@ -1,13 +1,24 @@
 /**
  * Equipo de la clínica (membresías). Todo corre en `enContexto` (RLS por clínica) y cada consulta
  * filtra además por la clínica del contexto. La defensa contra la autoescalada (editarse a sí
- * mismo, dar el rol dueño sin serlo, tocar el rol dueño, la clínica sin dueño) la hace la base
- * (`app.proteger_acceso`, `app.proteger_ultimo_dueno`); la API traduce sus errores.
+ * mismo, dar el rol dueño sin serlo, tocar el rol dueño, la clínica sin dueño) y los límites de
+ * quien administra (no asignar un rol que dé más que el propio, dimensión sede) los impone la base
+ * (`app.proteger_acceso`, `app.proteger_ultimo_dueno`, migración 0015); la API traduce sus errores.
+ *
+ * Dimensión sede: una persona fuera del alcance de quien pide (`app.membresia_en_alcance`) no existe
+ * para él: 404, igual que una de otra clínica (no se revela que está).
  *
  * Las ediciones las audita la base (triggers): la API no escribe en audit_log.
  */
 import { Injectable } from '@nestjs/common';
-import { listarPersonal, membresia, usuarioSede, type TransaccionConecta } from '@conecta/db';
+import {
+  desactivarMembresia,
+  listarPersonal,
+  membresia,
+  membresiaEnAlcance,
+  usuarioSede,
+  type TransaccionConecta,
+} from '@conecta/db';
 import { personaSchema, type EditarPersona, type Persona } from '@conecta/shared';
 import { and, eq, inArray } from 'drizzle-orm';
 import { z } from 'zod';
@@ -29,6 +40,11 @@ interface FilaMembresia {
   usuarioId: string | null;
   rolId: string;
   sedeDefectoId: string | null;
+}
+
+/** 404 si la membresía no es de la clínica o está fuera del alcance de sedes de quien pide. */
+export async function exigirEnAlcance(tx: TransaccionConecta, membresiaId: string): Promise<void> {
+  if (!(await membresiaEnAlcance(tx, membresiaId))) throw personaNoEncontrada();
 }
 
 /** Una persona del equipo con la forma del contrato (después de un cambio en esta transacción). */
@@ -140,9 +156,9 @@ export class PersonalService {
 
   /**
    * Corta el acceso: el pedido siguiente de esa persona ya no encuentra su membresía activa. El
-   * motivo se valida pero la base todavía no tiene dónde guardarlo (ver el reporte del Sprint 2).
+   * motivo queda en la membresía (`motivo_baja`) y en la auditoría (la base registra la fila).
    */
-  desactivar(ctx: ContextoPedido, id: string): Promise<Persona> {
+  desactivar(ctx: ContextoPedido, id: string, motivo: string): Promise<Persona> {
     return this.bd.enContexto(ctx, async (tx) => {
       const actual = await this.buscar(tx, ctx, id);
       if (actual.estado === 'pendiente') {
@@ -153,10 +169,7 @@ export class PersonalService {
       if (actual.estado === 'inactivo') {
         throw errores.conflicto('Esa persona ya está desactivada. Recargá la lista del equipo.');
       }
-      await tx
-        .update(membresia)
-        .set({ estado: 'inactivo' })
-        .where(and(eq(membresia.id, id), eq(membresia.clinicaId, ctx.clinicaId)));
+      await desactivarMembresia(tx, id, motivo);
       return personaDe(tx, id);
     });
   }
@@ -185,12 +198,16 @@ export class PersonalService {
     });
   }
 
-  /** Membresía de la clínica del contexto, bloqueada hasta el final de la transacción, o 404. */
+  /**
+   * Membresía de la clínica del contexto y del alcance de sedes de quien pide, bloqueada hasta el
+   * final de la transacción, o 404.
+   */
   private async buscar(
     tx: TransaccionConecta,
     ctx: ContextoPedido,
     id: string,
   ): Promise<FilaMembresia> {
+    await exigirEnAlcance(tx, id);
     const [fila] = await tx
       .select({
         id: membresia.id,

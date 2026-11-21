@@ -162,9 +162,10 @@ describe('roles', () => {
             cuerpo: {
               nombre: 'Recepción de la tarde',
               todasLasSedes: true,
+              // Solo permisos que Administración tiene (si no, la base lo rechaza: 0015).
               permisos: [
                 { modulo: 'agenda', accion: 'ver' },
-                { modulo: 'agenda', accion: 'crear' },
+                { modulo: 'caja', accion: 'ver' },
               ],
             },
           })
@@ -177,7 +178,7 @@ describe('roles', () => {
       personas: 1,
       permisos: [
         { modulo: 'agenda', accion: 'ver' },
-        { modulo: 'agenda', accion: 'crear' },
+        { modulo: 'caja', accion: 'ver' },
       ],
     });
     const { rows } = await comoSistema<{ modulo: string; accion: string; activo: boolean }>(
@@ -187,8 +188,8 @@ describe('roles', () => {
       [rol.id],
     );
     expect(rows).toEqual([
-      { modulo: 'agenda', accion: 'crear', activo: true },
       { modulo: 'agenda', accion: 'ver', activo: true },
+      { modulo: 'caja', accion: 'ver', activo: true },
       { modulo: 'pacientes', accion: 'ver', activo: false },
     ]);
 
@@ -199,7 +200,7 @@ describe('roles', () => {
     expect(sesion.permisos).toEqual(
       expect.arrayContaining([
         { modulo: 'agenda', accion: 'ver' },
-        { modulo: 'agenda', accion: 'crear' },
+        { modulo: 'caja', accion: 'ver' },
       ]),
     );
     expect(sesion.permisos).toHaveLength(2);
@@ -285,6 +286,22 @@ describe('roles', () => {
       .pedir('delete', `/roles/${libre.id}`, { token: duenoA, cuerpo: { motivo: 'Ya no se usa' } })
       .expect(204);
     expect((await listarRoles(prueba, duenoA)).find((r) => r.id === libre.id)?.activo).toBe(false);
+    // El motivo queda en el rol y en la auditoría.
+    const { rows: baja } = await comoSistema<{ motivo_baja: string | null }>(
+      prueba.admin,
+      a.clinicaId,
+      'select motivo_baja from app.rol where id = $1',
+      [libre.id],
+    );
+    expect(baja).toEqual([{ motivo_baja: 'Ya no se usa' }]);
+    const { rows: auditoria } = await comoSistema<{ usuario_id: string; motivo: string }>(
+      prueba.admin,
+      a.clinicaId,
+      `select usuario_id, despues ->> 'motivo_baja' as motivo from app.audit_log
+       where entidad = 'rol' and entidad_id = $1 and accion = 'anular'`,
+      [libre.id],
+    );
+    expect(auditoria).toEqual([{ usuario_id: a.duenoId, motivo: 'Ya no se usa' }]);
     await esperarError(
       prueba.pedir('delete', `/roles/${libre.id}`, { token: duenoA, cuerpo: { motivo: 'Otra' } }),
       409,

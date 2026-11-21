@@ -1,16 +1,22 @@
 /**
  * `crearAdminAuthSupabase` (la implementación real, con `@supabase/supabase-js`) contra una imitación
- * local de la Admin API de Supabase Auth (GoTrue): rutas, paginación, códigos de error, compensación
- * y que la clave secreta nunca aparezca en un error. No reemplaza probar contra Supabase de verdad.
+ * local de la API de Supabase Auth (GoTrue): invitar por correo (con `redirect_to`), enlace de
+ * ingreso, estado de confirmación, búsqueda por correo (paginada y recordada), códigos de error y
+ * que la clave secreta nunca aparezca en un error. No reemplaza probar contra Supabase de verdad.
  */
 import { randomUUID } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { ErrorApi } from '../src/errores/error-api.js';
-import { crearAdminAuthSupabase, type AdminAuth } from '../src/personal/admin-auth.js';
+import {
+  crearAdminAuthSupabase,
+  METADATO_INVITACION,
+  type AdminAuth,
+} from '../src/personal/admin-auth.js';
 
 const CLAVE_SECRETA = 'sb_secret_prueba_no_es_real_0123456789';
+const VUELTA = 'http://localhost:5173/invitacion?token=abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG';
 
 interface Pedido {
   metodo: string;
@@ -24,6 +30,9 @@ interface Pedido {
 interface UsuarioGoTrue {
   id: string;
   email: string;
+  confirmado: boolean;
+  invitado: boolean;
+  metadatos: Record<string, unknown>;
 }
 
 function leerCuerpo(req: IncomingMessage): Promise<unknown> {
@@ -40,17 +49,19 @@ function leerCuerpo(req: IncomingMessage): Promise<unknown> {
   });
 }
 
-/** Imitación mínima de `/auth/v1/admin/users` de GoTrue. */
+/** Imitación mínima de GoTrue: `/admin/users`, `/admin/users/:id`, `/invite` y `/otp`. */
 async function imitacionGoTrue(): Promise<{
   url: string;
   usuarios: UsuarioGoTrue[];
   pedidos: Pedido[];
   caido: { valor: boolean };
+  limiteCorreo: { valor: boolean };
   cerrar: () => Promise<void>;
 }> {
   const usuarios: UsuarioGoTrue[] = [];
   const pedidos: Pedido[] = [];
   const caido = { valor: false };
+  const limiteCorreo = { valor: false };
   const servidor: Server = createServer((req, res) => {
     void (async () => {
       const url = new URL(req.url ?? '/', 'http://local');
@@ -72,15 +83,17 @@ async function imitacionGoTrue(): Promise<{
         res.end(JSON.stringify(datos));
       };
       if (caido.valor) return json(503, { code: 'unexpected_failure', msg: 'caído' });
+      const ahora = new Date().toISOString();
       const usuario = (u: UsuarioGoTrue) => ({
         id: u.id,
         aud: 'authenticated',
         role: 'authenticated',
         email: u.email,
-        email_confirmed_at: new Date().toISOString(),
+        ...(u.confirmado ? { email_confirmed_at: ahora, confirmed_at: ahora } : {}),
+        ...(u.invitado ? { invited_at: ahora } : {}),
         app_metadata: {},
-        user_metadata: {},
-        created_at: new Date().toISOString(),
+        user_metadata: u.metadatos,
+        created_at: ahora,
       });
       const base = '/auth/v1/admin/users';
       if (req.method === 'GET' && url.pathname === base) {
@@ -102,36 +115,47 @@ async function imitacionGoTrue(): Promise<{
           { 'x-total-count': String(usuarios.length), link: enlaces.join(',') },
         );
       }
-      if (req.method === 'POST' && url.pathname === base) {
-        const datos = cuerpo as { email: string; password: string; email_confirm: boolean };
-        if (usuarios.some((u) => u.email === datos.email.toLowerCase())) {
+      if (req.method === 'POST' && url.pathname === '/auth/v1/invite') {
+        if (limiteCorreo.valor) {
+          return json(429, {
+            code: 'over_email_send_rate_limit',
+            msg: 'email rate limit exceeded',
+          });
+        }
+        const datos = cuerpo as { email: string; data?: Record<string, unknown> };
+        const email = datos.email.toLowerCase();
+        const existente = usuarios.find((u) => u.email === email);
+        if (existente?.confirmado) {
           return json(422, {
             code: 'email_exists',
             msg: 'A user with this email address has already been registered',
           });
         }
-        if (datos.password === 'clave-debil-123') {
-          return json(422, {
-            code: 'weak_password',
-            msg: 'Password is known to be weak',
-            weak_password: { reasons: ['pwned'] },
-          });
+        const invitado = existente ?? {
+          id: randomUUID(),
+          email,
+          confirmado: false,
+          invitado: true,
+          metadatos: datos.data ?? {},
+        };
+        invitado.invitado = true;
+        if (!existente) usuarios.push(invitado);
+        return json(200, usuario(invitado));
+      }
+      if (req.method === 'POST' && url.pathname === '/auth/v1/otp') {
+        const datos = cuerpo as { email: string; create_user: boolean };
+        if (!usuarios.some((u) => u.email === datos.email) && !datos.create_user) {
+          return json(422, { code: 'otp_disabled', msg: 'Signups not allowed for otp' });
         }
-        const nuevo = { id: randomUUID(), email: datos.email.toLowerCase() };
-        usuarios.push(nuevo);
-        return json(200, usuario(nuevo));
+        return json(200, {});
       }
       const porId = url.pathname.startsWith(`${base}/`)
         ? url.pathname.slice(base.length + 1)
         : null;
-      if (porId) {
+      if (porId && req.method === 'GET') {
         const encontrado = usuarios.find((u) => u.id === porId);
         if (!encontrado) return json(404, { code: 'user_not_found', msg: 'User not found' });
-        if (req.method === 'GET') return json(200, usuario(encontrado));
-        if (req.method === 'DELETE') {
-          usuarios.splice(usuarios.indexOf(encontrado), 1);
-          return json(200, {});
-        }
+        return json(200, usuario(encontrado));
       }
       return json(404, { code: 'not_found', msg: 'no' });
     })();
@@ -143,6 +167,7 @@ async function imitacionGoTrue(): Promise<{
     usuarios,
     pedidos,
     caido,
+    limiteCorreo,
     cerrar: async () => {
       servidor.closeAllConnections();
       await new Promise<void>((r) => servidor.close(() => r()));
@@ -160,9 +185,22 @@ async function errorDe(promesa: Promise<unknown>): Promise<ErrorApi> {
   throw new Error('No falló.');
 }
 
-describe('AdminAuth con supabase-js (contra una imitación de la Admin API)', () => {
+describe('AdminAuth con supabase-js (contra una imitación de GoTrue)', () => {
   let gotrue: Awaited<ReturnType<typeof imitacionGoTrue>>;
   let adminAuth: AdminAuth;
+
+  const agregar = (email: string, opciones: Partial<UsuarioGoTrue> = {}): UsuarioGoTrue => {
+    const u = {
+      id: randomUUID(),
+      email,
+      confirmado: true,
+      invitado: false,
+      metadatos: {},
+      ...opciones,
+    };
+    gotrue.usuarios.push(u);
+    return u;
+  };
 
   beforeAll(async () => {
     gotrue = await imitacionGoTrue();
@@ -177,71 +215,115 @@ describe('AdminAuth con supabase-js (contra una imitación de la Admin API)', ()
   beforeEach(() => {
     gotrue.pedidos.length = 0;
     gotrue.caido.valor = false;
+    gotrue.limiteCorreo.valor = false;
   });
 
-  it('crea una cuenta confirmada con la clave secreta en las cabeceras', async () => {
-    const cuenta = await adminAuth.crearCuentaConfirmada(
-      'Nueva@Prueba.test',
-      'una-clave-larga-123',
-    );
-    expect(cuenta.email).toBe('nueva@prueba.test');
-    const pedido = gotrue.pedidos.find((p) => p.metodo === 'POST');
-    expect(pedido?.ruta).toBe('/auth/v1/admin/users');
-    expect(pedido?.cuerpo).toMatchObject({ email_confirm: true, password: 'una-clave-larga-123' });
+  it('invita por correo con redirect_to, la marca de la invitación y la clave secreta en las cabeceras', async () => {
+    expect(await adminAuth.invitarPorCorreo('Nueva@Prueba.test', VUELTA)).toBe('enviada');
+    const pedido = gotrue.pedidos.find((p) => p.ruta === '/auth/v1/invite');
+    expect(pedido?.metodo).toBe('POST');
+    expect(pedido?.consulta.get('redirect_to')).toBe(VUELTA);
+    expect(pedido?.cuerpo).toEqual({
+      email: 'nueva@prueba.test',
+      data: { [METADATO_INVITACION]: true },
+    });
     expect(pedido?.apikey).toBe(CLAVE_SECRETA);
     expect(pedido?.autorizacion).toBe(`Bearer ${CLAVE_SECRETA}`);
+
+    const cuenta = await adminAuth.buscarPorCorreo('nueva@prueba.test');
+    expect(cuenta).toMatchObject({
+      email: 'nueva@prueba.test',
+      confirmada: false,
+      nacidaPorInvitacion: true,
+    });
+    // Sin confirmar: invitar otra vez la reenvía.
+    expect(await adminAuth.invitarPorCorreo('nueva@prueba.test', VUELTA)).toBe('enviada');
   });
 
-  it('correo ya registrado → conflicto; clave débil → datos_invalidos; nada de Supabase en el mensaje', async () => {
-    await adminAuth.crearCuentaConfirmada('repetida@prueba.test', 'una-clave-larga-123');
-    const repetida = await errorDe(
-      adminAuth.crearCuentaConfirmada('repetida@prueba.test', 'una-clave-larga-123'),
+  it('correo con cuenta confirmada → ya_confirmada (no se manda nada); límite de correos → 503', async () => {
+    agregar('confirmada@prueba.test');
+    expect(await adminAuth.invitarPorCorreo('confirmada@prueba.test', VUELTA)).toBe(
+      'ya_confirmada',
     );
-    expect(repetida.cuerpo()).toMatchObject({ codigo: 'conflicto' });
-    const debil = await errorDe(
-      adminAuth.crearCuentaConfirmada('debil@prueba.test', 'clave-debil-123'),
-    );
-    expect(debil.cuerpo()).toMatchObject({ codigo: 'datos_invalidos' });
-    for (const e of [repetida, debil]) {
-      expect(JSON.stringify(e.cuerpo())).not.toMatch(/already|weak|pwned|sb_secret/i);
-    }
+    gotrue.limiteCorreo.valor = true;
+    const e = await errorDe(adminAuth.invitarPorCorreo('otra@prueba.test', VUELTA));
+    expect(e.estado).toBe(503);
+    expect(e.message).toMatch(/no se guardó/);
+    expect(JSON.stringify(e.cuerpo())).not.toMatch(/rate|limit|sb_secret/i);
   });
 
-  it('busca por correo recorriendo páginas, sin poner el correo en la URL', async () => {
-    for (let i = 0; i < 3; i++)
-      gotrue.usuarios.push({ id: randomUUID(), email: `relleno-${String(i)}@prueba.test` });
-    const cuenta = await adminAuth.crearCuentaConfirmada(
-      'buscada@prueba.test',
-      'una-clave-larga-123',
-    );
+  it('obtiene una cuenta por id con su estado de confirmación; un id desconocido → null', async () => {
+    const u = agregar('por-id@prueba.test', { confirmado: false });
+    expect(await adminAuth.obtenerCuenta(u.id)).toEqual({
+      id: u.id,
+      email: 'por-id@prueba.test',
+      confirmada: false,
+      nacidaPorInvitacion: false,
+    });
+    u.confirmado = true;
+    expect((await adminAuth.obtenerCuenta(u.id))?.confirmada).toBe(true);
+    expect(await adminAuth.obtenerCuenta(randomUUID())).toBeNull();
+  });
+
+  it('nacida por invitación: por invited_at o por la marca en los metadatos', async () => {
+    const porMarca = agregar('marca@prueba.test', { metadatos: { [METADATO_INVITACION]: true } });
+    const porInvitedAt = agregar('invited@prueba.test', { invitado: true });
+    const propia = agregar('propia@prueba.test');
+    expect((await adminAuth.obtenerCuenta(porMarca.id))?.nacidaPorInvitacion).toBe(true);
+    expect((await adminAuth.obtenerCuenta(porInvitedAt.id))?.nacidaPorInvitacion).toBe(true);
+    expect((await adminAuth.obtenerCuenta(propia.id))?.nacidaPorInvitacion).toBe(false);
+  });
+
+  it('busca por correo recorriendo páginas sin poner el correo en la URL, y después lo recuerda', async () => {
+    for (let i = 0; i < 3; i++) agregar(`relleno-${String(i)}@prueba.test`);
+    const buscada = agregar('buscada@prueba.test');
+    // Otra instancia (sin nada recordado).
+    const nueva = crearAdminAuthSupabase(gotrue.url, CLAVE_SECRETA, { porPagina: 2 });
     gotrue.pedidos.length = 0;
-    expect(await adminAuth.buscarPorCorreo('BUSCADA@prueba.test')).toEqual(cuenta);
-    expect(await adminAuth.buscarPorCorreo('nadie@prueba.test')).toBeNull();
+    expect(await nueva.buscarPorCorreo('BUSCADA@prueba.test')).toMatchObject({
+      id: buscada.id,
+      email: 'buscada@prueba.test',
+      confirmada: true,
+    });
+    expect(await nueva.buscarPorCorreo('nadie@prueba.test')).toBeNull();
     const paginas = gotrue.pedidos.map((p) => p.consulta.get('page'));
     expect(new Set(paginas).size).toBeGreaterThan(2);
     for (const p of gotrue.pedidos) {
       expect(p.ruta).toBe('/auth/v1/admin/users');
       expect(p.consulta.toString()).not.toMatch(/prueba\.test|buscada|nadie/i);
     }
+
+    // La segunda vez: un solo pedido, por id.
+    gotrue.pedidos.length = 0;
+    expect((await nueva.buscarPorCorreo('buscada@prueba.test'))?.id).toBe(buscada.id);
+    expect(gotrue.pedidos.map((p) => `${p.metodo} ${p.ruta}`)).toEqual([
+      `GET /auth/v1/admin/users/${buscada.id}`,
+    ]);
+
+    // Si el correo de esa cuenta cambió, se vuelve a recorrer la lista.
+    buscada.email = 'cambiada@prueba.test';
+    gotrue.pedidos.length = 0;
+    expect(await nueva.buscarPorCorreo('buscada@prueba.test')).toBeNull();
+    expect(gotrue.pedidos.some((p) => p.ruta === '/auth/v1/admin/users')).toBe(true);
   });
 
-  it('borra una cuenta; si ya no existe, no falla', async () => {
-    const cuenta = await adminAuth.crearCuentaConfirmada(
-      'borrar@prueba.test',
-      'una-clave-larga-123',
-    );
-    await adminAuth.borrarCuenta(cuenta.id);
-    expect(gotrue.usuarios.some((u) => u.id === cuenta.id)).toBe(false);
-    await adminAuth.borrarCuenta(cuenta.id);
-    await adminAuth.borrarCuenta(randomUUID());
+  it('manda el enlace de ingreso (magic link) sin crear cuentas, con redirect_to', async () => {
+    agregar('ingreso@prueba.test');
+    await adminAuth.enviarEnlaceIngreso('Ingreso@Prueba.test', VUELTA);
+    const pedido = gotrue.pedidos.find((p) => p.ruta === '/auth/v1/otp');
+    expect(pedido?.consulta.get('redirect_to')).toBe(VUELTA);
+    expect(pedido?.cuerpo).toMatchObject({ email: 'ingreso@prueba.test', create_user: false });
+    const e = await errorDe(adminAuth.enviarEnlaceIngreso('nadie-otp@prueba.test', VUELTA));
+    expect(e.estado).toBe(503);
   });
 
   it('Auth caído o inalcanzable → servicio_no_disponible, sin la clave en el error', async () => {
     gotrue.caido.valor = true;
     for (const operacion of [
       () => adminAuth.buscarPorCorreo('x@prueba.test'),
-      () => adminAuth.crearCuentaConfirmada('x@prueba.test', 'una-clave-larga-123'),
-      () => adminAuth.borrarCuenta(randomUUID()),
+      () => adminAuth.obtenerCuenta(randomUUID()),
+      () => adminAuth.invitarPorCorreo('x@prueba.test', VUELTA),
+      () => adminAuth.enviarEnlaceIngreso('x@prueba.test', VUELTA),
     ]) {
       const e = await errorDe(operacion());
       expect(e.estado).toBe(503);

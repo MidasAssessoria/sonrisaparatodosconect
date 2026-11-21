@@ -3,7 +3,10 @@
  * que no exige el permiso no puede responder, y `@Ctx()` no existe en esas rutas.
  */
 import { Controller, Get, Module } from '@nestjs/common';
+import { registrarEvento } from '@conecta/db';
+import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { ServicioBd } from '../src/base/servicio-bd.js';
 import { Permiso, PermisoDeArchivo } from '../src/contexto/acceso.js';
 import { AccesoArchivo, type AccesoPorCategoria } from '../src/contexto/acceso-archivo.js';
 import { Ctx, type ContextoPedido } from '../src/contexto/contexto-pedido.js';
@@ -19,10 +22,42 @@ import {
 
 @Controller('prueba-archivo')
 class RutasDePrueba {
+  constructor(private readonly bd: ServicioBd) {}
+
+  /** Intenta auditar con el contexto de antes de exigir: la transacción es de solo lectura. */
+  @Get('escribe-antes')
+  @PermisoDeArchivo()
+  async escribeAntes(@AccesoArchivo() acceso: AccesoPorCategoria): Promise<{ codigo: string }> {
+    const codigo = await this.bd
+      .enLectura(acceso.contextoLectura, async (tx) => {
+        await registrarEvento(tx, { accion: 'exportar', entidad: 'clinica' });
+        return 'escribio';
+      })
+      .catch((error: unknown) => {
+        const causa = (error as { cause?: { code?: string } }).cause;
+        return (error as { code?: string }).code ?? causa?.code ?? 'otro';
+      });
+    acceso.exigir('logo_clinica', 'ver');
+    return { codigo };
+  }
+
+  /** Leer sí puede, y solo ve su clínica. */
+  @Get('lee-antes')
+  @PermisoDeArchivo()
+  async leeAntes(@AccesoArchivo() acceso: AccesoPorCategoria): Promise<{ sedes: string[] }> {
+    const lectura = acceso.contextoLectura;
+    const sedes = await this.bd.enLectura(lectura, async (tx) => {
+      const { rows } = await tx.execute<{ id: string }>(sql`select id from app.sede`);
+      return rows.map((f) => f.id);
+    });
+    acceso.exigir('logo_clinica', 'ver');
+    return { sedes };
+  }
+
   @Get('sin-exigir')
   @PermisoDeArchivo()
   sinExigir(@AccesoArchivo() acceso: AccesoPorCategoria): { secreto: string } {
-    return { secreto: `no debería verse ${acceso.contextoBd.clinicaId}` };
+    return { secreto: `no debería verse ${acceso.contextoLectura.clinicaId}` };
   }
 
   @Get('con-ctx')
@@ -85,6 +120,28 @@ describe('acceso archivo', () => {
       );
       expect(JSON.stringify(r.body)).not.toContain('secreto');
     }
+  });
+
+  it('antes de exigir() solo se lee: la transacción de contextoLectura no puede escribir', async () => {
+    const r = await prueba.pedir('get', '/prueba-archivo/escribe-antes', {
+      token: await A.dueno.token(),
+    });
+    expect(r.status).toBe(200);
+    // 25006: read_only_sql_transaction.
+    expect(r.body).toEqual({ codigo: '25006' });
+    const l = await prueba.pedir('get', '/prueba-archivo/lee-antes', {
+      token: await A.dueno.token(),
+    });
+    expect(l.status).toBe(200);
+    expect(l.body).toEqual({ sedes: A.sedes.map((s) => s.sedeId) });
+  });
+
+  it('contextoLectura no sirve para enContexto (no es un ContextoBd)', () => {
+    const bd = prueba.app.get(ServicioBd);
+    const comprobarTipos = (acceso: AccesoPorCategoria) =>
+      // @ts-expect-error: ContextoLectura no expone usuario ni IP; enContexto no lo acepta.
+      bd.enContexto(acceso.contextoLectura, () => Promise.resolve(null));
+    expect(typeof comprobarTipos).toBe('function');
   });
 
   it('exigir() decide: con el permiso responde, sin él 403', async () => {

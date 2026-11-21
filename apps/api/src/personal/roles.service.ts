@@ -1,12 +1,19 @@
 /**
  * Roles de la clínica y su matriz de permisos. Todo en `enContexto`. La base decide quién puede
- * cambiar qué (`app.proteger_acceso`): nadie toca su propio rol ni sus permisos, el rol dueño no se
- * modifica, un rol en uso no se desactiva. La API traduce sus errores.
+ * cambiar qué (`app.proteger_acceso` y los límites de 0015): nadie toca su propio rol ni sus
+ * permisos, el rol dueño no se modifica, un rol en uso no se desactiva, nadie deja un rol con
+ * permisos (o con todas las sedes) que su propio rol no tiene salvo el dueño, los roles de sistema
+ * solo los cambia un dueño y Dueño/a y Administración siempre exigen doble factor. La API traduce
+ * sus errores.
+ *
+ * `GET /roles` devuelve todos los roles: la web calcula cuáles puede asignar quien mira comparando
+ * cada rol con el suyo (permisos y `todasLasSedes`, que vienen en la misma lista; el dueño no tiene
+ * límite). La base lo vuelve a controlar al asignar.
  *
  * Altas y cambios los audita la base (triggers).
  */
 import { Injectable } from '@nestjs/common';
-import { reemplazarPermisosRol, rol, type TransaccionConecta } from '@conecta/db';
+import { desactivarRol, reemplazarPermisosRol, rol, type TransaccionConecta } from '@conecta/db';
 import {
   ACCIONES,
   MODULOS,
@@ -73,9 +80,17 @@ export class RolesService {
     });
   }
 
-  /** `permisos`, si viene, reemplaza la matriz completa (lo que falta queda revocado). */
+  /**
+   * `permisos`, si viene, reemplaza la matriz completa (lo que falta queda revocado). El control de
+   * «no dar lo que no tenés» (`rol_limite_actor`, `rol_permiso_limite_actor`) se difiere al COMMIT:
+   * mira el rol como queda después de TODOS los cambios del pedido (p. ej. quitar un permiso ajeno y
+   * renombrar en el mismo pedido no falla por el estado intermedio).
+   */
   editar(ctx: ContextoPedido, id: string, datos: EditarRol): Promise<Rol> {
     return this.bd.enContexto(ctx, async (tx) => {
+      await tx.execute(
+        sql`set constraints app.rol_limite_actor, app.rol_permiso_limite_actor deferred`,
+      );
       await this.bloquear(tx, ctx, id);
       if (datos.nombre !== undefined) await this.exigirNombreLibre(tx, ctx, datos.nombre, id);
       const cambios: Partial<typeof rol.$inferInsert> = {};
@@ -94,20 +109,14 @@ export class RolesService {
     });
   }
 
-  /**
-   * Desactiva el rol (nada se borra). El motivo se valida pero la base todavía no tiene dónde
-   * guardarlo (ver el reporte del Sprint 2).
-   */
-  desactivar(ctx: ContextoPedido, id: string): Promise<void> {
+  /** Desactiva el rol (nada se borra) con su motivo (`rol.motivo_baja`, queda en la auditoría). */
+  desactivar(ctx: ContextoPedido, id: string, motivo: string): Promise<void> {
     return this.bd.enContexto(ctx, async (tx) => {
       const actual = await this.bloquear(tx, ctx, id);
       if (!actual.activo) {
         throw errores.conflicto('Ese rol ya está desactivado. Recargá la lista de roles.');
       }
-      await tx
-        .update(rol)
-        .set({ activo: false })
-        .where(and(eq(rol.id, id), eq(rol.clinicaId, ctx.clinicaId)));
+      await desactivarRol(tx, id, motivo);
     });
   }
 

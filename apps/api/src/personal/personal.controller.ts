@@ -69,11 +69,9 @@ export class PersonalController {
   desactivar(
     @Ctx() ctx: ContextoPedido,
     @Param('id', IdDeRuta) id: string,
-    // El motivo es obligatorio por contrato; la base todavÃ­a no lo guarda (ver PersonalService).
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars -- se valida, no hay dónde guardarlo
-    @Body(new ValidarCon(bajaSchema)) _baja: Baja,
+    @Body(new ValidarCon(bajaSchema)) baja: Baja,
   ): Promise<Persona> {
-    return this.personal.desactivar(ctx, id);
+    return this.personal.desactivar(ctx, id, baja.motivo);
   }
 
   @Post(':id/reactivar')
@@ -85,8 +83,8 @@ export class PersonalController {
 }
 
 /**
- * LÃ­mite por IP de las rutas pÃºblicas de invitaciÃ³n. Es un guard (corre despuÃ©s del guard global y
- * antes de validar el cuerpo): cuenta tambiÃ©n los pedidos mal formados.
+ * Límite por IP de las rutas públicas de invitación. Es un guard (corre después del guard global y
+ * antes de validar el cuerpo): cuenta también los pedidos mal formados.
  */
 @Injectable()
 export class GuardLimiteInvitaciones implements CanActivate {
@@ -113,7 +111,7 @@ export class InvitacionesController {
     return this.invitaciones.crear(ctx, datos);
   }
 
-  /** `:id` = la membresÃ­a pendiente (una sola invitaciÃ³n abierta por membresÃ­a). */
+  /** `:id` = la membresía pendiente (una sola invitación abierta por membresía). */
   @Post(':id/reenviar')
   @HttpCode(200)
   @Permiso('personal', 'crear')
@@ -147,9 +145,10 @@ export class InvitacionesController {
   }
 
   /**
-   * PÃºblica: la persona todavÃ­a no es miembro. Si trae `Authorization`, el JWT se verifica acÃ¡
-   * (no en el guard de contexto) y de Ã©l salen el usuario y el correo. Nada de identidad sale del
-   * cuerpo: el esquema solo deja pasar `token` y `clave`.
+   * Pública (la persona todavía no es miembro), pero exige `Authorization`: el JWT se verifica acá
+   * (no en el guard de contexto, que pediría una membresía) y de él salen el usuario y el correo,
+   * que además tiene que estar confirmado según la Admin API. Nada de identidad sale del cuerpo: el
+   * esquema solo deja pasar `token`.
    */
   @Post('aceptar')
   @HttpCode(200)
@@ -159,7 +158,7 @@ export class InvitacionesController {
     @Req() req: Request,
     @Body(new ValidarCon(aceptarInvitacionSchema)) datos: AceptarInvitacion,
   ): Promise<InvitacionAceptada> {
-    return this.invitaciones.aceptar(datos, req.headers.authorization, ipDe(req));
+    return this.invitaciones.aceptar(datos.token, req.headers.authorization, ipDe(req));
   }
 }
 
@@ -198,10 +197,8 @@ export class RolesController {
   async desactivar(
     @Ctx() ctx: ContextoPedido,
     @Param('id', IdDeRuta) id: string,
-    // El motivo es obligatorio por contrato; la base todavÃ­a no lo guarda (ver RolesService).
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars -- se valida, no hay dónde guardarlo
-    @Body(new ValidarCon(bajaSchema)) _baja: Baja,
+    @Body(new ValidarCon(bajaSchema)) baja: Baja,
   ): Promise<void> {
-    await this.roles.desactivar(ctx, id);
+    await this.roles.desactivar(ctx, id, baja.motivo);
   }
 }
