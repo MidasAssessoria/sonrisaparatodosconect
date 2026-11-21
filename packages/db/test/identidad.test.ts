@@ -236,7 +236,11 @@ describe('membresia', () => {
     // El dueño de A sí edita las de A; con un rol de B, la FK compuesta lo impide.
     await enTransaccion(api, { clinica: A.clinicaId, usuario: A.duenoId }, async (c) => {
       expect(
-        await intentar(c, "update app.membresia set estado = 'inactivo' where id = $1", [xEnA]),
+        await intentar(
+          c,
+          "update app.membresia set estado = 'inactivo', motivo_baja = 'Baja' where id = $1",
+          [xEnA],
+        ),
       ).toMatchObject({ ok: true, cantidad: 1 });
       // La de P está pendiente: solo cambia cuando P acepta (ni a activa ni a inactiva).
       for (const estado of ['activo', 'inactivo']) {

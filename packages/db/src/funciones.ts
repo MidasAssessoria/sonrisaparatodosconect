@@ -140,7 +140,7 @@ export interface DatosInvitacion {
   sedeDefectoId?: string | null | undefined;
   /** `hashTokenInvitacion(token)`. */
   tokenHash: string;
-  /** Por defecto, dentro de 7 días. Entre ahora y 30 días. */
+  /** Por defecto, dentro de 72 horas. Entre ahora y 30 días. */
   venceEn?: Date | null | undefined;
 }
 
@@ -152,13 +152,16 @@ export interface ResultadoCrearInvitacion {
 
 /**
  * `app.crear_invitacion(...)` (permiso `personal:crear`, con contexto): crea la membresía pendiente
- * sin usuario (rol, sedes, sede por defecto) y su invitación. Corre como app_api: la base aplica
- * `app.proteger_acceso` y `app.proteger_invitacion`.
- * Errores (campo `constraint`): `acceso_*` (42501), `rol_inactivo` (23514),
- * `invitacion_ya_es_miembro` (23505), `invitacion_abierta_email` (23505, ya hay una invitación
- * abierta para ese correo), `invitacion_vencimiento` / `invitacion_sede_defecto` /
- * `sede_dada_de_baja` (22023), `invitacion_email_check` / `invitacion_nombre_check` /
- * `invitacion_token_hash_check` (23514), FK `membresia_rol_fkey` / `usuario_sede_sede_fkey` (23503).
+ * sin usuario (rol, sedes, sede por defecto) y su invitación, que vence a las 72 horas si no se
+ * indica `venceEn`. Corre como app_api: la base aplica `app.proteger_acceso` y
+ * `app.proteger_invitacion`.
+ * Errores (campo `constraint`): `acceso_*` (42501), `asignacion_rol_superior` /
+ * `asignacion_todas_las_sedes` (42501, el rol da más que el del actor), `acceso_fuera_de_sedes`
+ * (42501, una sede que el actor no ve), `rol_inactivo` (23514), `invitacion_ya_es_miembro` (23505),
+ * `invitacion_abierta_email` (23505, ya hay una invitación abierta para ese correo),
+ * `invitacion_vencimiento` / `invitacion_sede_defecto` / `sede_dada_de_baja` (22023),
+ * `invitacion_email_check` / `invitacion_nombre_check` / `invitacion_token_hash_check` (23514), FK
+ * `membresia_rol_fkey` / `usuario_sede_sede_fkey` (23503).
  */
 export async function crearInvitacion(
   tx: TransaccionConecta,
@@ -185,8 +188,10 @@ export async function crearInvitacion(
 /**
  * `app.reenviar_invitacion(membresia, token_hash, vence_en)` (permiso `personal:crear`, con
  * contexto): anula la invitación abierta de esa membresía pendiente y crea otra con el mismo correo y
- * nombre. El token viejo deja de servir. Errores: `invitacion_no_encontrada` (P0002),
- * `invitacion_membresia` (42501, la membresía ya no está pendiente), los de `crearInvitacion`.
+ * nombre (vence a las 72 horas si no se indica). El token viejo deja de servir. Errores:
+ * `invitacion_no_encontrada` (P0002), `invitacion_membresia` (42501, la membresía ya no está
+ * pendiente), `acceso_fuera_de_sedes` y `asignacion_rol_superior` / `asignacion_todas_las_sedes`
+ * (42501: reenviar es volver a dar ese rol), los de `crearInvitacion`.
  */
 export async function reenviarInvitacion(
   tx: TransaccionConecta,
@@ -204,9 +209,11 @@ export async function reenviarInvitacion(
 
 /**
  * `app.anular_invitacion(membresia, motivo)` (permiso `personal:anular` o `personal:editar`, con
- * contexto): anula la invitación abierta y deja la membresía pendiente sin usuario en `inactivo`.
+ * contexto): anula la invitación abierta y deja la membresía pendiente sin usuario en `inactivo`,
+ * con el motivo también como `motivo_baja` de la membresía.
  * Errores: `invitacion_no_encontrada` (P0002, no hay membresía pendiente sin usuario con ese id),
- * `invitacion_anulacion_check` (22023, motivo vacío), `acceso_*` (42501).
+ * `invitacion_anulacion_check` (22023, motivo vacío), `acceso_*` (42501, también
+ * `acceso_fuera_de_sedes`).
  */
 export async function anularInvitacion(
   tx: TransaccionConecta,
@@ -227,7 +234,11 @@ export interface InvitacionConsultada {
   /** Correo invitado, completo (la API lo enmascara para la respuesta pública). */
   email: string;
   venceEn: Date;
-  /** Ya hay una cuenta con ese correo: hay que ingresar antes de aceptar (`requiereIngreso`). */
+  /**
+   * Ya hay una identidad en `app.usuario` con ese correo (la persona es o fue miembro de alguna
+   * clínica). NO dice si hay cuenta en Supabase Auth: una cuenta invitada que nunca aceptó nada no
+   * tiene fila acá. Para elegir el siguiente paso, la API tiene que mirar Auth.
+   */
   usuarioExiste: boolean;
 }
 
@@ -267,25 +278,27 @@ export interface AceptacionInvitacion {
   /** `hashTokenInvitacion(token)`. */
   tokenHash: string;
   /**
-   * Id de Supabase Auth VERIFICADO por la API: el `sub` del JWT (si la persona ya tenía cuenta) o
-   * el id de la cuenta que la API acaba de crear con la Admin API para el correo de la invitación.
+   * Id de Supabase Auth VERIFICADO por la API: el `sub` del JWT de quien acepta, cuyo correo la API
+   * confirmó con la Admin API (contrato de personal, paso 3). La cuenta puede haber nacido antes (al
+   * invitar con `inviteUserByEmail`, o mucho antes): la base no asume nada sobre eso.
    */
   usuarioId: string;
-  /** Correo VERIFICADO de esa cuenta (del JWT o de la cuenta creada). */
+  /** Correo VERIFICADO y confirmado de esa cuenta. */
   email: string;
 }
 
 /**
  * `app.aceptar_invitacion(token_hash, usuario_id, email)`: público, sin contexto (usá
- * `sinContexto`). Crea el usuario si no existe, le pone el usuario a la membresía, la activa y marca
- * la invitación usada; todo auditado en esa clínica con la persona como autora. Devuelve la clínica.
+ * `sinContexto`). Crea la fila de `app.usuario` si todavía no existe (con el nombre de la
+ * invitación), le pone el usuario a la membresía, la activa y marca la invitación usada; todo
+ * auditado en esa clínica con la persona como autora. Devuelve la clínica.
  * Una segunda llamada con el mismo token falla; de varias simultáneas gana una.
- * La base confía en `usuarioId` y `email`: la API tiene que haberlos verificado.
+ * La base confía en `usuarioId` y `email`: la API tiene que haberlos verificado (JWT + correo
+ * confirmado en Auth).
  * Errores (campo `constraint`): `invitacion_no_vigente` (P0002, sin distinguir el motivo),
  * `invitacion_otro_correo` y `invitacion_otra_cuenta` (42501), `membresia_usuario_clinica_key`
  * (23505, ya tiene una membresía en esa clínica), `usuario_email_unico` (23505, carrera con otra
- * cuenta del mismo correo). Si la API creó la cuenta de Auth para este pedido y esto falla, le toca
- * limpiarla.
+ * cuenta del mismo correo).
  */
 export async function aceptarInvitacion(
   tx: TransaccionConecta,
@@ -310,10 +323,18 @@ export interface PermisoRol {
 /**
  * `app.reemplazar_permisos_rol(rol, permisos)` (con contexto): la matriz del rol pasa a ser
  * exactamente `permisos`; lo que falta queda `activo = false` (no se borra) y lo que vuelve se
- * reactiva. Devuelve cuántos permisos activos quedan. Permiso de la base: `configuracion:editar`, o
- * `configuracion:crear` si el rol se creó en esta misma transacción por el mismo usuario. Errores:
- * `rol_no_encontrado` (P0002), `acceso_propio` (su propio rol), `acceso_rol_dueno` (el rol dueño),
- * `acceso_sin_permiso` (42501), `rol_permiso_modulo_check` / `rol_permiso_accion_check` (23514).
+ * reactiva (primero revoca, después agrega). Devuelve cuántos permisos activos quedan. Permiso de la
+ * base: `configuracion:editar`, o `configuracion:crear` si el rol se creó en esta misma transacción
+ * por el mismo usuario. Salvo para un dueño, el rol (si está activo) tiene que quedar con permisos
+ * incluidos en los del actor, y los roles de sistema no se tocan.
+ * Errores: `rol_no_encontrado` (P0002), `acceso_propio` (su propio rol), `acceso_rol_dueno` (el rol
+ * dueño), `rol_sistema_solo_dueno`, `rol_permisos_ajenos`, `acceso_sin_permiso` (42501),
+ * `rol_permiso_modulo_check` / `rol_permiso_accion_check` (23514).
+ *
+ * Al editar un rol, llamala ANTES de cambiar sus atributos (o con
+ * `SET CONSTRAINTS app.rol_limite_actor, app.rol_permiso_limite_actor DEFERRED`): el control de
+ * `rol_permisos_ajenos` mira el rol al terminar cada sentencia, y un cambio de nombre de un rol que
+ * todavía tiene permisos que el actor no tiene falla aunque la matriz nueva los quite.
  */
 export async function reemplazarPermisosRol(
   tx: TransaccionConecta,
@@ -325,6 +346,62 @@ export async function reemplazarPermisosRol(
     sql`select app.reemplazar_permisos_rol(${rolId}::uuid, ${`{${lista.join(',')}}`}::text[]) as cantidad`,
   );
   return primera(rows, 'app.reemplazar_permisos_rol').cantidad;
+}
+
+/**
+ * `app.desactivar_rol(rol, motivo)` (con contexto): desactiva un rol activo y guarda el motivo
+ * (obligatorio; la base lo borra si el rol se reactiva). Permiso de la base: `configuracion:anular`
+ * o `configuracion:editar`. Errores: `baja_sin_motivo` (23514), `rol_no_encontrado` (P0002, no hay
+ * un rol ACTIVO con ese id en la clínica), `rol_en_uso` / `rol_dueno_activo` (23514),
+ * `rol_motivo_baja_check` (23514, más de 500 caracteres), `acceso_*` / `rol_sistema_solo_dueno`
+ * (42501).
+ */
+export async function desactivarRol(
+  tx: TransaccionConecta,
+  rolId: string,
+  motivo: string,
+): Promise<void> {
+  await tx.execute(sql`select app.desactivar_rol(${rolId}::uuid, ${motivo})`);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Personal
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * `app.desactivar_membresia(membresia, motivo)` (con contexto): pasa una membresía ACTIVA a
+ * `inactivo` y guarda el motivo (obligatorio; la base lo borra al reactivar). Permiso de la base:
+ * `personal:anular` o `personal:editar`. Una pendiente se da de baja con `anularInvitacion`.
+ * Errores: `baja_sin_motivo` (23514), `membresia_no_activa` (P0002), `membresia_motivo_baja_check`
+ * (23514, más de 500 caracteres), `acceso_*` (42501, también `acceso_fuera_de_sedes`),
+ * `membresia_ultimo_dueno` (23514).
+ */
+export async function desactivarMembresia(
+  tx: TransaccionConecta,
+  membresiaId: string,
+  motivo: string,
+): Promise<void> {
+  await tx.execute(sql`select app.desactivar_membresia(${membresiaId}::uuid, ${motivo})`);
+}
+
+/**
+ * `app.membresia_en_alcance(membresia)` (con contexto): `true` si el usuario del contexto puede ver
+ * y modificar esa membresía por sede: su rol ve todas las sedes, o las sedes vigentes de la
+ * membresía están todas entre las suyas (una con todas las sedes, nunca; una sin sedes, siempre).
+ * `false` también si la membresía no es de la clínica. Es el mismo criterio que aplica la base al
+ * modificar (`acceso_fuera_de_sedes`): sirve para responder 404 antes de intentar.
+ */
+export async function membresiaEnAlcance(
+  tx: TransaccionConecta,
+  membresiaId: string,
+): Promise<boolean> {
+  const { rows } = await tx.execute<{ en_alcance: boolean }>(
+    sql`select app.membresia_en_alcance(${membresiaId}::uuid)
+               and exists (select 1 from app.membresia m
+                           where m.clinica_id = app.clinica_actual() and m.id = ${membresiaId}::uuid)
+               as en_alcance`,
+  );
+  return primera(rows, 'app.membresia_en_alcance').en_alcance;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -350,13 +427,17 @@ type FilaPersona = {
 };
 
 /**
- * Personas (membresías) de la clínica del contexto, con la forma de `personaSchema`. Corre como
- * app_api con RLS: de una membresía activa o inactiva con usuario salen los datos de su usuario;
- * de una pendiente (o anulada) sin usuario, el nombre y el correo de su última invitación (que son
- * de esta clínica). Nunca muestra el perfil de alguien con una membresía pendiente (usuario_ver).
+ * Personas (membresías) de la clínica del contexto que el usuario del contexto puede ver, con la
+ * forma de `personaSchema`. Corre como app_api con RLS: de una membresía activa o inactiva con
+ * usuario salen los datos de su usuario; de una pendiente (o anulada) sin usuario, el nombre y el
+ * correo de su última invitación (que son de esta clínica). Nunca muestra el perfil de alguien con
+ * una membresía pendiente (usuario_ver).
+ * Alcance por sede (`app.membresia_en_alcance`, la base filtra): quien ve todas las sedes ve a
+ * todos; si no, solo a las personas cuyas sedes están todas entre las suyas (no a quien ve todas).
  * `invitacionVenceEn`: solo si su última invitación sigue abierta (aunque esté vencida).
- * `rol.codigo`: solo para roles de sistema. `sedeIds`: las sedes activas de usuario_sede.
- * Con `membresiaId`, solo esa (lista vacía si no es de la clínica).
+ * `rol.codigo`: solo para roles de sistema. `sedeIds`: las sedes activas de usuario_sede que no
+ * están dadas de baja. `sedeDefectoId`: null si su sede está dada de baja.
+ * Con `membresiaId`, solo esa (lista vacía si no es de la clínica o está fuera del alcance).
  */
 export async function listarPersonal(
   tx: TransaccionConecta,
@@ -364,14 +445,19 @@ export async function listarPersonal(
 ): Promise<Persona[]> {
   const filtro = opciones.membresiaId ? sql`and m.id = ${opciones.membresiaId}::uuid` : sql``;
   const { rows } = await tx.execute<FilaPersona>(sql`
-    select m.id as membresia_id, m.usuario_id, m.estado, m.sede_defecto_id,
+    select m.id as membresia_id, m.usuario_id, m.estado,
+           (select s.id from app.sede s
+            where s.clinica_id = m.clinica_id and s.id = m.sede_defecto_id
+              and s.deleted_at is null) as sede_defecto_id,
            coalesce(u.nombre, i.nombre, '') as nombre,
            coalesce(u.email, i.email, '') as email,
            u.telefono, u.ultimo_acceso, coalesce(u.mfa_activo, false) as mfa_activo,
            r.id as rol_id, case when r.es_sistema then r.codigo end as rol_codigo,
            r.nombre as rol_nombre,
            array(select us.sede_id::text from app.usuario_sede us
+                 join app.sede s on s.clinica_id = us.clinica_id and s.id = us.sede_id
                  where us.clinica_id = m.clinica_id and us.membresia_id = m.id and us.activo
+                   and s.deleted_at is null
                  order by us.sede_id) as sede_ids,
            case when i.usada_en is null and i.anulada_en is null then i.vence_en end
              as invitacion_vence_en,
@@ -387,7 +473,7 @@ export async function listarPersonal(
       limit 1
     ) i on true
     left join app.profesional p on p.clinica_id = m.clinica_id and p.membresia_id = m.id
-    where m.clinica_id = app.clinica_actual() ${filtro}
+    where m.clinica_id = app.clinica_actual() and app.membresia_en_alcance(m.id) ${filtro}
     order by lower(coalesce(u.nombre, i.nombre, '')), m.id`);
   return rows.map((f) => ({
     membresiaId: f.membresia_id,

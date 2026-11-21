@@ -101,6 +101,8 @@ describe('app.alta_clinica()', () => {
     expect(matriz.get('recepcion')?.has('caja:crear')).toBe(true);
     expect(matriz.get('administracion')?.has('personal:crear')).toBe(true);
     expect(matriz.get('administracion')?.has('sedes:crear')).toBe(true);
+    // 0015: Administración carga profesionales y el catálogo (configuracion:crear).
+    expect(matriz.get('administracion')?.has('configuracion:crear')).toBe(true);
   });
 
   it('reutiliza la identidad si el dueño ya existe (una persona con dos clínicas)', async () => {

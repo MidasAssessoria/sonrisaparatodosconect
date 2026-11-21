@@ -137,10 +137,61 @@ export const RESTRICCIONES_PERSONAL = [
   'invitacion_vencimiento',
   /** (22023) La sede por defecto no está entre las sedes elegidas. */
   'invitacion_sede_defecto',
-  /** (22023) Alguna sede elegida está dada de baja. */
+  /**
+   * (22023) Alguna sede elegida está dada de baja. Desde 0015/0016 también al asignar una sede o una
+   * sede por defecto dada de baja, o al activar un tramo o un sillón en una sede dada de baja.
+   */
   'sede_dada_de_baja',
 ] as const;
 export type RestriccionPersonal = (typeof RESTRICCIONES_PERSONAL)[number];
+
+/**
+ * Nombres de regla de la revisión del Sprint 2 (migración 0015: límites de quien administra y baja
+ * con motivo) que la base pone en el campo `constraint` de sus errores. Van aparte de las listas
+ * anteriores para no romper a quien ya tiene un mapa exhaustivo de ellas. Ningún dueño activo de la
+ * clínica recibe los de los límites (no tiene límite). Código entre paréntesis.
+ */
+export const RESTRICCIONES_LIMITES = [
+  /**
+   * (42501) Un rol activo quedaría, al terminar la sentencia, con permisos que el rol del actor no
+   * tiene (alta, atributos o matriz). El mensaje lista los permisos que sobran (`modulo:accion`).
+   */
+  'rol_permisos_ajenos',
+  /** (42501) Un rol activo quedaría con todas_las_sedes y el rol del actor no la tiene. */
+  'rol_todas_las_sedes_ajeno',
+  /**
+   * (42501) Invitar, reenviar, cambiar el rol o reactivar con un rol que tiene permisos que el del
+   * actor no tiene. El mensaje lista los que sobran.
+   */
+  'asignacion_rol_superior',
+  /** (42501) Lo mismo con un rol que tiene todas_las_sedes, si el del actor no la tiene. */
+  'asignacion_todas_las_sedes',
+  /** (42501) Editar un rol de sistema o su matriz sin ser dueño. */
+  'rol_sistema_solo_dueno',
+  /** (23514, CHECK real de app.rol) Dueño/a y Administración exigen siempre doble factor. */
+  'rol_mfa_obligatorio',
+  /**
+   * (42501) Quien no ve todas las sedes tocó una membresía (o su invitación, o su vínculo con un
+   * profesional) con sedes fuera de las suyas, o asignó una sede que no ve.
+   */
+  'acceso_fuera_de_sedes',
+  /** (23514) Pasar a inactivo una membresía o un rol sin motivo. */
+  'baja_sin_motivo',
+  /** (P0002) `desactivar_membresia` con un id que no es una membresía activa de la clínica. */
+  'membresia_no_activa',
+] as const;
+export type RestriccionLimite = (typeof RESTRICCIONES_LIMITES)[number];
+
+/** Nombres de regla de `app.encolar` (0018) en el campo `constraint` de sus errores. */
+export const RESTRICCIONES_COLA = [
+  /** (42501) Sin clínica en el contexto, o la clínica está dada de baja. */
+  'cola_sin_contexto',
+  /** (22023) Una cola que no está en la lista de `app.encolar`. */
+  'cola_no_permitida',
+  /** (22023) Datos que no tienen la forma de esa cola, otro clinicaId, o un registro que no existe. */
+  'cola_datos_invalidos',
+] as const;
+export type RestriccionCola = (typeof RESTRICCIONES_COLA)[number];
 
 /** Dónde está guardado un archivo (`app.archivo.almacen`). */
 export const ALMACENES_ARCHIVO = ['local', 'supabase'] as const;
@@ -242,6 +293,11 @@ export const rol = esquemaApp.table('rol', {
   exigeMfa: boolean('exige_mfa').notNull().default(false),
   /** Minutos sin actividad tras los que la sesión vence (5 a 240). */
   inactividadMin: integer('inactividad_min').notNull().default(30),
+  /**
+   * Motivo de la desactivación vigente (la base lo borra al reactivar). Para app_api, desactivar
+   * exige motivo: usá `desactivarRol`.
+   */
+  motivoBaja: text('motivo_baja'),
   ...auditoriaFila,
 });
 
@@ -266,6 +322,11 @@ export const membresia = esquemaApp.table('membresia', {
   rolId: uuid('rol_id').notNull(),
   sedeDefectoId: uuid('sede_defecto_id'),
   estado: text('estado').$type<EstadoMembresia>().notNull().default('pendiente'),
+  /**
+   * Motivo de la baja vigente (estado inactivo; la base lo borra al reactivar). Para app_api, pasar a
+   * inactivo exige motivo: usá `desactivarMembresia` (o `anularInvitacion` para una pendiente).
+   */
+  motivoBaja: text('motivo_baja'),
   ...auditoriaFila,
 });
 

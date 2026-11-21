@@ -1,7 +1,9 @@
 /**
- * Roles creados por la clínica (0010): alta sin código de sistema, matriz de permisos reemplazable
- * (lo que se quita queda activo = false), desactivar con y sin personas, permisos crear/editar/anular,
- * autoescalada imposible y rol dueño intocable. Como app_api, con los envoltorios de la API.
+ * Roles creados por la clínica (0010, 0015): alta sin código de sistema, matriz de permisos
+ * reemplazable (lo que se quita queda activo = false), desactivar con motivo y sin personas, permisos
+ * crear/editar/anular, autoescalada imposible y rol dueño intocable. Como app_api, con los
+ * envoltorios de la API. Desde 0015 nadie deja un rol con más de lo que tiene él (salvo un dueño):
+ * Administración arma roles con permisos que ella tiene. Más casos en test/limites.test.ts.
  */
 import { randomBytes, randomUUID } from 'node:crypto';
 import { ACCIONES, MODULOS } from '@conecta/shared';
@@ -11,6 +13,7 @@ import {
   conContexto,
   crearInvitacion,
   crearPool,
+  desactivarRol,
   hashTokenInvitacion,
   reemplazarPermisosRol,
   rol as tablaRol,
@@ -82,7 +85,7 @@ describe('alta y matriz de un rol de la clínica', () => {
   it('nace sin código de sistema, con sus atributos y su matriz, todo auditado', async () => {
     const creado = await crearRol(administra.usuarioId, 'Cobranzas', [
       p('caja', 'ver'),
-      p('caja', 'crear'),
+      p('caja', 'exportar'),
       p('pacientes', 'ver'),
       p('caja', 'ver'),
     ]);
@@ -117,7 +120,7 @@ describe('alta y matriz de un rol de la clínica', () => {
   it('reemplazar la matriz: lo que se quita queda inactivo (no se borra) y lo que vuelve se reactiva', async () => {
     const creado = await crearRol(administra.usuarioId, 'Cambiante', [
       p('agenda', 'ver'),
-      p('agenda', 'crear'),
+      p('contabilidad', 'crear'),
     ]);
     const antes = await matriz(creado.id);
     expect(
@@ -126,22 +129,22 @@ describe('alta y matriz de un rol de la clínica', () => {
       ),
     ).toBe(2);
     expect((await matriz(creado.id)).map((f) => [f.permiso, f.activo])).toEqual([
-      ['agenda:crear', false],
       ['agenda:ver', true],
+      ['contabilidad:crear', false],
       ['reportes:ver', true],
     ]);
     expect(
       await comoApi(administra.usuarioId, (tx) =>
-        reemplazarPermisosRol(tx, creado.id, [p('agenda', 'crear')]),
+        reemplazarPermisosRol(tx, creado.id, [p('contabilidad', 'crear')]),
       ),
     ).toBe(1);
     const despues = await matriz(creado.id);
-    // La misma fila de agenda:crear, reactivada.
-    expect(despues.find((f) => f.permiso === 'agenda:crear')).toEqual({
-      ...antes.find((f) => f.permiso === 'agenda:crear'),
+    // La misma fila de contabilidad:crear, reactivada.
+    expect(despues.find((f) => f.permiso === 'contabilidad:crear')).toEqual({
+      ...antes.find((f) => f.permiso === 'contabilidad:crear'),
       activo: true,
     });
-    expect(despues.filter((f) => f.activo).map((f) => f.permiso)).toEqual(['agenda:crear']);
+    expect(despues.filter((f) => f.activo).map((f) => f.permiso)).toEqual(['contabilidad:crear']);
     // Vacía: todo inactivo.
     expect(
       await comoApi(administra.usuarioId, (tx) => reemplazarPermisosRol(tx, creado.id, [])),
@@ -204,8 +207,14 @@ describe('permisos para roles', () => {
         ]),
       { confirmar: true },
     );
-    const nuevo = await crearRol(persona.usuarioId, 'Hecho por solo crear', [p('agenda', 'ver')]);
+    // Con lo que su rol tiene (0015: no da lo que no tiene).
+    const nuevo = await crearRol(persona.usuarioId, 'Hecho por solo crear', [
+      p('configuracion', 'ver'),
+    ]);
     expect(nuevo.activos).toBe(1);
+    expect(
+      await errorDe(crearRol(persona.usuarioId, 'Con agenda', [p('agenda', 'ver')])),
+    ).toMatchObject({ codigo: '42501', restriccion: 'rol_permisos_ajenos' });
     for (const fn of [
       (tx: TransaccionConecta) => reemplazarPermisosRol(tx, nuevo.id, [p('agenda', 'crear')]),
       (tx: TransaccionConecta) =>
@@ -218,7 +227,7 @@ describe('permisos para roles', () => {
     }
   });
 
-  it('desactivar un rol: con configuracion:anular alcanza; con personas activas o invitaciones pendientes, no', async () => {
+  it('desactivar un rol: con configuracion:anular y motivo alcanza; con personas activas o invitaciones pendientes, no', async () => {
     const libre = await crearRol(K.duenoId, 'Para desactivar', [p('agenda', 'ver')]);
     const conPersona = await crearRol(K.duenoId, 'Con una persona', [p('agenda', 'ver')]);
     const conInvitacion = await crearRol(K.duenoId, 'Con invitación', [p('agenda', 'ver')]);
@@ -261,8 +270,19 @@ describe('permisos para roles', () => {
       { confirmar: true },
     );
     await enTransaccion(api, { clinica: K.clinicaId, usuario: quien.usuarioId }, async (c) => {
-      const desactivar = 'update app.rol set activo = false where id = $1';
+      // Sin motivo, no (0015).
+      expect(
+        await intentar(c, 'update app.rol set activo = false where id = $1', [libre.id]),
+      ).toMatchObject(rechazo('23514', 'baja_sin_motivo'));
+      expect(await intentar(c, "select app.desactivar_rol($1, '  ')", [libre.id])).toMatchObject(
+        rechazo('23514', 'baja_sin_motivo'),
+      );
+      const desactivar =
+        "update app.rol set activo = false, motivo_baja = ' Ya no se usa ' where id = $1";
       expect(await intentar(c, desactivar, [libre.id])).toMatchObject({ ok: true, cantidad: 1 });
+      expect(await valor(c, 'select motivo_baja from app.rol where id = $1', [libre.id])).toBe(
+        'Ya no se usa',
+      );
       expect(await intentar(c, desactivar, [conInactiva.id])).toMatchObject({
         ok: true,
         cantidad: 1,
@@ -276,18 +296,19 @@ describe('permisos para roles', () => {
           conPersona.id,
         ]),
       ).toMatchObject(rechazo('42501', 'acceso_sin_permiso'));
-      // La desactivación quedó como anular en la auditoría.
+      // La desactivación quedó como anular en la auditoría, con el motivo.
       expect(
         await valor(
           c,
-          "select accion from app.audit_log where entidad = 'rol' and entidad_id = $1 order by fecha desc limit 1",
+          `select accion || '|' || (despues ->> 'motivo_baja') from app.audit_log
+           where entidad = 'rol' and entidad_id = $1 order by fecha desc limit 1`,
           [libre.id],
         ),
-      ).toBe('anular');
+      ).toBe('anular|Ya no se usa');
     });
     // Un rol desactivado no se usa para invitar ni para reincorporar a alguien.
     await enTransaccion(api, { clinica: K.clinicaId, usuario: administra.usuarioId }, async (c) => {
-      await c.query('update app.rol set activo = false where id = any($1)', [
+      await c.query("update app.rol set activo = false, motivo_baja = 'Baja' where id = any($1)", [
         [libre.id, conInactiva.id],
       ]);
       const r = await intentar(c, 'select * from app.crear_invitacion($1, $2, $3, $4, null, $5)', [
@@ -332,7 +353,7 @@ describe('permisos para roles', () => {
       ]);
       // …y el otro intenta desactivarlo: espera, y al confirmar el primero ve la invitación.
       const desactivar = dos
-        .query('update app.rol set activo = false where id = $1', [enDisputa.id])
+        .query("select app.desactivar_rol($1, 'Ya no se usa')", [enDisputa.id])
         .then(
           () => null,
           (e: unknown) => e as { code?: string; constraint?: string },
@@ -352,7 +373,7 @@ describe('permisos para roles', () => {
 
 describe('autoescalada y rol dueño', () => {
   it('nadie cambia la matriz ni los datos de su propio rol, ni se asigna un rol nuevo', async () => {
-    const todopoderoso = await crearRol(administra.usuarioId, 'Todopoderoso', [
+    const todopoderoso = await crearRol(K.duenoId, 'Todopoderoso', [
       p('ficha_clinica', 'ver'),
       p('auditoria', 'exportar'),
     ]);
@@ -408,21 +429,37 @@ describe('autoescalada y rol dueño', () => {
     });
   });
 
-  it('decisión documentada: un rol puede otorgar permisos que quien lo edita no tiene, pero no se los puede asignar', async () => {
-    // Administración no ve la ficha clínica, pero puede crear un rol que sí y asignárselo a otra
-    // persona (o invitar con él). El riesgo (una segunda cuenta propia) existe igual con los roles de
-    // sistema (odontologo) y lo cubre la auditoría. Ver el encabezado de 0010.
-    const conFicha = await crearRol(administra.usuarioId, 'Con ficha', [p('ficha_clinica', 'ver')]);
-    const invitada = await comoApi(administra.usuarioId, (tx) =>
-      crearInvitacion(tx, {
-        nombre: 'Segunda cuenta',
-        email: `segunda-${randomUUID().slice(0, 6)}@prueba.test`,
-        rolId: conFicha.id,
-        sedeIds: [],
-        tokenHash: hashTokenInvitacion(randomUUID()),
-      }),
-    );
-    expect(invitada.membresiaId).toMatch(/^[0-9a-f-]{36}$/);
+  it('0015 revierte la decisión de 0010: nadie le da a un rol ni asigna un rol con permisos que no tiene', async () => {
+    // Administración no ve la ficha clínica: no arma un rol que la vea, y con uno que armó el dueño
+    // no invita (la segunda cuenta propia ya no sirve para escalar).
+    expect(
+      await errorDe(crearRol(administra.usuarioId, 'Con ficha', [p('ficha_clinica', 'ver')])),
+    ).toMatchObject({ codigo: '42501', restriccion: 'rol_permisos_ajenos' });
+    const conFicha = await crearRol(K.duenoId, 'Con ficha (del dueño)', [
+      p('ficha_clinica', 'ver'),
+    ]);
+    const invitar = (quien: string) =>
+      comoApi(quien, (tx) =>
+        crearInvitacion(tx, {
+          nombre: 'Segunda cuenta',
+          email: `segunda-${randomUUID().slice(0, 6)}@prueba.test`,
+          rolId: conFicha.id,
+          sedeIds: [],
+          tokenHash: hashTokenInvitacion(randomUUID()),
+        }),
+      );
+    expect(await errorDe(invitar(administra.usuarioId))).toMatchObject({
+      codigo: '42501',
+      restriccion: 'asignacion_rol_superior',
+    });
+    // El dueño no tiene límite.
+    expect((await invitar(K.duenoId)).membresiaId).toMatch(/^[0-9a-f-]{36}$/);
+    // desactivarRol: el envoltorio de la API.
+    const viejo = await crearRol(administra.usuarioId, 'Para dar de baja', [p('caja', 'ver')]);
+    await comoApi(administra.usuarioId, (tx) => desactivarRol(tx, viejo.id, 'Se fusionó con Caja'));
+    expect(
+      await errorDe(comoApi(administra.usuarioId, (tx) => desactivarRol(tx, viejo.id, 'Otra vez'))),
+    ).toMatchObject({ codigo: 'P0002', restriccion: 'rol_no_encontrado' });
   });
 });
 

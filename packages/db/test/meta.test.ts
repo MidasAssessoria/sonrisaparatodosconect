@@ -279,22 +279,58 @@ describe('privilegios', () => {
        where n.nspname = 'app' and has_function_privilege('app_api', p.oid, 'EXECUTE')
        order by 1`,
     );
-    expect(filas.map((f) => f.funcion)).toEqual([
-      'app.aceptar_invitacion(text,uuid,text)',
-      'app.activar_mfa(timestamp with time zone)',
-      'app.anular_invitacion(uuid,text)',
-      'app.cerrar_sesion(uuid)',
-      'app.clinica_actual()',
-      'app.consultar_invitacion(text)',
-      'app.crear_invitacion(text,text,uuid,uuid[],uuid,text,timestamp with time zone)',
-      'app.desactivar_mfa()',
-      'app.reemplazar_permisos_rol(uuid,text[])',
-      'app.reenviar_invitacion(uuid,text,timestamp with time zone)',
-      'app.registrar_evento(text,text,uuid,jsonb,uuid)',
-      'app.siguiente_numero(text,uuid)',
-      'app.tocar_sesion(uuid,integer)',
-      'app.usuario_actual()',
-    ]);
+    expect(filas.map((f) => f.funcion).sort()).toEqual(
+      [
+        'app.aceptar_invitacion(text,uuid,text)',
+        'app.activar_mfa(timestamp with time zone)',
+        // 0015: ayudas de los límites (SECURITY INVOKER, con RLS) y bajas con motivo.
+        'app.alcance_sedes(uuid,uuid)',
+        'app.anular_invitacion(uuid,text)',
+        'app.cerrar_sesion(uuid)',
+        'app.clinica_actual()',
+        'app.consultar_invitacion(text)',
+        'app.crear_invitacion(text,text,uuid,uuid[],uuid,text,timestamp with time zone)',
+        'app.desactivar_membresia(uuid,text)',
+        'app.desactivar_mfa()',
+        'app.desactivar_rol(uuid,text)',
+        // 0018: la única forma de encolar.
+        'app.encolar(text,jsonb)',
+        'app.membresia_en_alcance(uuid)',
+        'app.permisos_de_rol(uuid,uuid)',
+        'app.reemplazar_permisos_rol(uuid,text[])',
+        'app.reenviar_invitacion(uuid,text,timestamp with time zone)',
+        'app.registrar_evento(text,text,uuid,jsonb,uuid)',
+        'app.siguiente_numero(text,uuid)',
+        'app.tocar_sesion(uuid,integer)',
+        'app.usuario_actual()',
+      ].sort(),
+    );
+  });
+
+  it('las funciones nuevas que app_api ejecuta, salvo encolar, son SECURITY INVOKER (corren con RLS y las defensas)', async () => {
+    const filas = await consultar<{ funcion: string; definer: boolean }>(
+      `select p.oid::regprocedure::text as funcion, p.prosecdef as definer from pg_proc p
+       join pg_namespace n on n.oid = p.pronamespace
+       where n.nspname = 'app' and p.proname = any($1)`,
+      [
+        [
+          'alcance_sedes',
+          'membresia_en_alcance',
+          'permisos_de_rol',
+          'desactivar_membresia',
+          'desactivar_rol',
+          'encolar',
+        ],
+      ],
+    );
+    expect(Object.fromEntries(filas.map((f) => [f.funcion, f.definer]))).toEqual({
+      'app.alcance_sedes(uuid,uuid)': false,
+      'app.membresia_en_alcance(uuid)': false,
+      'app.permisos_de_rol(uuid,uuid)': false,
+      'app.desactivar_membresia(uuid,text)': false,
+      'app.desactivar_rol(uuid,text)': false,
+      'app.encolar(text,jsonb)': true,
+    });
   });
 
   it('ninguna función SECURITY DEFINER escribe en membresia, usuario_sede, rol o rol_permiso (salvo aceptar_invitacion)', async () => {
@@ -325,12 +361,16 @@ describe('privilegios', () => {
       `select p.proname as funcion,
               p.prosrc ~ 'pg_has_role\\(current_user, v_dueno_tablas' and p.prosrc ~ 'pg_has_role\\(session_user, v_dueno_tablas' as ok
        from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-       where n.nspname = 'app' and p.proname in ('proteger_acceso', 'proteger_invitacion')
+       where n.nspname = 'app'
+         and p.proname in ('proteger_acceso', 'proteger_invitacion', 'proteger_profesional',
+                           'limitar_rol_al_actor')
        order by 1`,
     );
     expect(filas).toEqual([
+      { funcion: 'limitar_rol_al_actor', ok: true },
       { funcion: 'proteger_acceso', ok: true },
       { funcion: 'proteger_invitacion', ok: true },
+      { funcion: 'proteger_profesional', ok: true },
     ]);
   });
 });
@@ -342,17 +382,20 @@ describe('funciones', () => {
        from pg_proc p join pg_namespace n on n.oid = p.pronamespace
        where n.nspname = 'app' and p.prosecdef order by 1`,
     );
-    expect(filas.map((f) => f.funcion)).toEqual([
-      'app.aceptar_invitacion(text,uuid,text)',
-      'app.activar_mfa(timestamp with time zone)',
-      'app.auditar()',
-      'app.cerrar_sesion(uuid)',
-      'app.consultar_invitacion(text)',
-      'app.desactivar_mfa()',
-      'app.registrar_evento(text,text,uuid,jsonb,uuid)',
-      'app.siguiente_numero(text,uuid)',
-      'app.tocar_sesion(uuid,integer)',
-    ]);
+    expect(filas.map((f) => f.funcion).sort()).toEqual(
+      [
+        'app.aceptar_invitacion(text,uuid,text)',
+        'app.activar_mfa(timestamp with time zone)',
+        'app.auditar()',
+        'app.cerrar_sesion(uuid)',
+        'app.consultar_invitacion(text)',
+        'app.desactivar_mfa()',
+        'app.encolar(text,jsonb)',
+        'app.registrar_evento(text,text,uuid,jsonb,uuid)',
+        'app.siguiente_numero(text,uuid)',
+        'app.tocar_sesion(uuid,integer)',
+      ].sort(),
+    );
     for (const fila of filas) {
       expect({ funcion: fila.funcion, config: fila.config }).toEqual({
         funcion: fila.funcion,
@@ -497,6 +540,33 @@ describe('triggers de auditoría y de no borrado', () => {
           t.tipo === (1 | 2 | 16),
       ),
     ).toBe(true);
+    // 0015: vínculo profesional-membresía, límite de los roles (al terminar la sentencia) y motivo
+    // de baja normalizado. 0016: cascada de la baja de una sede y nada activo en una sede de baja.
+    const esperados: [string, string, number][] = [
+      ['profesional', 'proteger_profesional', 1 | 2 | 4 | 16],
+      ['rol', 'limitar_rol_al_actor', 1 | 4 | 16],
+      ['rol_permiso', 'limitar_rol_al_actor', 1 | 4 | 16],
+      ['membresia', 'fijar_motivo_baja', 1 | 2 | 4 | 16],
+      ['rol', 'fijar_motivo_baja', 1 | 2 | 4 | 16],
+      ['sede', 'dar_de_baja_sede_en_cascada', 1 | 16],
+      ['membresia', 'exigir_sede_vigente', 1 | 2 | 4 | 16],
+      ['usuario_sede', 'exigir_sede_vigente', 1 | 2 | 4 | 16],
+      ['profesional_disponibilidad', 'exigir_sede_vigente', 1 | 2 | 4 | 16],
+      ['sillon', 'exigir_sede_vigente', 1 | 2 | 4 | 16],
+    ];
+    for (const [tabla, funcion, tipo] of esperados) {
+      const ok = todas.some((t) => t.tabla === tabla && t.funcion === funcion && t.tipo === tipo);
+      expect({ tabla, funcion, ok }).toEqual({ tabla, funcion, ok: true });
+    }
+    // Los límites de rol son CONSTRAINT TRIGGER diferibles (inmediatos por defecto).
+    const limites = await consultar<{ nombre: string; diferible: boolean; diferido: boolean }>(
+      `select t.tgname as nombre, t.tgdeferrable as diferible, t.tginitdeferred as diferido
+       from pg_trigger t where t.tgfoid = 'app.limitar_rol_al_actor()'::regprocedure order by 1`,
+    );
+    expect(limites).toEqual([
+      { nombre: 'rol_limite_actor', diferible: true, diferido: false },
+      { nombre: 'rol_permiso_limite_actor', diferible: true, diferido: false },
+    ]);
   });
 
   it('toda tabla (salvo audit_log) fija la auditoría de fila antes de insertar y actualizar', async () => {

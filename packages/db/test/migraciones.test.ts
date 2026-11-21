@@ -2,7 +2,7 @@
  * Ejecutor de migraciones: orden, idempotencia, checksum, transacciones y concurrencia. Y el paso de
  * una base con datos en 0005 (como el entorno real) a la versión actual.
  */
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { cp, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -402,6 +402,204 @@ describe('de 0005 (con datos) a la versión actual', () => {
       expect(estado).toEqual({ trigger: 'O', forzadas: [] });
       await expect(
         cliente.query("update app.audit_log set modulo = 'inicio' where id = $1", [verSillon]),
+      ).rejects.toThrow('solo inserción');
+    } finally {
+      await cliente.end();
+    }
+  });
+});
+
+describe('de 0014 (con datos) a la versión actual', () => {
+  it('corrige el doble factor de Administración, le da configuracion:crear, limpia lo que apunta a sedes de baja y quita token_hash de la auditoría, con la regla de solo inserción en pie', async () => {
+    const base = await baseNueva();
+    const hasta0014 = await copiaDeMigraciones();
+    for (const m of await leerMigraciones()) {
+      if (m.version > 14) await rm(path.join(hasta0014, m.nombre));
+    }
+    expect((await migrar(base.urlAdmin, { directorio: hasta0014 })).aplicadas).toHaveLength(14);
+
+    const c1 = randomUUID();
+    const c2 = randomUUID();
+    const duena = randomUUID();
+    const persona = randomUUID();
+    const cliente = new pg.Client({ connectionString: base.urlAdmin });
+    await cliente.connect();
+    // Cliente propio (sin pool): el contexto de sesión no se filtra a nadie más.
+    const contexto = async (clinica: string | null, usuario: string | null): Promise<void> => {
+      await cliente.query(
+        "select set_config('app.clinica_id', $1, false), set_config('app.usuario_id', $2, false)",
+        [clinica ?? '', usuario ?? ''],
+      );
+    };
+    const uno = async <T>(texto: string, parametros: unknown[] = []): Promise<T> =>
+      (await cliente.query(texto, parametros)).rows[0] as T;
+    try {
+      // --- Datos con el esquema de 0014 ---
+      await cliente.query(
+        "select app.alta_clinica('Clínica 1', $1, 'Dueña', $2, p_clinica_id => $3)",
+        [duena, `d-${duena.slice(0, 8)}@prueba.test`, c1],
+      );
+      await cliente.query(
+        "select app.alta_clinica('Clínica 2', $1, null, null, p_clinica_id => $2)",
+        [duena, c2],
+      );
+      await contexto(c1, null);
+      // 1. Alguien con configuracion:editar le apagó el doble factor a Administración.
+      await cliente.query(
+        "update app.rol set exige_mfa = false where clinica_id = $1 and codigo = 'administracion'",
+        [c1],
+      );
+      // 2. Una sede dada de baja con una persona, un tramo y un sillón que la apuntan.
+      const { id: sede } = await uno<{ id: string }>(
+        "insert into app.sede (clinica_id, nombre) values ($1, 'Norte') returning id",
+        [c1],
+      );
+      const { id: sillon } = await uno<{ id: string }>(
+        "insert into app.sillon (clinica_id, sede_id, nombre) values ($1, $2, 'Sillón 1') returning id",
+        [c1, sede],
+      );
+      await contexto(c1, persona);
+      await cliente.query(
+        "insert into app.usuario (id, nombre, email) values ($1, 'Persona', $2)",
+        [persona, `p-${persona.slice(0, 8)}@prueba.test`],
+      );
+      await contexto(c1, null);
+      const { id: membresia } = await uno<{ id: string }>(
+        `insert into app.membresia (clinica_id, usuario_id, rol_id, estado, sede_defecto_id)
+         select $1, $2, r.id, 'activo', $3 from app.rol r where r.clinica_id = $1 and r.codigo = 'recepcion'
+         returning id`,
+        [c1, persona, sede],
+      );
+      await cliente.query(
+        'insert into app.usuario_sede (clinica_id, membresia_id, sede_id) values ($1, $2, $3)',
+        [c1, membresia, sede],
+      );
+      const { id: profesional } = await uno<{ id: string }>(
+        "insert into app.profesional (clinica_id, nombre, color) values ($1, 'Dra. X', '#18BFB0') returning id",
+        [c1],
+      );
+      const { id: tramo } = await uno<{ id: string }>(
+        `insert into app.profesional_disponibilidad
+           (clinica_id, profesional_id, sede_id, dia_semana, hora_inicio, hora_fin, sillon_id)
+         values ($1, $2, $3, 1, '08:00', '12:00', $4) returning id`,
+        [c1, profesional, sede, sillon],
+      );
+      await cliente.query(
+        "update app.sede set deleted_at = now(), motivo_baja = 'Cerró' where id = $1",
+        [sede],
+      );
+      // 3. Una invitación creada y anulada: en 0014 su auditoría guarda token_hash.
+      const hash = randomBytes(32).toString('hex');
+      const { id: pendiente } = await uno<{ id: string }>(
+        `insert into app.membresia (clinica_id, rol_id)
+         select $1, r.id from app.rol r where r.clinica_id = $1 and r.codigo = 'asistente'
+         returning id`,
+        [c1],
+      );
+      const { id: invitacion } = await uno<{ id: string }>(
+        `insert into app.invitacion (clinica_id, membresia_id, email, nombre, token_hash, vence_en)
+         values ($1, $2, 'invitada@prueba.test', 'Invitada', $3, now() + interval '1 day') returning id`,
+        [c1, pendiente, hash],
+      );
+      await cliente.query(
+        "update app.invitacion set anulada_en = now(), motivo_anulacion = 'No viene' where id = $1",
+        [invitacion],
+      );
+      expect(
+        (
+          await uno<{ n: number }>(
+            "select count(*)::int as n from app.audit_log where entidad = 'invitacion' and despues ? 'token_hash'",
+          )
+        ).n,
+      ).toBe(2);
+      // 4. En la clínica 2, Administración ya tenía configuracion:crear, revocado a propósito.
+      await contexto(c2, null);
+      await cliente.query(
+        `insert into app.rol_permiso (clinica_id, rol_id, modulo, accion, activo)
+         select $1, r.id, 'configuracion', 'crear', false from app.rol r
+         where r.clinica_id = $1 and r.codigo = 'administracion'`,
+        [c2],
+      );
+
+      // --- Migraciones nuevas ---
+      const resultado = await migrar(base.urlAdmin);
+      expect(resultado.aplicadas).toEqual(
+        (await leerMigraciones()).filter((m) => m.version > 14).map((m) => m.nombre),
+      );
+
+      // 1 y 5. Doble factor y configuracion:crear de Administración.
+      const administracion = async (clinica: string) => {
+        await contexto(clinica, null);
+        return uno<{ exige_mfa: boolean; crear: boolean | null }>(
+          `select r.exige_mfa,
+                  (select p.activo from app.rol_permiso p where p.rol_id = r.id
+                   and p.modulo = 'configuracion' and p.accion = 'crear') as crear
+           from app.rol r where r.clinica_id = $1 and r.codigo = 'administracion'`,
+          [clinica],
+        );
+      };
+      expect(await administracion(c1)).toEqual({ exige_mfa: true, crear: true });
+      // La que la clínica había revocado no se toca.
+      expect(await administracion(c2)).toEqual({ exige_mfa: true, crear: false });
+      await contexto(c1, null);
+      await expect(
+        cliente.query(
+          "update app.rol set exige_mfa = false where clinica_id = $1 and codigo = 'administracion'",
+          [c1],
+        ),
+      ).rejects.toMatchObject({ code: '23514', constraint: 'rol_mfa_obligatorio' });
+      // Los arreglos quedaron auditados como cambios del sistema.
+      expect(
+        await uno<{ editar_rol: number; crear_permiso: number }>(
+          `select count(*) filter (where entidad = 'rol' and accion = 'editar'
+                                    and despues ->> 'exige_mfa' = 'true' and usuario_id is null)::int as editar_rol,
+                  count(*) filter (where entidad = 'rol_permiso' and accion = 'crear'
+                                    and despues ->> 'modulo' = 'configuracion'
+                                    and despues ->> 'accion' = 'crear'
+                                    and despues ->> 'rol_id' = (
+                                      select id::text from app.rol
+                                      where clinica_id = $1 and codigo = 'administracion'))::int as crear_permiso
+           from app.audit_log where clinica_id = $1`,
+          [c1],
+        ),
+      ).toEqual({ editar_rol: 1, crear_permiso: 1 });
+
+      // 2. Lo que apuntaba a la sede de baja, desactivado o vacío.
+      expect(
+        await uno(
+          `select (select activo from app.usuario_sede where membresia_id = $1 and sede_id = $2) as usuario_sede,
+                  (select sede_defecto_id from app.membresia where id = $1) as sede_defecto,
+                  (select activo from app.profesional_disponibilidad where id = $3) as tramo,
+                  (select activo from app.sillon where id = $4) as sillon`,
+          [membresia, sede, tramo, sillon],
+        ),
+      ).toEqual({ usuario_sede: false, sede_defecto: null, tramo: false, sillon: false });
+
+      // 8. La auditoría de la invitación ya no tiene el hash (ni en antes ni en después).
+      expect(
+        await uno<{ filas: number; con_hash: number }>(
+          `select count(*)::int as filas,
+                  count(*) filter (where antes ? 'token_hash' or despues ? 'token_hash'
+                                   or coalesce(antes::text, '') || coalesce(despues::text, '') like $2)::int as con_hash
+           from app.audit_log where entidad = 'invitacion' and entidad_id = $1`,
+          [invitacion, `%${hash}%`],
+        ),
+      ).toEqual({ filas: 2, con_hash: 0 });
+
+      // La regla de solo inserción y el RLS forzado quedaron como estaban.
+      const estado = await uno<{ trigger: string; forzadas: string[] }>(
+        `select (select tgenabled::text from pg_trigger
+                 where tgrelid = 'app.audit_log'::regclass and tgname = 'audit_log_solo_insercion') as trigger,
+                array(select relname::text from pg_class
+                      where relnamespace = 'app'::regnamespace and relkind = 'r'
+                        and relname <> 'migracion' and not relforcerowsecurity) as forzadas`,
+      );
+      expect(estado).toEqual({ trigger: 'O', forzadas: [] });
+      await expect(
+        cliente.query(
+          "update app.audit_log set despues = '{}' where entidad = 'invitacion' and entidad_id = $1",
+          [invitacion],
+        ),
       ).rejects.toThrow('solo inserción');
     } finally {
       await cliente.end();

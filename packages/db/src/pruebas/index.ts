@@ -18,6 +18,7 @@ export {
   crearClinicaDePrueba,
   crearInvitacionDePrueba,
   crearProfesionalDePrueba,
+  crearRolDePrueba,
   crearSedeDePrueba,
   crearTratamientoDePrueba,
   crearUsuarioDePrueba,

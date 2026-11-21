@@ -12,6 +12,7 @@ import {
   crearBaseVacia,
   crearClinicaDePrueba,
   crearInvitacionDePrueba,
+  crearRolDePrueba,
   crearUsuarioDePrueba,
   type ClinicaDePrueba,
   type UsuarioDePrueba,
@@ -25,12 +26,15 @@ let A: ClinicaDePrueba;
 let B: ClinicaDePrueba;
 let administraA: UsuarioDePrueba;
 let deB: UsuarioDePrueba;
+/** Rol de A que Administración puede asignar (sus permisos están incluidos en los de ella). */
+let rolAdministrable: string;
 
 beforeAll(async () => {
   [A, B] = await Promise.all([crearClinicaDePrueba(admin), crearClinicaDePrueba(admin)]);
-  [administraA, deB] = await Promise.all([
+  [administraA, deB, { rolId: rolAdministrable }] = await Promise.all([
     crearUsuarioDePrueba(admin, { clinicaId: A.clinicaId, rol: 'administracion' }),
     crearUsuarioDePrueba(admin, { clinicaId: B.clinicaId, nombre: 'Persona de B' }),
+    crearRolDePrueba(admin, { clinicaId: A.clinicaId, permisos: ['inicio:ver', 'caja:ver'] }),
   ]);
 });
 
@@ -73,7 +77,7 @@ describe('escrituras directas sobre invitacion', () => {
         const libre = await valor<string>(
           c,
           'insert into app.membresia (clinica_id, rol_id) values ($1, $2) returning id',
-          [A.clinicaId, A.roles.recepcion],
+          [A.clinicaId, rolAdministrable],
         );
         const r = await intentar(
           c,
@@ -126,7 +130,10 @@ describe('escrituras directas sobre invitacion', () => {
   });
 
   it('no invita a una membresía activa ni redirige un reenvío a otro correo', async () => {
-    const pendiente = await crearInvitacionDePrueba(admin, { clinicaId: A.clinicaId });
+    const pendiente = await crearInvitacionDePrueba(admin, {
+      clinicaId: A.clinicaId,
+      rolId: rolAdministrable,
+    });
     await comoAdministraA(async (c) => {
       const recepcion = await crearUsuarioDePrueba(admin, { clinicaId: A.clinicaId });
       const insertar = `insert into app.invitacion (clinica_id, membresia_id, email, nombre, token_hash, vence_en)

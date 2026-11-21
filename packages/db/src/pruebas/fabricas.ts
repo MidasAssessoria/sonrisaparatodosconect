@@ -87,17 +87,22 @@ export interface UsuarioDePrueba {
 
 /**
  * Crea (o reutiliza, si se pasa `usuarioId` de uno existente) un usuario y su membresía en una
- * clínica. Por defecto: rol recepcion, estado activo.
+ * clínica. Por defecto: rol recepcion (o `rolId`, p. ej. uno de `crearRolDePrueba`), estado activo,
+ * sin sedes. Una inactiva nace con motivo de baja. `sedeIds` y `sedeDefectoId`, si vienen, se le
+ * asignan.
  */
 export async function crearUsuarioDePrueba(
   admin: pg.Pool,
   opciones: {
     clinicaId: string;
     rol?: RolSistema;
+    rolId?: string;
     estado?: EstadoMembresia;
     usuarioId?: string;
     nombre?: string;
     email?: string;
+    sedeIds?: string[];
+    sedeDefectoId?: string;
   },
 ): Promise<UsuarioDePrueba> {
   const usuarioId = opciones.usuarioId ?? randomUUID();
@@ -118,15 +123,28 @@ export async function crearUsuarioDePrueba(
           email,
         ]);
       }
+      const rolId = await rolDe(cliente, opciones.clinicaId, opciones);
+      const estado = opciones.estado ?? 'activo';
       const { rows } = await cliente.query<{ id: string }>(
-        `insert into app.membresia (clinica_id, usuario_id, rol_id, estado)
-         select $1, $2, r.id, $4 from app.rol r where r.clinica_id = $1 and r.codigo = $3
-         returning id`,
-        [opciones.clinicaId, usuarioId, opciones.rol ?? 'recepcion', opciones.estado ?? 'activo'],
+        `insert into app.membresia (clinica_id, usuario_id, rol_id, estado, sede_defecto_id, motivo_baja)
+         values ($1, $2, $3, $4, $5, $6) returning id`,
+        [
+          opciones.clinicaId,
+          usuarioId,
+          rolId,
+          estado,
+          opciones.sedeDefectoId ?? null,
+          estado === 'inactivo' ? 'Baja de prueba' : null,
+        ],
       );
       const membresiaId = rows[0]?.id;
-      if (!membresiaId)
-        throw new Error(`No existe el rol ${opciones.rol ?? 'recepcion'} en la clínica.`);
+      if (!membresiaId) throw new Error('No se pudo crear la membresía de prueba.');
+      for (const sedeId of opciones.sedeIds ?? []) {
+        await cliente.query(
+          'insert into app.usuario_sede (clinica_id, membresia_id, sede_id) values ($1, $2, $3)',
+          [opciones.clinicaId, membresiaId, sedeId],
+        );
+      }
       return { usuarioId, membresiaId, email: existe.rows[0]?.email ?? email };
     },
     SIN_VERIFICAR,
@@ -195,7 +213,7 @@ export interface InvitacionDePrueba {
 /**
  * Crea una membresía pendiente sin usuario y su invitación, como administración (sin las reglas de
  * `app.proteger_invitacion`: sirve para armar invitaciones vencidas con `venceEn` en el pasado).
- * Por defecto: rol recepcion, sin sedes, vence en 7 días, invitada por el sistema.
+ * Por defecto: rol recepcion, sin sedes, vence en 72 horas, invitada por el sistema.
  */
 export async function crearInvitacionDePrueba(
   admin: pg.Pool,
@@ -239,7 +257,7 @@ export async function crearInvitacionDePrueba(
       }
       const invitacion = await cliente.query<{ id: string; vence_en: Date }>(
         `insert into app.invitacion (clinica_id, membresia_id, email, nombre, token_hash, vence_en)
-         values ($1, $2, $3, $4, $5, coalesce($6::timestamptz, now() + interval '7 days'))
+         values ($1, $2, $3, $4, $5, coalesce($6::timestamptz, now() + interval '72 hours'))
          returning id, vence_en`,
         [
           opciones.clinicaId,
@@ -261,6 +279,51 @@ export async function crearInvitacionDePrueba(
         nombre,
         venceEn: fila.vence_en,
       };
+    },
+    SIN_VERIFICAR,
+  );
+}
+
+/**
+ * Crea un rol de la clínica (no de sistema) con su matriz, como administración (sin las reglas de
+ * `app.proteger_acceso`). `permisos`: 'modulo:accion'. Por defecto sin todas las sedes, sin doble
+ * factor y 30 minutos de inactividad.
+ */
+export async function crearRolDePrueba(
+  admin: pg.Pool,
+  opciones: {
+    clinicaId: string;
+    nombre?: string;
+    permisos?: string[];
+    todasLasSedes?: boolean;
+    exigeMfa?: boolean;
+  },
+): Promise<{ rolId: string }> {
+  return conContextoCliente(
+    admin,
+    { clinicaId: opciones.clinicaId, usuarioId: randomUUID() },
+    async (cliente) => {
+      await cliente.query("select set_config('app.usuario_id', '', true)");
+      const { rows } = await cliente.query<{ id: string }>(
+        `insert into app.rol (clinica_id, nombre, todas_las_sedes, exige_mfa)
+         values ($1, $2, $3, $4) returning id`,
+        [
+          opciones.clinicaId,
+          opciones.nombre ?? `Rol de prueba ${sufijo()}`,
+          opciones.todasLasSedes ?? false,
+          opciones.exigeMfa ?? false,
+        ],
+      );
+      const rolId = rows[0]?.id;
+      if (!rolId) throw new Error('No se pudo crear el rol de prueba.');
+      for (const permiso of opciones.permisos ?? []) {
+        const [modulo, accion] = permiso.split(':');
+        await cliente.query(
+          'insert into app.rol_permiso (clinica_id, rol_id, modulo, accion) values ($1, $2, $3, $4)',
+          [opciones.clinicaId, rolId, modulo, accion],
+        );
+      }
+      return { rolId };
     },
     SIN_VERIFICAR,
   );

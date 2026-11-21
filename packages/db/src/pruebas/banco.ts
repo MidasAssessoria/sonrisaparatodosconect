@@ -203,10 +203,27 @@ export async function crearBaseVacia(urls: UrlsDeBanco): Promise<BaseVacia> {
   return {
     urlAdmin: urlCon(urls.urlAdmin, { baseDeDatos: nombre }),
     urlApi: urlCon(urls.urlApi, { baseDeDatos: nombre }),
-    eliminar: async () => {
-      await conCliente(urls.urlAdmin, (admin) =>
+    eliminar: () => eliminarBase(urls.urlAdmin, nombre),
+  };
+}
+
+/**
+ * DROP DATABASE … WITH (FORCE), con reintentos. Un rol sin superusuario no puede terminar procesos
+ * de un superusuario: si en ese momento un autovacuum (proceso del superusuario) trabaja en la base,
+ * el DROP falla con 42501; si alguien todavía está conectado, con 55006. Los dos pasan solos en
+ * instantes.
+ */
+async function eliminarBase(urlAdmin: string, nombre: string): Promise<void> {
+  for (let intento = 1; ; intento++) {
+    try {
+      await conCliente(urlAdmin, (admin) =>
         admin.query(`DROP DATABASE IF EXISTS ${nombre} WITH (FORCE)`),
       );
-    },
-  };
+      return;
+    } catch (error) {
+      const codigo = (error as { code?: string }).code;
+      if (intento >= 20 || (codigo !== '42501' && codigo !== '55006')) throw error;
+      await new Promise((listo) => setTimeout(listo, 250));
+    }
+  }
 }

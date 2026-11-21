@@ -1,13 +1,21 @@
 /**
- * Cola de trabajos (pg-boss sobre el schema `cola`, migración 0014). Lo que comparten la API (que
- * encola dentro de su transacción) y el worker (que procesa): el schema, la versión de esquema que
- * crearon las migraciones, las colas con sus opciones, la forma de los datos de cada trabajo y la
- * transacción con solo la clínica en el contexto con la que el worker lee la base (RLS).
+ * Cola de trabajos (pg-boss sobre el schema `cola`, migraciones 0014 y 0018). Lo que comparten la
+ * API (que encola dentro de su transacción) y el worker (que procesa): el schema, la versión de
+ * esquema que crearon las migraciones, las colas con sus opciones, la forma de los datos de cada
+ * trabajo y la transacción con solo la clínica en el contexto con la que el worker lee la base (RLS).
  *
- * pg-boss nunca migra solo: quien lo arranca usa `migrate: false` y `schema: SCHEMA_COLA`. Si la
- * versión de esquema de la base no es `VERSION_ESQUEMA_COLA`, pg-boss no arranca.
+ * La API encola SOLO con `encolar(tx, nombre, datos)` (`app.encolar`, 0018): app_api no tiene ningún
+ * privilegio en el schema `cola` y no necesita una instancia de pg-boss. La base pone la clínica del
+ * contexto en `datos.clinicaId`, acepta solo las colas de `NOMBRES_COLA` con sus datos validados y
+ * usa las opciones de la cola: el worker puede confiar en el `clinicaId` del trabajo.
+ *
+ * pg-boss (en el worker) nunca migra solo: quien lo arranca usa `migrate: false` y
+ * `schema: SCHEMA_COLA`. Si la versión de esquema de la base no es `VERSION_ESQUEMA_COLA`, pg-boss no
+ * arranca.
  */
+import { sql } from 'drizzle-orm';
 import type pg from 'pg';
+import type { TransaccionConecta } from './contexto.js';
 
 export const SCHEMA_COLA = 'cola';
 /** Versión de esquema de pg-boss 12.38.2 (la que crea 0014_cola.sql). */
@@ -35,11 +43,46 @@ export interface TrabajoVerificarArchivo {
   archivoId: string;
 }
 
+/** Colas que acepta `app.encolar` (0018). Una cola nueva necesita una migración. */
+export const NOMBRES_COLA = [COLA_ARCHIVO_VERIFICAR.nombre] as const;
+export type NombreCola = (typeof NOMBRES_COLA)[number];
+
+/**
+ * Lo que la API pasa a `encolar` por cola: los datos SIN `clinicaId` (la pone la base con la
+ * clínica del contexto; si se manda, tiene que ser la misma).
+ */
+export interface DatosParaEncolar {
+  'archivo.verificar': { archivoId: string };
+}
+
+/**
+ * `app.encolar(nombre, datos)`: encola un trabajo DENTRO de la transacción `tx` (la del pedido, con
+ * contexto): si se revierte, el trabajo no queda; el worker lo ve recién después del COMMIT. La base
+ * guarda `{ clinicaId: <clínica del contexto>, ...datos }` con prioridad 0 y las opciones de la cola
+ * (reintentos, espera, vencimiento, retención). Devuelve el id del trabajo, o `null` si la política
+ * de la cola lo descartó (no pasa con las colas de hoy).
+ * Errores (campo `constraint`): `cola_sin_contexto` (42501), `cola_no_permitida` y
+ * `cola_datos_invalidos` (22023; p. ej. un archivo que no es de la clínica).
+ */
+export async function encolar<N extends NombreCola>(
+  tx: TransaccionConecta,
+  nombre: N,
+  datos: DatosParaEncolar[N],
+): Promise<string | null> {
+  const { rows } = await tx.execute<{ id: string | null }>(
+    sql`select app.encolar(${nombre}, ${JSON.stringify(datos)}::jsonb) as id`,
+  );
+  const fila = rows[0];
+  if (fila === undefined) throw new Error('app.encolar no devolvió ninguna fila.');
+  return fila.id;
+}
+
 const PATRON_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
- * Valida los datos de un trabajo `archivo.verificar` (vienen de la base: quien puede insertar en la
- * cola no es de confianza para el worker). Devuelve null si no tienen exactamente esa forma.
+ * Valida la forma de los datos de un trabajo `archivo.verificar` (defensa en profundidad: desde 0018
+ * los escribe solo `app.encolar`, con la clínica del contexto). Devuelve null si no tienen
+ * exactamente esa forma.
  */
 export function leerTrabajoVerificarArchivo(datos: unknown): TrabajoVerificarArchivo | null {
   if (typeof datos !== 'object' || datos === null || Array.isArray(datos)) return null;

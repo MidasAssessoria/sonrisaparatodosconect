@@ -1,8 +1,12 @@
 /**
- * Invitaciones (0010) contra Postgres real, como app_api y con los envoltorios que usa la API:
+ * Invitaciones (0010, 0015) contra Postgres real, como app_api y con los envoltorios que usa la API:
  * alta, reenvío, anulación, consulta pública, aceptación (cuenta nueva y existente), vencida/usada/
  * anulada/inexistente con la misma respuesta, correo distinto, dos veces, 20 simultáneas, y que la
  * membresía activada conserve el rol y las sedes que eligió la clínica.
+ *
+ * Desde 0015 nadie invita con un rol que da más que el suyo: por defecto invita el dueño;
+ * administración invita con `rolAdministrable` (incluido en el suyo). Los límites en detalle están en
+ * test/limites.test.ts.
  */
 import { randomBytes, randomUUID } from 'node:crypto';
 import { beforeAll, describe, expect, it } from 'vitest';
@@ -24,6 +28,7 @@ import {
 import {
   crearClinicaDePrueba,
   crearInvitacionDePrueba,
+  crearRolDePrueba,
   crearSedeDePrueba,
   crearUsuarioDePrueba,
   type ClinicaDePrueba,
@@ -40,6 +45,8 @@ interface Clinica extends ClinicaDePrueba {
   sede2: string;
   administra: UsuarioDePrueba;
   recepcion: UsuarioDePrueba;
+  /** Rol de la clínica con permisos incluidos en los de Administración (ella lo puede asignar). */
+  rolAdministrable: string;
 }
 
 let A: Clinica;
@@ -47,13 +54,25 @@ let B: Clinica;
 
 async function prepararClinica(): Promise<Clinica> {
   const clinica = await crearClinicaDePrueba(admin);
-  const [s1, s2, administra, recepcion] = await Promise.all([
+  const [s1, s2, administra, recepcion, administrable] = await Promise.all([
     crearSedeDePrueba(admin, clinica.clinicaId),
     crearSedeDePrueba(admin, clinica.clinicaId),
     crearUsuarioDePrueba(admin, { clinicaId: clinica.clinicaId, rol: 'administracion' }),
     crearUsuarioDePrueba(admin, { clinicaId: clinica.clinicaId, rol: 'recepcion' }),
+    crearRolDePrueba(admin, {
+      clinicaId: clinica.clinicaId,
+      nombre: 'Cobranzas',
+      permisos: ['inicio:ver', 'caja:ver', 'caja:exportar', 'reportes:ver'],
+    }),
   ]);
-  return { ...clinica, sede1: s1.sedeId, sede2: s2.sedeId, administra, recepcion };
+  return {
+    ...clinica,
+    sede1: s1.sedeId,
+    sede2: s2.sedeId,
+    administra,
+    recepcion,
+    rolAdministrable: administrable.rolId,
+  };
 }
 
 beforeAll(async () => {
@@ -80,7 +99,7 @@ const comoApi = <T>(
 async function invitar(
   clinica: Clinica,
   datos: Partial<DatosInvitacion> = {},
-  quien: string = clinica.administra.usuarioId,
+  quien: string = clinica.duenoId,
 ): Promise<{
   membresiaId: string;
   invitacionId: string;
@@ -142,20 +161,20 @@ describe('alta de una invitación', () => {
       crearInvitacion(tx, {
         nombre: '  Lucía Benítez ',
         email,
-        rolId: A.roles.recepcion,
+        rolId: A.rolAdministrable,
         sedeIds: [A.sede1, A.sede2, A.sede1],
         sedeDefectoId: A.sede2,
         tokenHash: hash,
       }),
     );
-    // 7 días por defecto.
-    const dias = (creada.venceEn.getTime() - Date.now()) / 86_400_000;
-    expect(dias).toBeGreaterThan(6.9);
-    expect(dias).toBeLessThan(7.1);
+    // 72 horas por defecto.
+    const horas = (creada.venceEn.getTime() - Date.now()) / 3_600_000;
+    expect(horas).toBeGreaterThan(71.9);
+    expect(horas).toBeLessThanOrEqual(72);
     expect(await membresia(A, creada.membresiaId)).toEqual({
       estado: 'pendiente',
       usuario_id: null,
-      rol_id: A.roles.recepcion,
+      rol_id: A.rolAdministrable,
       sede_defecto_id: A.sede2,
       sedes: [A.sede1, A.sede2].sort(),
     });
@@ -172,12 +191,22 @@ describe('alta de una invitación', () => {
         usada_en: null,
         anulada_en: null,
       });
-      // El token en claro no está en ninguna parte de la base (ni en la auditoría).
+      // El token en claro no está en ninguna parte de la base, y su hash tampoco en la auditoría
+      // (0017: la invitación se audita sin token_hash).
+      for (const secreto of [token, hash]) {
+        expect(
+          await valor(
+            c,
+            `select count(*)::int from app.audit_log where clinica_id = $1 and (despues::text like $2 or antes::text like $2)`,
+            [A.clinicaId, `%${secreto}%`],
+          ),
+        ).toBe(0);
+      }
       expect(
         await valor(
           c,
-          `select count(*)::int from app.audit_log where clinica_id = $1 and (despues::text like $2 or antes::text like $2)`,
-          [A.clinicaId, `%${token}%`],
+          `select count(*)::int from app.audit_log
+           where entidad = 'invitacion' and (despues ? 'token_hash' or antes ? 'token_hash')`,
         ),
       ).toBe(0);
       const auditoria = await c.query<{ entidad: string; modulo: string; usuario_id: string }>(
@@ -252,10 +281,21 @@ describe('alta de una invitación', () => {
       ['correo inválido', { email: 'no-es-un-correo' }, null, 'invitacion_email_check'],
       ['hash que no es SHA-256 hex', { tokenHash: 'abc' }, null, 'invitacion_token_hash_check'],
       ['recepción no invita', {}, A.recepcion.usuarioId, 'acceso_sin_permiso'],
-      ['administración no invita como dueño', { rolId: A.roles.dueno }, null, 'acceso_rol_dueno'],
+      [
+        'administración no invita como dueño',
+        { rolId: A.roles.dueno },
+        A.administra.usuarioId,
+        'acceso_rol_dueno',
+      ],
+      [
+        'administración no invita con un rol que da más que el suyo',
+        { rolId: A.roles.recepcion },
+        A.administra.usuarioId,
+        'asignacion_rol_superior',
+      ],
     ];
     for (const [nombre, datos, quien, restriccion] of casos) {
-      const e = await errorDe(invitar(A, datos, quien ?? A.administra.usuarioId));
+      const e = await errorDe(invitar(A, datos, quien ?? A.duenoId));
       expect({ nombre, restriccion: e.restriccion }).toEqual({ nombre, restriccion });
     }
     // El dueño sí invita a otro dueño.
@@ -364,7 +404,7 @@ describe('reenvío y anulación', () => {
   it('reenviar: el token viejo deja de servir y el nuevo sí, para el mismo correo y la misma membresía', async () => {
     const inv = await invitar(A, { nombre: 'Para Reenviar' });
     const nuevo = nuevoToken();
-    const reenviada = await comoApi(A, A.administra.usuarioId, (tx) =>
+    const reenviada = await comoApi(A, A.duenoId, (tx) =>
       reenviarInvitacion(tx, inv.membresiaId, nuevo.hash),
     );
     expect(reenviada.invitacionId).not.toBe(inv.invitacionId);
@@ -383,13 +423,25 @@ describe('reenvío y anulación', () => {
     );
     expect(personas).toHaveLength(1);
     expect(personas[0]?.invitacionVenceEn).toBe(reenviada.venceEn.toISOString());
-    // La vieja quedó anulada con motivo (no se borró).
+    // La vieja quedó anulada con motivo (no se borró), y ni la anulación ni el alta nueva dejan los
+    // hashes en la auditoría.
     await enTransaccion(admin, { clinica: A.clinicaId }, async (c) => {
       expect(
         await valor(c, 'select motivo_anulacion from app.invitacion where id = $1', [
           inv.invitacionId,
         ]),
       ).toMatch(/Reenviada/);
+      const auditoria = await c.query<{ accion: string; texto: string }>(
+        `select accion, coalesce(antes::text, '') || coalesce(despues::text, '') as texto
+         from app.audit_log where entidad = 'invitacion' and entidad_id = any($1)`,
+        [[inv.invitacionId, reenviada.invitacionId]],
+      );
+      expect(auditoria.rows.map((f) => f.accion).sort()).toEqual(['crear', 'crear', 'editar']);
+      for (const fila of auditoria.rows) {
+        expect(fila.texto).not.toContain(inv.hash);
+        expect(fila.texto).not.toContain(nuevo.hash);
+        expect(fila.texto).not.toContain('token_hash');
+      }
     });
     // Y sirve para aceptar.
     const usuario = randomUUID();
@@ -417,17 +469,13 @@ describe('reenvío y anulación', () => {
         ),
       ),
     ).toMatchObject({ codigo: '42501', restriccion: 'invitacion_membresia' });
-    await enTransaccion(
-      api,
-      { clinica: A.clinicaId, usuario: A.administra.usuarioId },
-      async (c) => {
-        expect(
-          await intentar(c, "update app.membresia set estado = 'activo' where id = $1", [
-            inv.membresiaId,
-          ]),
-        ).toMatchObject(rechazo('23514', 'membresia_usuario_check'));
-      },
-    );
+    await enTransaccion(api, { clinica: A.clinicaId, usuario: A.duenoId }, async (c) => {
+      expect(
+        await intentar(c, "update app.membresia set estado = 'activo' where id = $1", [
+          inv.membresiaId,
+        ]),
+      ).toMatchObject(rechazo('23514', 'membresia_usuario_check'));
+    });
     // El listado la muestra inactiva, con los datos de la invitación y sin vencimiento.
     const [persona] = await comoApi(A, A.duenoId, (tx) =>
       listarPersonal(tx, { membresiaId: inv.membresiaId }),
