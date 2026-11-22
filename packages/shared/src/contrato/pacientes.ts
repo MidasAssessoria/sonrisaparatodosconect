@@ -32,6 +32,12 @@ export const ORIGENES_PACIENTE = ['recepcion', 'online'] as const;
  * `hijo` de A. El inverso de `hijo` es `madre` o `padre` según el sexo de quien está del otro lado
  * (si no se sabe, `otro`). `es_tutor_legal` y `es_responsable_pago` valen en un solo sentido
  * («A es tutor legal de B»).
+ *
+ * Sentido de `Relacion` (siempre vista desde el paciente de la ficha): `tipo` es lo que el FAMILIAR
+ * es de este paciente. En la ficha de Ana, Mateo aparece como `hijo`; en la de Mateo, Ana aparece
+ * como `madre`. Las marcas se ven desde los dos lados: `esTutorLegal`/`esResponsablePago` dicen lo
+ * que este paciente es del familiar, y `familiarEsTutorLegal`/`familiarEsResponsablePago` lo que el
+ * familiar es de este paciente (en la ficha de Mateo: `familiarEsTutorLegal = true` en la fila de Ana).
  */
 export const TIPOS_RELACION = [
   'madre',
@@ -90,6 +96,10 @@ export const relacionSchema = z.object({
   esTutorLegal: z.boolean(),
   /** Quien está en esta ficha paga por el familiar. */
   esResponsablePago: z.boolean(),
+  /** El familiar es tutor legal de quien está en esta ficha. */
+  familiarEsTutorLegal: z.boolean(),
+  /** El familiar paga por quien está en esta ficha. */
+  familiarEsResponsablePago: z.boolean(),
 });
 export type Relacion = z.infer<typeof relacionSchema>;
 
@@ -99,6 +109,7 @@ export const pacienteResumenSchema = z.object({
   nombres: z.string(),
   apellidos: z.string().nullable(),
   ci: z.string().nullable(),
+  sexo: z.enum(SEXOS).nullable(),
   telefono: z.string().nullable(),
   fechaNac: fechaSchema.nullable(),
   edad: z.number().int().nullable(),
@@ -164,6 +175,7 @@ export const ciDuplicadaSchema = z.object({
 });
 
 /**
+ * Una CI que ya tiene otro paciente responde el mismo 409 con `existente` que el alta.
  * `PATCH /api/v1/pacientes/:id` — `pacientes:editar` (y `ficha_clinica:editar` si trae
  * `notaInterna`). `null` borra el dato. Responde 200 con `Paciente`.
  */
@@ -218,7 +230,8 @@ export const resultadoBuscarSchema = z.object({ pacientes: z.array(pacienteResum
 /**
  * `POST /api/v1/pacientes/:id/relaciones` — `pacientes:editar`. Crea el vínculo y su espejo en la
  * misma transacción. Responde 201 con la `Relacion` vista desde el paciente de la ruta.
- * `DELETE /api/v1/relaciones/:id` — `pacientes:editar`: da de baja el vínculo y su espejo (204).
+ * `DELETE /api/v1/relaciones/:id` — `pacientes:editar`, sin cuerpo: da de baja el vínculo y su
+ * espejo (204). `:id` es el de cualquiera de los dos lados.
  */
 export const crearRelacionSchema = z.object({
   familiarId: idSchema,
@@ -231,6 +244,7 @@ export type CrearRelacion = z.infer<typeof crearRelacionSchema>;
 /**
  * `POST /api/v1/pacientes/:id/alertas` — `ficha_clinica:editar`. Responde 201 con la alerta.
  * `PATCH /api/v1/alertas/:id` — `ficha_clinica:editar`: activar o desactivar (no se borra).
+ * Responde 200 con la `AlertaManual`. Quien no tiene `ficha_clinica:ver` recibe solo las activas.
  */
 export const crearAlertaSchema = z.object({
   texto: z.string().trim().min(3, 'Escribí la alerta.').max(200),

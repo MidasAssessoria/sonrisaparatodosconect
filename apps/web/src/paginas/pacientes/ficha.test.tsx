@@ -314,6 +314,8 @@ describe('Pacientes: ficha', () => {
       tipo: 'hijo' as const,
       esTutorLegal: true,
       esResponsablePago: true,
+      familiarEsTutorLegal: false,
+      familiarEsResponsablePago: false,
     };
     const f = montar(
       {

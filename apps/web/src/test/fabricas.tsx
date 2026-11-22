@@ -539,6 +539,7 @@ export function resumenDe(parcial: Partial<PacienteResumen> = {}): PacienteResum
     nombres: 'Ana',
     apellidos: 'Giménez',
     ci: '4123456',
+    sexo: 'F',
     telefono: '+595981123456',
     fechaNac: '1992-03-14',
     edad: 34,
@@ -550,6 +551,7 @@ export function resumenDe(parcial: Partial<PacienteResumen> = {}): PacienteResum
 }
 
 export const MATEO = resumenDe({
+  sexo: 'M',
   id: IDS_PACIENTES.mateo,
   nombres: 'Mateo',
   apellidos: 'Giménez',
@@ -561,6 +563,7 @@ export const MATEO = resumenDe({
 });
 
 export const LUCIA = resumenDe({
+  sexo: 'F',
   id: IDS_PACIENTES.lucia,
   nombres: 'Lucía',
   apellidos: 'Benítez',
@@ -572,6 +575,7 @@ export const LUCIA = resumenDe({
 });
 
 export const CARLOS = resumenDe({
+  sexo: 'M',
   id: IDS_PACIENTES.carlos,
   nombres: 'Carlos',
   apellidos: 'Ayala',

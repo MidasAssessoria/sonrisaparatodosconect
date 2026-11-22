@@ -231,6 +231,16 @@ function FilaVinculo({
               {t.familia.responsableChip(paciente.nombres)}
             </Chip>
           ) : null}
+          {relacion.familiarEsTutorLegal ? (
+            <Chip tono="familia" icono="check">
+              {t.familia.tutorChip(nombreFamiliar)}
+            </Chip>
+          ) : null}
+          {relacion.familiarEsResponsablePago ? (
+            <Chip tono="familia" icono="caja">
+              {t.familia.responsableChip(nombreFamiliar)}
+            </Chip>
+          ) : null}
         </span>
       </div>
       {onQuitar ? (
