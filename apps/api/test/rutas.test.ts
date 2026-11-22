@@ -6,6 +6,7 @@ import { Controller, Get, Module, RequestMethod } from '@nestjs/common';
 import { METHOD_METADATA, PATH_METADATA } from '@nestjs/common/constants.js';
 import { ModulesContainer } from '@nestjs/core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { RUTAS_API } from '@conecta/shared';
 import { ACCESO, type Acceso } from '../src/contexto/acceso.js';
 import { crearClinica, crearPrueba, esperarError, type Clinica, type Prueba } from './ayudas.js';
 
@@ -79,23 +80,8 @@ describe('rutas: negar por defecto', () => {
         acceso?.tipo === 'permiso' ? `${acceso.modulo}:${acceso.accion}` : (acceso?.tipo ?? '?');
       return `${r.metodo} ${r.ruta} ${descripcion}`;
     });
-    expect([...tabla].sort()).toEqual(
-      [
-        'GET /auditoria auditoria:ver',
-        'GET /salud publica',
-        'GET /sedes sedes:ver',
-        'POST /sedes sedes:crear',
-        'DELETE /sedes/:id sedes:anular',
-        'GET /sedes/:id sedes:ver',
-        'PATCH /sedes/:id sedes:editar',
-        'PUT /sedes/:id/horarios sedes:editar',
-        'POST /sedes/:id/sillones sedes:crear',
-        'DELETE /sesion/mfa miembro',
-        'GET /sesion sesion',
-        'POST /sesion/cerrar cierre',
-        'PATCH /sillones/:id sedes:editar',
-      ].sort(),
-    );
+    // La tabla esperada vive en el contrato (packages/shared/src/contrato/rutas.ts).
+    expect([...tabla].sort()).toEqual([...RUTAS_API].sort());
   });
 
   it('la meta-prueba detecta una ruta sin declaración', () => {

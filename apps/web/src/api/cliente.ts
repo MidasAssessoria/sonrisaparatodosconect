@@ -1,21 +1,54 @@
 import {
+  agendaConfigSchema,
+  archivoSchema,
+  bloqueoSchema,
   CABECERA_CLINICA,
   errorApiSchema,
+  invitacionAceptadaSchema,
+  invitacionCreadaSchema,
+  invitacionPublicaSchema,
   paginaAuditoriaSchema,
+  personaSchema,
+  profesionalSchema,
+  rolSchema,
   sedeSchema,
   sesionSchema,
   sillonSchema,
+  tratamientoSchema,
+  urlArchivoSchema,
+  type AgendaConfig,
+  type Archivo,
   type Baja,
+  type Bloqueo,
+  type CategoriaArchivo,
   type ConsultaAuditoria,
+  type CrearBloqueo,
+  type CrearInvitacion,
+  type CrearProfesional,
+  type CrearRol,
   type CrearSede,
   type CrearSillon,
+  type CrearTratamiento,
+  type EditarPersona,
+  type EditarProfesional,
+  type EditarRol,
   type EditarSede,
   type EditarSillon,
+  type EditarTratamiento,
+  type GuardarAgendaConfig,
+  type InvitacionCreada,
+  type InvitacionPublica,
   type PaginaAuditoria,
+  type Persona,
+  type Profesional,
+  type ReemplazarDisponibilidad,
   type ReemplazarHorarios,
+  type Rol,
   type Sede,
   type Sesion,
   type Sillon,
+  type Tratamiento,
+  type UrlArchivo,
 } from '@conecta/shared';
 import { z } from 'zod';
 import { ErrorConecta, TEXTO_DEMASIADOS_PEDIDOS, TEXTO_SERVICIO_NO_DISPONIBLE } from './errores.js';
@@ -61,13 +94,30 @@ type Metodo = 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE';
 interface Pedido<T> {
   metodo: Metodo;
   ruta: string;
+  /** Cuerpo JSON. */
   cuerpo?: unknown;
+  /**
+   * Cuerpo `multipart/form-data`. Sin `Content-Type` a mano: lo pone el navegador con el
+   * `boundary` correcto.
+   */
+  formulario?: FormData;
   esquema: z.ZodType<T> | null;
   /** Clínica explícita para este pedido (p. ej. al elegir clínica). `null` = sin cabecera. */
   clinicaId?: string | null;
   /** No dispara las reacciones globales (`alError`); p. ej. el aviso de cierre de sesión. */
   silencioso?: boolean;
+  /** `false`: sin `Authorization` aunque haya sesión. `'exigido'`: sin token, el pedido no sale. */
+  token?: false | 'exigido';
 }
+
+/** URL firmada de un archivo: absoluta (contrato), se usa tal cual. */
+const urlArchivoAbsolutaSchema = urlArchivoSchema.refine((u) => /^https?:\/\//i.test(u.url), {
+  message: 'La URL del archivo tiene que ser absoluta.',
+  path: ['url'],
+});
+
+/** Segmento de ruta seguro. */
+const seg = (v: string) => encodeURIComponent(v);
 
 const MENSAJE_SIN_CONEXION =
   'No pudimos conectar con el servidor. Revisá tu conexión y probá de nuevo.';
@@ -88,39 +138,49 @@ export function crearClienteApi(opciones: OpcionesClienteApi) {
   const base = opciones.base ?? BASE_API;
 
   async function pedir<T>(p: Pedido<T>): Promise<T> {
-    const cabeceras: Record<string, string> = { Accept: 'application/json' };
-    const token = await opciones.obtenerToken();
-    if (token) cabeceras['Authorization'] = `Bearer ${token}`;
-    const clinicaId = p.clinicaId === undefined ? opciones.obtenerClinicaId() : p.clinicaId;
-    if (clinicaId) cabeceras[CABECERA_CLINICA] = clinicaId;
-    if (p.cuerpo !== undefined) cabeceras['Content-Type'] = 'application/json';
-
     const fallar = (e: ErrorConecta): never => {
       if (!p.silencioso) opciones.alError?.(e);
       throw e;
     };
+
+    const cabeceras: Record<string, string> = { Accept: 'application/json' };
+    const token = p.token === false ? null : await opciones.obtenerToken();
+    if (token) cabeceras['Authorization'] = `Bearer ${token}`;
+    else if (p.token === 'exigido') {
+      const porEstado = MENSAJE_POR_ESTADO[401];
+      return fallar(new ErrorConecta('no_autenticado', porEstado?.mensaje ?? '', { estado: null }));
+    }
+    const clinicaId = p.clinicaId === undefined ? opciones.obtenerClinicaId() : p.clinicaId;
+    if (clinicaId) cabeceras[CABECERA_CLINICA] = clinicaId;
+    let cuerpo: BodyInit | undefined;
+    if (p.formulario !== undefined) {
+      cuerpo = p.formulario;
+    } else if (p.cuerpo !== undefined) {
+      cabeceras['Content-Type'] = 'application/json';
+      cuerpo = JSON.stringify(p.cuerpo);
+    }
 
     let respuesta: Response;
     try {
       respuesta = await fetchImpl(`${base}${p.ruta}`, {
         method: p.metodo,
         headers: cabeceras,
-        ...(p.cuerpo !== undefined ? { body: JSON.stringify(p.cuerpo) } : {}),
+        ...(cuerpo !== undefined ? { body: cuerpo } : {}),
       });
     } catch {
       return fallar(new ErrorConecta('sin_conexion', MENSAJE_SIN_CONEXION));
     }
 
     if (!respuesta.ok) {
-      let cuerpo: unknown;
+      let cuerpoError: unknown;
       try {
-        cuerpo = await respuesta.json();
+        cuerpoError = await respuesta.json();
       } catch {
-        cuerpo = null;
+        cuerpoError = null;
       }
       const desde =
         respuesta.status === 429 ? reintentarDesde(respuesta.headers.get('retry-after')) : null;
-      const error = errorApiSchema.safeParse(cuerpo);
+      const error = errorApiSchema.safeParse(cuerpoError);
       if (error.success) {
         return fallar(
           new ErrorConecta(error.data.codigo, error.data.mensaje, {
@@ -246,6 +306,174 @@ export function crearClienteApi(opciones: OpcionesClienteApi) {
           esquema: paginaAuditoriaSchema,
         });
       },
+    },
+    /** Equipo: una persona = una membresía (`:id` es el id de la membresía). */
+    personal: {
+      listar: (): Promise<Persona[]> =>
+        pedir({ metodo: 'GET', ruta: '/personal', esquema: z.array(personaSchema) }),
+      editar: (membresiaId: string, datos: EditarPersona): Promise<Persona> =>
+        pedir({
+          metodo: 'PATCH',
+          ruta: `/personal/${seg(membresiaId)}`,
+          cuerpo: datos,
+          esquema: personaSchema,
+        }),
+      desactivar: (membresiaId: string, baja: Baja): Promise<Persona> =>
+        pedir({
+          metodo: 'POST',
+          ruta: `/personal/${seg(membresiaId)}/desactivar`,
+          cuerpo: baja,
+          esquema: personaSchema,
+        }),
+      reactivar: (membresiaId: string): Promise<Persona> =>
+        pedir({
+          metodo: 'POST',
+          ruta: `/personal/${seg(membresiaId)}/reactivar`,
+          esquema: personaSchema,
+        }),
+    },
+    invitaciones: {
+      crear: (datos: CrearInvitacion): Promise<InvitacionCreada> =>
+        pedir({
+          metodo: 'POST',
+          ruta: '/invitaciones',
+          cuerpo: datos,
+          esquema: invitacionCreadaSchema,
+        }),
+      /** `:id` = membresía pendiente. */
+      reenviar: (membresiaId: string): Promise<InvitacionCreada> =>
+        pedir({
+          metodo: 'POST',
+          ruta: `/invitaciones/${seg(membresiaId)}/reenviar`,
+          esquema: invitacionCreadaSchema,
+        }),
+      anular: (membresiaId: string, baja: Baja): Promise<void> =>
+        pedir({
+          metodo: 'DELETE',
+          ruta: `/invitaciones/${seg(membresiaId)}`,
+          cuerpo: baja,
+          esquema: null,
+        }),
+      /** Pública: sin token ni clínica, y sin reacciones globales. */
+      consultar: (token: string): Promise<InvitacionPublica> =>
+        pedir({
+          metodo: 'POST',
+          ruta: '/invitaciones/consultar',
+          cuerpo: { token },
+          esquema: invitacionPublicaSchema,
+          clinicaId: null,
+          token: false,
+          silencioso: true,
+        }),
+      /**
+       * Exige `Authorization` (correo de la invitación, confirmado) y va sin `X-Clinica-Id`: la
+       * persona todavía no es miembro de esa clínica. Sin sesión no sale.
+       */
+      aceptar: (token: string): Promise<z.infer<typeof invitacionAceptadaSchema>> =>
+        pedir({
+          metodo: 'POST',
+          ruta: '/invitaciones/aceptar',
+          cuerpo: { token },
+          esquema: invitacionAceptadaSchema,
+          clinicaId: null,
+          token: 'exigido',
+          silencioso: true,
+        }),
+    },
+    roles: {
+      listar: (): Promise<Rol[]> =>
+        pedir({ metodo: 'GET', ruta: '/roles', esquema: z.array(rolSchema) }),
+      crear: (datos: CrearRol): Promise<Rol> =>
+        pedir({ metodo: 'POST', ruta: '/roles', cuerpo: datos, esquema: rolSchema }),
+      editar: (rolId: string, datos: EditarRol): Promise<Rol> =>
+        pedir({ metodo: 'PATCH', ruta: `/roles/${seg(rolId)}`, cuerpo: datos, esquema: rolSchema }),
+      /** Baja lógica con motivo: el rol queda inactivo. */
+      desactivar: (rolId: string, baja: Baja): Promise<void> =>
+        pedir({ metodo: 'DELETE', ruta: `/roles/${seg(rolId)}`, cuerpo: baja, esquema: null }),
+    },
+    profesionales: {
+      listar: (): Promise<Profesional[]> =>
+        pedir({ metodo: 'GET', ruta: '/profesionales', esquema: z.array(profesionalSchema) }),
+      obtener: (pid: string): Promise<Profesional> =>
+        pedir({ metodo: 'GET', ruta: `/profesionales/${seg(pid)}`, esquema: profesionalSchema }),
+      crear: (datos: CrearProfesional): Promise<Profesional> =>
+        pedir({
+          metodo: 'POST',
+          ruta: '/profesionales',
+          cuerpo: datos,
+          esquema: profesionalSchema,
+        }),
+      editar: (pid: string, datos: EditarProfesional): Promise<Profesional> =>
+        pedir({
+          metodo: 'PATCH',
+          ruta: `/profesionales/${seg(pid)}`,
+          cuerpo: datos,
+          esquema: profesionalSchema,
+        }),
+      reemplazarDisponibilidad: (
+        pid: string,
+        datos: ReemplazarDisponibilidad,
+      ): Promise<Profesional> =>
+        pedir({
+          metodo: 'PUT',
+          ruta: `/profesionales/${seg(pid)}/disponibilidad`,
+          cuerpo: datos,
+          esquema: profesionalSchema,
+        }),
+      crearBloqueo: (pid: string, datos: CrearBloqueo): Promise<Bloqueo> =>
+        pedir({
+          metodo: 'POST',
+          ruta: `/profesionales/${seg(pid)}/bloqueos`,
+          cuerpo: datos,
+          esquema: bloqueoSchema,
+        }),
+      quitarBloqueo: (bid: string, baja: Baja): Promise<void> =>
+        pedir({ metodo: 'DELETE', ruta: `/bloqueos/${seg(bid)}`, cuerpo: baja, esquema: null }),
+    },
+    tratamientos: {
+      listar: (): Promise<Tratamiento[]> =>
+        pedir({ metodo: 'GET', ruta: '/tratamientos', esquema: z.array(tratamientoSchema) }),
+      crear: (datos: CrearTratamiento): Promise<Tratamiento> =>
+        pedir({ metodo: 'POST', ruta: '/tratamientos', cuerpo: datos, esquema: tratamientoSchema }),
+      editar: (tid: string, datos: EditarTratamiento): Promise<Tratamiento> =>
+        pedir({
+          metodo: 'PATCH',
+          ruta: `/tratamientos/${seg(tid)}`,
+          cuerpo: datos,
+          esquema: tratamientoSchema,
+        }),
+    },
+    /** Configuración de agenda y reserva online de una sede. */
+    agenda: {
+      obtener: (sedeId: string): Promise<AgendaConfig> =>
+        pedir({ metodo: 'GET', ruta: `/sedes/${seg(sedeId)}/agenda`, esquema: agendaConfigSchema }),
+      guardar: (sedeId: string, datos: GuardarAgendaConfig): Promise<AgendaConfig> =>
+        pedir({
+          metodo: 'PUT',
+          ruta: `/sedes/${seg(sedeId)}/agenda`,
+          cuerpo: datos,
+          esquema: agendaConfigSchema,
+        }),
+    },
+    archivos: {
+      /**
+       * `multipart/form-data` con `categoria` ANTES que `archivo`: la API exige el permiso apenas
+       * lee la categoría, antes de aceptar un byte del archivo.
+       */
+      subir: (categoria: CategoriaArchivo, archivo: Blob, nombre?: string): Promise<Archivo> => {
+        const formulario = new FormData();
+        formulario.append('categoria', categoria);
+        const nombreArchivo = nombre ?? (archivo instanceof File ? archivo.name : 'archivo');
+        formulario.append('archivo', archivo, nombreArchivo);
+        return pedir({ metodo: 'POST', ruta: '/archivos', formulario, esquema: archivoSchema });
+      },
+      /** URL firmada (vence en minutos). Es absoluta y se usa tal cual: no se le antepone nada. */
+      url: (archivoId: string): Promise<UrlArchivo> =>
+        pedir({
+          metodo: 'GET',
+          ruta: `/archivos/${seg(archivoId)}/url`,
+          esquema: urlArchivoAbsolutaSchema,
+        }),
     },
   };
 }

@@ -5,6 +5,7 @@
  * sistema) están en `@conecta/shared`. El banco de pruebas está en `@conecta/db/pruebas`.
  */
 export * from './esquema.js';
+export * from './cola.js';
 export {
   baseDeDatos,
   buscarMembresiaActiva,
@@ -14,6 +15,7 @@ export {
   crearPool,
   ErrorDeContexto,
   ErrorDeMembresia,
+  sinContexto,
   type BaseDeDatos,
   type ContextoSesion,
   type MembresiaActiva,
@@ -23,12 +25,28 @@ export {
   type TransaccionConecta,
 } from './contexto.js';
 export {
+  aceptarInvitacion,
   activarMfa,
+  anularInvitacion,
   cerrarSesion,
+  consultarInvitacion,
+  crearInvitacion,
+  desactivarMembresia,
   desactivarMfa,
+  desactivarRol,
+  hashTokenInvitacion,
+  listarPersonal,
+  membresiaEnAlcance,
+  reemplazarPermisosRol,
+  reenviarInvitacion,
   registrarEvento,
   tocarSesion,
+  type AceptacionInvitacion,
+  type DatosInvitacion,
   type EventoAuditable,
+  type InvitacionConsultada,
+  type PermisoRol,
+  type ResultadoCrearInvitacion,
 } from './funciones.js';
 export {
   calcularChecksum,

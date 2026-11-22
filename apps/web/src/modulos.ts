@@ -12,11 +12,22 @@ export interface ModuloWeb {
   modulo: Modulo;
   icono: IconoNombre;
   ruta: string;
+  /** Otras rutas que cuelgan de este módulo (p. ej. Roles, que se abre desde Equipo). */
+  otrasRutas?: readonly string[];
 }
 
 export const MODULOS_WEB: readonly ModuloWeb[] = [
   { id: 'inicio', modulo: 'inicio', icono: 'inicio', ruta: '/' },
   { id: 'sedes', modulo: 'sedes', icono: 'sede', ruta: '/sedes' },
+  {
+    id: 'personal',
+    modulo: 'personal',
+    icono: 'personal',
+    ruta: '/personal',
+    otrasRutas: ['/roles'],
+  },
+  { id: 'profesionales', modulo: 'personal', icono: 'odontologia', ruta: '/profesionales' },
+  { id: 'tratamientos', modulo: 'configuracion', icono: 'tabla', ruta: '/tratamientos' },
   { id: 'auditoria', modulo: 'auditoria', icono: 'archivo', ruta: '/auditoria' },
 ];
 
@@ -28,8 +39,8 @@ export function modulosVisibles(puede: (m: Modulo, a: 'ver') => boolean): Modulo
 
 /** Módulo activo según la ruta actual. */
 export function moduloDeRuta(pathname: string): IdModuloWeb | undefined {
-  const candidatos = MODULOS_WEB.filter((m) =>
-    m.ruta === '/' ? pathname === '/' : pathname === m.ruta || pathname.startsWith(`${m.ruta}/`),
-  );
+  const dentro = (ruta: string) =>
+    ruta === '/' ? pathname === '/' : pathname === ruta || pathname.startsWith(`${ruta}/`);
+  const candidatos = MODULOS_WEB.filter((m) => dentro(m.ruta) || (m.otrasRutas ?? []).some(dentro));
   return candidatos[0]?.id;
 }

@@ -1,0 +1,132 @@
+/* Odontograma 3D (prueba técnica). Colores clínicos fijos: tokens --clinico-* de @conecta/ui. */
+.od3d {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  width: 100%;
+  min-height: 320px;
+  align-self: stretch;
+  /* fondo oscuro plano: los dientes y sus sombras se leen mejor; sin degradados (README) */
+  background: #162038;
+  border-radius: var(--radio-control, 12px);
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+}
+.od3d__lienzo {
+  position: absolute;
+  inset: 0;
+  display: block;
+  touch-action: none;
+}
+.od3d__rotulos {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.od3d-num {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 30px;
+  height: 30px;
+  padding: 0 4px;
+  font: 700 13px/1 var(--font-sans, system-ui, sans-serif);
+  color: var(--tinta, #232036);
+  background: #fff;
+  border: 2px solid var(--borde, #d9d3e6);
+  border-radius: 999px;
+}
+.od3d--completo .od3d-num {
+  min-width: 23px;
+  height: 23px;
+  font-size: 11.5px;
+  border-width: 1.5px;
+  padding: 0 2px;
+}
+.od3d-num.is-car {
+  border-color: var(--clinico-caries, #16161a);
+}
+.od3d-num.is-ext {
+  border-color: var(--clinico-extraccion, #1a5fb4);
+  color: var(--clinico-extraccion, #1a5fb4);
+}
+.od3d-num.is-per {
+  border-color: var(--clinico-periodontal, #d7262b);
+}
+.od3d-num.is-aus {
+  border-color: #6b7280;
+  border-style: dashed;
+  color: #6b7280;
+}
+.od3d-num.is-sel {
+  box-shadow: 0 0 0 3px var(--turquesa, #18bfb0);
+}
+.od3d-pts {
+  position: absolute;
+  left: 50%;
+  bottom: -7px;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 2px;
+}
+.od3d-pts i {
+  display: block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  border: 1px solid #fff;
+}
+/* estado de tratamiento en el rótulo: anillo rojo = por realizar, azul = realizado */
+.od3d-pts i.is-pend {
+  box-shadow: 0 0 0 1.5px var(--clinico-periodontal, #d7262b);
+}
+.od3d-pts i.is-rea {
+  box-shadow: 0 0 0 1.5px var(--clinico-extraccion, #1a5fb4);
+}
+.od3d-lado {
+  font: 700 12px/16px var(--font-sans, system-ui, sans-serif);
+  letter-spacing: 0.08em;
+  color: var(--tinta-suave, #4a4666);
+  background: rgba(255, 255, 255, 0.88);
+  padding: 4px 10px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.od3d__tip {
+  position: absolute;
+  z-index: 2;
+  pointer-events: none;
+  padding: 6px 10px;
+  font: 600 13px/1.2 var(--font-sans, system-ui, sans-serif);
+  color: var(--tinta, #232036);
+  background: #fff;
+  border: 1px solid var(--borde, #d9d3e6);
+  border-radius: 10px;
+  white-space: nowrap;
+}
+.od3d__tip[hidden] {
+  display: none;
+}
+.od3d--sin-webgl {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--espacio-6, 24px);
+  background: var(--fondo-suave, #f1eff6);
+  color: var(--tinta, #232036);
+  text-align: center;
+}
+@media (max-width: 760px) {
+  .od3d-num {
+    min-width: 24px;
+    height: 24px;
+    font-size: 11px;
+    border-width: 1.5px;
+  }
+  .od3d-lado {
+    font-size: 10px;
+    padding: 3px 8px;
+  }
+}

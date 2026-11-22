@@ -12,12 +12,24 @@ const PRODUCCION = {
   SUPABASE_JWKS_URL: 'https://proyecto.supabase.co/auth/v1/.well-known/jwks.json',
   WEB_ORIGIN: 'https://app.example.com, https://staging.example.com',
   TRUST_PROXY: '1',
+  ARCHIVOS_ALMACEN: 'supabase',
+  ARCHIVOS_DIRECTORIO: '/var/conecta/archivos',
+  ARCHIVOS_FIRMA_SECRETO: 'x'.repeat(40),
+  SUPABASE_SECRET_KEY: 'sb_secret_' + 'y'.repeat(30),
 };
 
 /** Producción completa salvo TRUST_PROXY. */
 const PRODUCCION_SIN_PROXY: Record<string, string> = Object.fromEntries(
   Object.entries(PRODUCCION).filter(([clave]) => clave !== 'TRUST_PROXY'),
 );
+
+/**
+ * Tiempo del proceso hijo. Con la configuración inválida `main.ts` termina antes de importar la app
+ * (import dinámico), pero el hijo igual arranca Node y transpila `main.ts` y `config.ts` con SWC:
+ * con la suite completa en paralelo la máquina está cargada, así que la prueba tiene su propio
+ * tiempo, más largo que el general de Vitest.
+ */
+const LIMITE_ARRANQUE_MS = 90_000;
 
 const RAIZ_API = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -51,7 +63,7 @@ function arrancarApi(
     const limite = setTimeout(() => {
       hijo.kill();
       rechazar(new Error(`La API no terminó a tiempo. Salida:\n${salida}`));
-    }, 60_000);
+    }, LIMITE_ARRANQUE_MS);
     hijo.on('error', rechazar);
     hijo.on('exit', (codigo) => {
       clearTimeout(limite);
@@ -126,6 +138,71 @@ describe('cargarConfig', () => {
     );
   });
 
+  it('en producción los archivos se configuran explícitamente', () => {
+    const sinSecreto: Record<string, string> = { ...PRODUCCION };
+    delete sinSecreto['ARCHIVOS_FIRMA_SECRETO'];
+    expect(() => cargarConfig(sinSecreto)).toThrow(/ARCHIVOS_FIRMA_SECRETO/);
+    expect(() => cargarConfig({ ...PRODUCCION, ARCHIVOS_FIRMA_SECRETO: 'corto' })).toThrow(/32/);
+    expect(cargarConfig(PRODUCCION).archivos.almacen).toBe('supabase');
+  });
+
+  it('fuera de producción usa el almacén local y la clave secreta es opcional', () => {
+    const config = cargarConfig({ NODE_ENV: 'development' });
+    expect(config.archivos.almacen).toBe('local');
+    expect(config.supabaseSecretKey).toBeUndefined();
+  });
+
+  it('secreto de firma: aleatorio por proceso en desarrollo, fijo en pruebas, obligatorio en producción', () => {
+    const uno = cargarConfig({ NODE_ENV: 'development' }).archivos.secretoFirma;
+    const otro = cargarConfig({ NODE_ENV: 'development' }).archivos.secretoFirma;
+    expect(uno.length).toBeGreaterThanOrEqual(32);
+    expect(uno).not.toBe(otro);
+    const definido = 'z'.repeat(40);
+    expect(
+      cargarConfig({ NODE_ENV: 'development', ARCHIVOS_FIRMA_SECRETO: definido }).archivos
+        .secretoFirma,
+    ).toBe(definido);
+    expect(cargarConfig({ NODE_ENV: 'test' }).archivos.secretoFirma).toBe(
+      cargarConfig({ NODE_ENV: 'test' }).archivos.secretoFirma,
+    );
+    const sinSecreto: Record<string, string> = { ...PRODUCCION };
+    delete sinSecreto['ARCHIVOS_FIRMA_SECRETO'];
+    expect(() => cargarConfig(sinSecreto)).toThrow(/ARCHIVOS_FIRMA_SECRETO: falta/);
+  });
+
+  it('origen público de la web: por defecto el primero de WEB_ORIGIN; se puede fijar', () => {
+    expect(cargarConfig(PRODUCCION).webOrigenPublico).toBe('https://app.example.com');
+    expect(
+      cargarConfig({ ...PRODUCCION, WEB_ORIGEN_PUBLICO: 'https://staging.example.com/' })
+        .webOrigenPublico,
+    ).toBe('https://staging.example.com');
+    expect(() =>
+      cargarConfig({ ...PRODUCCION, WEB_ORIGEN_PUBLICO: 'https://app.example.com/invitacion' }),
+    ).toThrow(/WEB_ORIGEN_PUBLICO: valor inválido/);
+  });
+
+  it('origen público de la API: por defecto fuera de producción; obligatorio en producción con almacén local', () => {
+    expect(cargarConfig({ NODE_ENV: 'development' }).apiOrigenPublico).toBe(
+      'http://localhost:3000',
+    );
+    expect(cargarConfig({ NODE_ENV: 'development', PORT: '4000' }).apiOrigenPublico).toBe(
+      'http://localhost:4000',
+    );
+    expect(cargarConfig({ NODE_ENV: 'test' }).apiOrigenPublico).toBe('http://api.prueba.localhost');
+    // Con Supabase Storage las URLs las firma Storage (ya absolutas): no hace falta.
+    expect(cargarConfig(PRODUCCION).apiOrigenPublico).toBeNull();
+    const local = { ...PRODUCCION, ARCHIVOS_ALMACEN: 'local' };
+    expect(() => cargarConfig(local)).toThrow(
+      /API_ORIGEN_PUBLICO: falta\. Con ARCHIVOS_ALMACEN=local/,
+    );
+    expect(
+      cargarConfig({ ...local, API_ORIGEN_PUBLICO: 'https://api.example.com/' }).apiOrigenPublico,
+    ).toBe('https://api.example.com');
+    expect(() =>
+      cargarConfig({ ...local, API_ORIGEN_PUBLICO: 'https://api.example.com/v1' }),
+    ).toThrow(/API_ORIGEN_PUBLICO: valor inválido/);
+  });
+
   it('rechaza un WEB_ORIGIN que no es una URL', () => {
     expect(() => cargarConfig({ ...PRODUCCION, WEB_ORIGIN: '*' })).toThrow(/WEB_ORIGIN/);
   });
@@ -136,11 +213,15 @@ describe('cargarConfig', () => {
 });
 
 describe('arranque', () => {
-  it('en producción sin TRUST_PROXY la API no arranca y dice por qué', async () => {
-    const { codigo, salida } = await arrancarApi(PRODUCCION_SIN_PROXY);
-    expect(codigo).toBe(1);
-    expect(salida).toMatch(/TRUST_PROXY: falta/);
-    expect(salida).toMatch(/IP del proxy/);
-    expect(salida).not.toMatch(/API escuchando/);
-  });
+  it(
+    'en producción sin TRUST_PROXY la API no arranca y dice por qué',
+    async () => {
+      const { codigo, salida } = await arrancarApi(PRODUCCION_SIN_PROXY);
+      expect(codigo).toBe(1);
+      expect(salida).toMatch(/TRUST_PROXY: falta/);
+      expect(salida).toMatch(/IP del proxy/);
+      expect(salida).not.toMatch(/API escuchando/);
+    },
+    LIMITE_ARRANQUE_MS + 10_000,
+  );
 });

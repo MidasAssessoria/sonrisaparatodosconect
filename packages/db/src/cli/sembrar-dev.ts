@@ -20,10 +20,14 @@ try {
     duenoId: process.env['SEMILLA_DUENO_ID'] || undefined,
     duenoEmail: process.env['SEMILLA_DUENO_EMAIL'] || undefined,
   });
+  const { profesionales, tramos, tratamientos } = resultado.agregados;
+  const agregados = `${profesionales} profesionales, ${tramos} tramos y ${tratamientos} tratamientos`;
   console.log(
     resultado.creada
-      ? `Clínica de demostración creada (${resultado.clinicaId}), dueña ${resultado.duenoId}.`
-      : `La clínica de demostración ya existía (${resultado.clinicaId}): no se tocó nada.`,
+      ? `Clínica de demostración creada (${resultado.clinicaId}), dueña ${resultado.duenoId}, con ${agregados}.`
+      : profesionales + tramos + tratamientos > 0
+        ? `La clínica de demostración ya existía (${resultado.clinicaId}): se completó con ${agregados}.`
+        : `La clínica de demostración ya existía (${resultado.clinicaId}) y estaba completa: no se tocó nada.`,
   );
 } catch (error) {
   console.error(error instanceof Error ? error.message : error);

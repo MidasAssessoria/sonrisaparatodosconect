@@ -3,10 +3,19 @@
  * tabla sin RLS forzado, concede algo a PUBLIC/anon/authenticated, olvida los triggers de
  * auditoría o arma una FK que puede cruzar de clínica, alguna de estas pruebas falla.
  */
-import { ACCIONES, ACCIONES_AUDITORIA, ESTADOS_SEDE, MODULOS } from '@conecta/shared';
+import {
+  ACCIONES,
+  ACCIONES_AUDITORIA,
+  CATEGORIAS_ARCHIVO,
+  ESTADOS_SEDE,
+  MODULOS,
+  NOMBRES_CATEGORIA_ARCHIVO,
+  TASAS_IVA,
+} from '@conecta/shared';
 import { describe, expect, it } from 'vitest';
 import {
   ACCIONES_EVENTO,
+  ALMACENES_ARCHIVO,
   ESTADOS_MEMBRESIA,
   MOTIVOS_CIERRE_SESION,
   TIPOS_NUMERADOR,
@@ -64,7 +73,7 @@ const SQL_CONCESIONES_EXPUESTAS = `
 
 describe('RLS en todo el schema app', () => {
   it('toda tabla tiene RLS habilitado y forzado y al menos una política', async () => {
-    expect(await tablasDeApp()).toHaveLength(12);
+    expect(await tablasDeApp()).toHaveLength(19);
     expect(await consultar(SQL_TABLAS_SIN_RLS)).toEqual([]);
   });
 
@@ -205,17 +214,25 @@ describe('privilegios', () => {
 
   it('app_api tiene exactamente los privilegios de tabla y de columna esperados', async () => {
     const esperados: Record<string, string[]> = {
+      agenda_config: ['INSERT', 'SELECT', 'UPDATE'],
+      archivo: ['INSERT', 'SELECT', 'UPDATE'],
       audit_log: ['SELECT'],
       clinica: ['SELECT', 'UPDATE'],
+      // INSERT y UPDATE solo por columna (abajo): ni id, ni uso, ni autor; solo anular.
+      invitacion: ['SELECT'],
       membresia: ['INSERT', 'SELECT', 'UPDATE'],
       migracion: [],
       numerador: ['SELECT'],
+      profesional: ['INSERT', 'SELECT', 'UPDATE'],
+      profesional_bloqueo: ['INSERT', 'SELECT', 'UPDATE'],
+      profesional_disponibilidad: ['INSERT', 'SELECT', 'UPDATE'],
       rol: ['INSERT', 'SELECT', 'UPDATE'],
       rol_permiso: ['INSERT', 'SELECT', 'UPDATE'],
       sede: ['INSERT', 'SELECT', 'UPDATE'],
       sede_horario: ['INSERT', 'SELECT', 'UPDATE'],
       sesion: ['SELECT'],
       sillon: ['INSERT', 'SELECT', 'UPDATE'],
+      tratamiento: ['INSERT', 'SELECT', 'UPDATE'],
       // UPDATE solo por columna (abajo): email y mfa_activo no son escribibles por app_api.
       usuario: ['SELECT'],
       usuario_sede: ['INSERT', 'SELECT', 'UPDATE'],
@@ -241,6 +258,14 @@ describe('privilegios', () => {
        order by 1, 2, 3`,
     );
     expect(columnas).toEqual([
+      { columna: 'invitacion.anulada_en', rol: 'app_api', privilegio: 'UPDATE' },
+      { columna: 'invitacion.clinica_id', rol: 'app_api', privilegio: 'INSERT' },
+      { columna: 'invitacion.email', rol: 'app_api', privilegio: 'INSERT' },
+      { columna: 'invitacion.membresia_id', rol: 'app_api', privilegio: 'INSERT' },
+      { columna: 'invitacion.motivo_anulacion', rol: 'app_api', privilegio: 'UPDATE' },
+      { columna: 'invitacion.nombre', rol: 'app_api', privilegio: 'INSERT' },
+      { columna: 'invitacion.token_hash', rol: 'app_api', privilegio: 'INSERT' },
+      { columna: 'invitacion.vence_en', rol: 'app_api', privilegio: 'INSERT' },
       { columna: 'usuario.nombre', rol: 'app_api', privilegio: 'UPDATE' },
       { columna: 'usuario.telefono', rol: 'app_api', privilegio: 'UPDATE' },
       { columna: 'usuario.ultimo_acceso', rol: 'app_api', privilegio: 'UPDATE' },
@@ -254,33 +279,99 @@ describe('privilegios', () => {
        where n.nspname = 'app' and has_function_privilege('app_api', p.oid, 'EXECUTE')
        order by 1`,
     );
-    expect(filas.map((f) => f.funcion)).toEqual([
-      'app.activar_mfa(timestamp with time zone)',
-      'app.cerrar_sesion(uuid)',
-      'app.clinica_actual()',
-      'app.desactivar_mfa()',
-      'app.registrar_evento(text,text,uuid,jsonb,uuid)',
-      'app.siguiente_numero(text,uuid)',
-      'app.tocar_sesion(uuid,integer)',
-      'app.usuario_actual()',
-    ]);
+    expect(filas.map((f) => f.funcion).sort()).toEqual(
+      [
+        'app.aceptar_invitacion(text,uuid,text)',
+        'app.activar_mfa(timestamp with time zone)',
+        // 0015: ayudas de los límites (SECURITY INVOKER, con RLS) y bajas con motivo.
+        'app.alcance_sedes(uuid,uuid)',
+        'app.anular_invitacion(uuid,text)',
+        'app.cerrar_sesion(uuid)',
+        'app.clinica_actual()',
+        'app.consultar_invitacion(text)',
+        'app.crear_invitacion(text,text,uuid,uuid[],uuid,text,timestamp with time zone)',
+        'app.desactivar_membresia(uuid,text)',
+        'app.desactivar_mfa()',
+        'app.desactivar_rol(uuid,text)',
+        // 0018: la única forma de encolar.
+        'app.encolar(text,jsonb)',
+        'app.membresia_en_alcance(uuid)',
+        'app.permisos_de_rol(uuid,uuid)',
+        'app.reemplazar_permisos_rol(uuid,text[])',
+        'app.reenviar_invitacion(uuid,text,timestamp with time zone)',
+        'app.registrar_evento(text,text,uuid,jsonb,uuid)',
+        'app.siguiente_numero(text,uuid)',
+        'app.tocar_sesion(uuid,integer)',
+        'app.usuario_actual()',
+      ].sort(),
+    );
   });
 
-  it('ninguna función SECURITY DEFINER escribe en membresia, usuario_sede, rol o rol_permiso', async () => {
-    // Corren como el dueño de las tablas, al que app.proteger_acceso() exceptúa: si una (llamada por
-    // app_api o disparada como trigger) escribiera ahí, sería un camino para saltarse las reglas.
+  it('las funciones nuevas que app_api ejecuta, salvo encolar, son SECURITY INVOKER (corren con RLS y las defensas)', async () => {
+    const filas = await consultar<{ funcion: string; definer: boolean }>(
+      `select p.oid::regprocedure::text as funcion, p.prosecdef as definer from pg_proc p
+       join pg_namespace n on n.oid = p.pronamespace
+       where n.nspname = 'app' and p.proname = any($1)`,
+      [
+        [
+          'alcance_sedes',
+          'membresia_en_alcance',
+          'permisos_de_rol',
+          'desactivar_membresia',
+          'desactivar_rol',
+          'encolar',
+        ],
+      ],
+    );
+    expect(Object.fromEntries(filas.map((f) => [f.funcion, f.definer]))).toEqual({
+      'app.alcance_sedes(uuid,uuid)': false,
+      'app.membresia_en_alcance(uuid)': false,
+      'app.permisos_de_rol(uuid,uuid)': false,
+      'app.desactivar_membresia(uuid,text)': false,
+      'app.desactivar_rol(uuid,text)': false,
+      'app.encolar(text,jsonb)': true,
+    });
+  });
+
+  it('ninguna función SECURITY DEFINER escribe en membresia, usuario_sede, rol o rol_permiso (salvo aceptar_invitacion)', async () => {
+    // Corren como el dueño de las tablas: si una (llamada por app_api o disparada como trigger)
+    // escribiera ahí con la excepción del dueño, sería un camino para saltarse las reglas.
+    // La única es app.aceptar_invitacion (activa la membresía del token): desde 0010 la excepción de
+    // app.proteger_acceso() exige que también la SESIÓN sea del dueño, así que dentro de una función
+    // SECURITY DEFINER llamada por app_api las reglas se aplican igual (ver la prueba siguiente y
+    // test/invitaciones-adversarial.test.ts). Una función nueva que aparezca acá se revisa a mano.
     const filas = await consultar<{ funcion: string }>(
       `select p.oid::regprocedure::text as funcion from pg_proc p
        join pg_namespace n on n.oid = p.pronamespace
        where n.nspname = 'app' and p.prosecdef
          and p.prosrc ~* '(insert\\s+into|update|merge\\s+into)\\s+app\\.(membresia|usuario_sede|rol|rol_permiso)\\M'`,
     );
-    expect(filas).toEqual([]);
+    expect(filas).toEqual([{ funcion: 'app.aceptar_invitacion(text,uuid,text)' }]);
     // Prueba de la prueba: el patrón encuentra una escritura así.
     const [control] = await consultar<{ ok: boolean }>(
       `select 'update app.rol_permiso set activo = true' ~* '(insert\\s+into|update|merge\\s+into)\\s+app\\.(membresia|usuario_sede|rol|rol_permiso)\\M' as ok`,
     );
     expect(control?.ok).toBe(true);
+  });
+
+  it('las defensas exceptúan solo a una SESIÓN del dueño de las tablas, no a una función SECURITY DEFINER', async () => {
+    // current_user es el dueño también dentro de una función SECURITY DEFINER llamada por app_api;
+    // session_user no. Toda defensa con excepción del dueño tiene que mirar los dos.
+    const filas = await consultar<{ funcion: string; ok: boolean }>(
+      `select p.proname as funcion,
+              p.prosrc ~ 'pg_has_role\\(current_user, v_dueno_tablas' and p.prosrc ~ 'pg_has_role\\(session_user, v_dueno_tablas' as ok
+       from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+       where n.nspname = 'app'
+         and p.proname in ('proteger_acceso', 'proteger_invitacion', 'proteger_profesional',
+                           'limitar_rol_al_actor')
+       order by 1`,
+    );
+    expect(filas).toEqual([
+      { funcion: 'limitar_rol_al_actor', ok: true },
+      { funcion: 'proteger_acceso', ok: true },
+      { funcion: 'proteger_invitacion', ok: true },
+      { funcion: 'proteger_profesional', ok: true },
+    ]);
   });
 });
 
@@ -291,15 +382,20 @@ describe('funciones', () => {
        from pg_proc p join pg_namespace n on n.oid = p.pronamespace
        where n.nspname = 'app' and p.prosecdef order by 1`,
     );
-    expect(filas.map((f) => f.funcion)).toEqual([
-      'app.activar_mfa(timestamp with time zone)',
-      'app.auditar()',
-      'app.cerrar_sesion(uuid)',
-      'app.desactivar_mfa()',
-      'app.registrar_evento(text,text,uuid,jsonb,uuid)',
-      'app.siguiente_numero(text,uuid)',
-      'app.tocar_sesion(uuid,integer)',
-    ]);
+    expect(filas.map((f) => f.funcion).sort()).toEqual(
+      [
+        'app.aceptar_invitacion(text,uuid,text)',
+        'app.activar_mfa(timestamp with time zone)',
+        'app.auditar()',
+        'app.cerrar_sesion(uuid)',
+        'app.consultar_invitacion(text)',
+        'app.desactivar_mfa()',
+        'app.encolar(text,jsonb)',
+        'app.registrar_evento(text,text,uuid,jsonb,uuid)',
+        'app.siguiente_numero(text,uuid)',
+        'app.tocar_sesion(uuid,integer)',
+      ].sort(),
+    );
     for (const fila of filas) {
       expect({ funcion: fila.funcion, config: fila.config }).toEqual({
         funcion: fila.funcion,
@@ -347,16 +443,38 @@ describe('triggers de auditoría y de no borrado', () => {
     expect(
       Object.fromEntries(auditadas.map((t) => [t.tabla, t.argumentos[0]] as const).sort()),
     ).toEqual({
+      agenda_config: 'sedes',
+      // Módulo de la tabla para app.modulo_de_entidad(); cada evento lleva el de su fila (columna
+      // generada modulo, ver la prueba de archivo más abajo).
+      archivo: 'configuracion',
       clinica: 'configuracion',
+      invitacion: 'personal',
       membresia: 'personal',
+      profesional: 'personal',
+      profesional_bloqueo: 'personal',
+      profesional_disponibilidad: 'personal',
       rol: 'configuracion',
       rol_permiso: 'configuracion',
       sede: 'sedes',
       sede_horario: 'sedes',
       sillon: 'sedes',
+      tratamiento: 'configuracion',
       usuario: 'personal',
       usuario_sede: 'personal',
     });
+  });
+
+  it('solo una columna «modulo» GENERADA cambia el módulo por fila: hoy, únicamente archivo', async () => {
+    // rol_permiso también tiene una columna modulo (el del permiso), pero no es generada: no cuenta.
+    const filas = await consultar<{ tabla: string }>(
+      `select c.relname as tabla from pg_class c join pg_namespace n on n.oid = c.relnamespace
+       where n.nspname = 'app' and c.relkind = 'r' and app.tiene_modulo_generado(c.oid) order by 1`,
+    );
+    expect(filas.map((f) => f.tabla)).toEqual(['archivo']);
+    const [control] = await consultar<{ rol_permiso: boolean }>(
+      "select app.tiene_modulo_generado('app.rol_permiso'::regclass) as rol_permiso",
+    );
+    expect(control?.rol_permiso).toBe(false);
   });
 
   it('app.modulo_de_entidad() lee el módulo del trigger (y sesion es de personal)', async () => {
@@ -405,6 +523,50 @@ describe('triggers de auditoría y de no borrado', () => {
           t.tabla === 'membresia' && t.funcion === 'proteger_ultimo_dueno' && t.tipo === (1 | 16),
       ),
     ).toBe(true);
+    // 0010: invitacion tiene su propia defensa, y el usuario de una membresía se fija una sola vez.
+    expect(
+      todas.some(
+        (t) =>
+          t.tabla === 'invitacion' &&
+          t.funcion === 'proteger_invitacion' &&
+          t.tipo === (1 | 2 | 4 | 16),
+      ),
+    ).toBe(true);
+    expect(
+      todas.some(
+        (t) =>
+          t.tabla === 'membresia' &&
+          t.funcion === 'fijar_usuario_membresia' &&
+          t.tipo === (1 | 2 | 16),
+      ),
+    ).toBe(true);
+    // 0015: vínculo profesional-membresía, límite de los roles (al terminar la sentencia) y motivo
+    // de baja normalizado. 0016: cascada de la baja de una sede y nada activo en una sede de baja.
+    const esperados: [string, string, number][] = [
+      ['profesional', 'proteger_profesional', 1 | 2 | 4 | 16],
+      ['rol', 'limitar_rol_al_actor', 1 | 4 | 16],
+      ['rol_permiso', 'limitar_rol_al_actor', 1 | 4 | 16],
+      ['membresia', 'fijar_motivo_baja', 1 | 2 | 4 | 16],
+      ['rol', 'fijar_motivo_baja', 1 | 2 | 4 | 16],
+      ['sede', 'dar_de_baja_sede_en_cascada', 1 | 16],
+      ['membresia', 'exigir_sede_vigente', 1 | 2 | 4 | 16],
+      ['usuario_sede', 'exigir_sede_vigente', 1 | 2 | 4 | 16],
+      ['profesional_disponibilidad', 'exigir_sede_vigente', 1 | 2 | 4 | 16],
+      ['sillon', 'exigir_sede_vigente', 1 | 2 | 4 | 16],
+    ];
+    for (const [tabla, funcion, tipo] of esperados) {
+      const ok = todas.some((t) => t.tabla === tabla && t.funcion === funcion && t.tipo === tipo);
+      expect({ tabla, funcion, ok }).toEqual({ tabla, funcion, ok: true });
+    }
+    // Los límites de rol son CONSTRAINT TRIGGER diferibles (inmediatos por defecto).
+    const limites = await consultar<{ nombre: string; diferible: boolean; diferido: boolean }>(
+      `select t.tgname as nombre, t.tgdeferrable as diferible, t.tginitdeferred as diferido
+       from pg_trigger t where t.tgfoid = 'app.limitar_rol_al_actor()'::regprocedure order by 1`,
+    );
+    expect(limites).toEqual([
+      { nombre: 'rol_limite_actor', diferible: true, diferido: false },
+      { nombre: 'rol_permiso_limite_actor', diferible: true, diferido: false },
+    ]);
   });
 
   it('toda tabla (salvo audit_log) fija la auditoría de fila antes de insertar y actualizar', async () => {
@@ -515,8 +677,58 @@ describe('valores de los CHECK sincronizados con el código', () => {
     ['membresia_estado_check', ESTADOS_MEMBRESIA],
     ['numerador_tipo_check', TIPOS_NUMERADOR],
     ['sesion_motivo_cierre_check', MOTIVOS_CIERRE_SESION],
+    ['archivo_categoria_check', NOMBRES_CATEGORIA_ARCHIVO],
+    ['archivo_almacen_check', ALMACENES_ARCHIVO],
   ] as const)('%s coincide con el código', async (restriccion, valores) => {
     expect((await valoresDelCheck(restriccion)).sort()).toEqual([...valores].sort());
+  });
+
+  it('tratamiento_iva_check acepta exactamente TASAS_IVA', async () => {
+    const [fila] = await consultar<{ definicion: string }>(
+      `select pg_get_constraintdef(oid) as definicion from pg_constraint
+       where conname = 'tratamiento_iva_check' and connamespace = 'app'::regnamespace`,
+    );
+    const lista = /ARRAY\[([^\]]*)\]/.exec(fila?.definicion ?? '')?.[1] ?? '';
+    const valores = [...lista.matchAll(/-?\d+/g)].map((m) => Number(m[0]));
+    expect(valores.sort()).toEqual([...TASAS_IVA].sort());
+  });
+
+  it('el módulo generado de archivo es el de CATEGORIAS_ARCHIVO para cada categoría', async () => {
+    // La expresión de la columna generada, leída de la base: WHEN '<categoria>' THEN '<modulo>'.
+    const [fila] = await consultar<{ expresion: string }>(
+      `select pg_get_expr(d.adbin, d.adrelid) as expresion
+       from pg_attrdef d join pg_attribute a on a.attrelid = d.adrelid and a.attnum = d.adnum
+       where d.adrelid = 'app.archivo'::regclass and a.attname = 'modulo' and a.attgenerated = 's'`,
+    );
+    const mapa: Record<string, string> = Object.fromEntries(
+      [...(fila?.expresion ?? '').matchAll(/WHEN '([^']+)'::text THEN '([^']+)'::text/g)].map(
+        (m): [string, string] => [m[1] ?? '', m[2] ?? ''],
+      ),
+    );
+    expect(mapa).toEqual(
+      Object.fromEntries(Object.entries(CATEGORIAS_ARCHIVO).map(([c, d]) => [c, d.modulo])),
+    );
+    // Y en los hechos: cada categoría, insertada, deja ese módulo (se revierte).
+    await enTransaccion(admin, {}, async (c) => {
+      const clinica = await c.query<{ id: string }>('select gen_random_uuid() as id');
+      const id = clinica.rows[0]!.id;
+      await c.query("select set_config('app.clinica_id', $1, true)", [id]);
+      await c.query(
+        "insert into app.clinica (id, nombre) values ($1, 'Clínica de la meta-prueba')",
+        [id],
+      );
+      for (const [categoria, datos] of Object.entries(CATEGORIAS_ARCHIVO)) {
+        const { rows } = await c.query<{ modulo: string }>(
+          `insert into app.archivo (clinica_id, categoria, almacen, bucket, ruta, nombre_original,
+                                    tipo, bytes, sha256)
+           values ($1::uuid, $2::text, 'local', 'pruebas', $1::text || '/' || $2::text || '/x.png',
+                   'x.png', 'image/png', 1, repeat('a', 64))
+           returning modulo`,
+          [id, categoria],
+        );
+        expect({ categoria, modulo: rows[0]?.modulo }).toEqual({ categoria, modulo: datos.modulo });
+      }
+    });
   });
 
   it('las acciones que acepta registrar_evento son de ACCIONES_AUDITORIA y coinciden con ACCIONES_EVENTO', async () => {

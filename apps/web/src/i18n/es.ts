@@ -96,6 +96,9 @@ export const es = {
     inicio: 'Inicio',
     sedes: 'Sedes',
     auditoria: 'Auditoría',
+    personal: 'Equipo',
+    profesionales: 'Profesionales',
+    tratamientos: 'Tratamientos',
   },
   inicio: {
     saludo: (nombre: string) => `Mba'éichapa, ${nombre}`,

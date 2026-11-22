@@ -11,7 +11,10 @@ interface ColumnaBase {
   columna: string;
   tipo: string;
   no_nulo: boolean;
+  /** Default propiamente dicho (una columna generada no cuenta). */
   con_default: boolean;
+  /** GENERATED ALWAYS AS (…) STORED. */
+  generada: boolean;
 }
 
 const EQUIVALENCIAS: Record<string, string> = {
@@ -31,6 +34,7 @@ function columnasDrizzle(): ColumnaBase[] {
         tipo: EQUIVALENCIAS[tipo] ?? tipo,
         no_nulo: columna.notNull,
         con_default: columna.hasDefault,
+        generada: columna.generated !== undefined,
       };
     });
   });
@@ -40,7 +44,8 @@ async function columnasBase(): Promise<ColumnaBase[]> {
   return enTransaccion(admin, {}, async (c) => {
     const { rows } = await c.query<ColumnaBase>(
       `select cl.relname as tabla, a.attname as columna, format_type(a.atttypid, a.atttypmod) as tipo,
-              a.attnotnull as no_nulo, a.atthasdef as con_default
+              a.attnotnull as no_nulo, (a.atthasdef and a.attgenerated = '') as con_default,
+              a.attgenerated <> '' as generada
        from pg_attribute a join pg_class cl on cl.oid = a.attrelid
        join pg_namespace n on n.oid = cl.relnamespace
        where n.nspname = 'app' and cl.relkind in ('r', 'p') and cl.relname <> 'migracion'

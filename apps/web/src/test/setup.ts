@@ -1,7 +1,7 @@
 import '@testing-library/jest-dom/vitest';
 import { cleanup, configure } from '@testing-library/react';
 import { afterEach } from 'vitest';
-import { tomarRutasNoSimuladas } from './rutasNoSimuladas.js';
+import { tomarPedidosInvalidos, tomarRutasNoSimuladas } from './rutasNoSimuladas.js';
 
 // Las pantallas se cargan con React.lazy: en un runner lento o con la máquina cargada, el segundo
 // que Testing Library espera por defecto no alcanza y las pruebas fallan sin que haya un defecto.
@@ -16,6 +16,13 @@ afterEach(() => {
     // sin almacenamiento
   }
   const sinSimular = tomarRutasNoSimuladas();
+  const invalidos = tomarPedidosInvalidos();
+  if (invalidos.length) {
+    throw new Error(
+      `La prueba mandó pedidos que no cumplen el contrato: ${[...new Set(invalidos)].join(' | ')}. ` +
+        'La API real los rechazaría: corregí el pedido de la pantalla, no la prueba.',
+    );
+  }
   if (sinSimular.length) {
     throw new Error(
       `La prueba pidió rutas que no simuló: ${[...new Set(sinSimular)].join(', ')}. ` +

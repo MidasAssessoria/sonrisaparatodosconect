@@ -4,6 +4,7 @@
  * `const { urlAdmin, urlApi } = inject('conectaDb')`.
  */
 export {
+  CLAVES_DE_PRUEBA,
   crearBaseVacia,
   iniciarBanco,
   ROL_MIGRADOR_DE_PRUEBA,
@@ -14,9 +15,15 @@ export {
   type UrlsDeBanco,
 } from './banco.js';
 export {
+  crearArchivoDePrueba,
   crearClinicaDePrueba,
+  crearInvitacionDePrueba,
+  crearProfesionalDePrueba,
+  crearRolDePrueba,
   crearSedeDePrueba,
+  crearTratamientoDePrueba,
   crearUsuarioDePrueba,
   type ClinicaDePrueba,
+  type InvitacionDePrueba,
   type UsuarioDePrueba,
 } from './fabricas.js';

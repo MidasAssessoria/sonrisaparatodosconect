@@ -13,6 +13,18 @@ import {
 import { validarTramos, type Tramo } from './EditorHorarios.js';
 import { COLORES_SEDE, infoEstadoSede } from './estadoSede.js';
 
+/** El detalle de una sede pide también su configuración de agenda (reserva online). */
+const AGENDA = {
+  'GET /sedes/:id/agenda': ({ url }: { url: URL }) => ({
+    cuerpo: {
+      sedeId: url.pathname.split('/')[4],
+      anticipacionMin: 120,
+      diasAdelante: 14,
+      reservaOnlineActiva: false,
+    },
+  }),
+};
+
 function tramo(p: Partial<Tramo>): Tramo {
   return {
     clave: p.clave ?? 'a',
@@ -61,6 +73,7 @@ describe('Sedes', () => {
     const auth = crearAuthFalso({ conSesion: true });
     let sedes: Sede[] = [];
     const f = crearFetchFalso({
+      ...AGENDA,
       'GET /sesion': { cuerpo: sesionDe() },
       'GET /sedes': () => ({ cuerpo: sedes }),
       'POST /sedes': ({ cuerpo }) => {
@@ -99,6 +112,7 @@ describe('Sedes', () => {
   it('lista con tarjetas: estado con Chip y enlace al detalle', async () => {
     const auth = crearAuthFalso({ conSesion: true });
     const f = crearFetchFalso({
+      ...AGENDA,
       'GET /sesion': { cuerpo: sesionDe() },
       'GET /sedes': {
         cuerpo: [sedeDe(), sedeDe({ id: IDS.sedeNorte, nombre: 'Norte', estado: 'cerrada' })],
@@ -116,6 +130,7 @@ describe('Sedes', () => {
   it('error al cargar: mensaje con reintento', async () => {
     const auth = crearAuthFalso({ conSesion: true });
     const f = crearFetchFalso({
+      ...AGENDA,
       'GET /sesion': { cuerpo: sesionDe() },
       'GET /sedes': {
         estado: 409,
@@ -130,6 +145,7 @@ describe('Sedes', () => {
   it('horarios: no deja guardar un cierre anterior a la apertura y guarda varios tramos', async () => {
     const auth = crearAuthFalso({ conSesion: true });
     const f = crearFetchFalso({
+      ...AGENDA,
       'GET /sesion': { cuerpo: sesionDe() },
       'GET /sedes/:id': { cuerpo: sedeDe() },
       'PUT /sedes/:id/horarios': ({ cuerpo }) => ({
@@ -165,6 +181,7 @@ describe('Sedes', () => {
     const auth = crearAuthFalso({ conSesion: true });
     const sillon = { id: uuid(70), sedeId: IDS.sedeCentro, nombre: 'Sillón 1', activo: true };
     const f = crearFetchFalso({
+      ...AGENDA,
       'GET /sesion': { cuerpo: sesionDe() },
       'GET /sedes/:id': { cuerpo: sedeDe({ sillones: [sillon] }) },
       'POST /sedes/:id/sillones': ({ cuerpo }) => ({
@@ -205,6 +222,7 @@ describe('Sedes', () => {
     const auth = crearAuthFalso({ conSesion: true });
     const conColor = sedeDe({ color: COLORES_SEDE[1]!.valor });
     const f = crearFetchFalso({
+      ...AGENDA,
       'GET /sesion': { cuerpo: sesionDe() },
       'GET /sedes/:id': { cuerpo: conColor },
       // Respuesta fija (no un eco del pedido): la aserción mira lo que se mandó.
@@ -231,6 +249,7 @@ describe('Sedes', () => {
   it('el nombre de cada color se ve escrito, sin depender del hover', async () => {
     const auth = crearAuthFalso({ conSesion: true });
     const f = crearFetchFalso({
+      ...AGENDA,
       'GET /sesion': { cuerpo: sesionDe() },
       'GET /sedes': { cuerpo: [] },
     });
@@ -247,6 +266,7 @@ describe('Sedes', () => {
   it('dos clics rápidos en «Guardar sede» mandan un solo POST', async () => {
     const auth = crearAuthFalso({ conSesion: true });
     const f = crearFetchFalso({
+      ...AGENDA,
       'GET /sesion': { cuerpo: sesionDe() },
       'GET /sedes': { cuerpo: [] },
       'POST /sedes': ({ cuerpo }) => ({
@@ -268,6 +288,7 @@ describe('Sedes', () => {
   it('dos clics rápidos en «Confirmar baja» y en «Agregar sillón» mandan un solo pedido', async () => {
     const auth = crearAuthFalso({ conSesion: true });
     const f = crearFetchFalso({
+      ...AGENDA,
       'GET /sesion': { cuerpo: sesionDe() },
       'GET /sedes': { cuerpo: [] },
       'GET /sedes/:id': { cuerpo: sedeDe() },
@@ -302,6 +323,7 @@ describe('Sedes', () => {
   it('estados con ícono: sillón Activo/Inactivo y sede Cerrada sin el candado', async () => {
     const auth = crearAuthFalso({ conSesion: true });
     const f = crearFetchFalso({
+      ...AGENDA,
       'GET /sesion': { cuerpo: sesionDe() },
       'GET /sedes/:id': {
         cuerpo: sedeDe({
@@ -327,6 +349,7 @@ describe('Sedes', () => {
     let dadaDeBaja = false;
     let pedidaTrasLaBaja = false;
     const f = crearFetchFalso({
+      ...AGENDA,
       'GET /sesion': { cuerpo: sesionDe() },
       'GET /sedes': { cuerpo: [] },
       'GET /sedes/:id': () => {

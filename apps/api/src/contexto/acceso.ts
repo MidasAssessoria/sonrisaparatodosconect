@@ -23,7 +23,14 @@ export type Acceso =
   /** Con sesión y membresía activa en la clínica, sin un permiso de módulo en particular. */
   | { tipo: 'miembro' }
   /** Con sesión, membresía activa y el permiso módulo + acción en `rol_permiso`. */
-  | { tipo: 'permiso'; modulo: Modulo; accion: Accion };
+  | { tipo: 'permiso'; modulo: Modulo; accion: Accion }
+  /**
+   * Archivos privados: con sesión y membresía activa; el permiso depende de la categoría del
+   * archivo y lo decide el handler con `@AccesoArchivo() acceso: AccesoPorCategoria`
+   * (`acceso.exigir(categoria, accion)`). Hasta entonces el handler no tiene el contexto del pedido
+   * (`@Ctx()` falla) y, si responde sin haberlo exigido, la respuesta se cambia por un 500.
+   */
+  | { tipo: 'archivo' };
 
 /** Ruta sin sesión. Usala solo para lo que de verdad es público. */
 export const Publica = () => SetMetadata(ACCESO, { tipo: 'publica' } satisfies Acceso);
@@ -40,3 +47,6 @@ export const SoloMiembro = () => SetMetadata(ACCESO, { tipo: 'miembro' } satisfi
 /** Exige el permiso `modulo:accion` del rol del usuario en la clínica del pedido. */
 export const Permiso = (modulo: Modulo, accion: Accion) =>
   SetMetadata(ACCESO, { tipo: 'permiso', modulo, accion } satisfies Acceso);
+
+/** Permiso según la categoría del archivo, que decide el handler (ver `Acceso`, tipo `archivo`). */
+export const PermisoDeArchivo = () => SetMetadata(ACCESO, { tipo: 'archivo' } satisfies Acceso);

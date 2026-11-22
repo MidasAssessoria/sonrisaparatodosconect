@@ -4,3 +4,8 @@ export * from './contrato/comun.js';
 export * from './contrato/sedes.js';
 export * from './contrato/sesion.js';
 export * from './contrato/auditoria.js';
+export * from './contrato/personal.js';
+export * from './contrato/profesionales.js';
+export * from './contrato/catalogos.js';
+export * from './contrato/archivos.js';
+export * from './contrato/rutas.js';

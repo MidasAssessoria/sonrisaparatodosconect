@@ -1,0 +1,205 @@
+/* Profesionales, tratamientos y reserva online. Mobile-first; tokens de @conecta/ui. */
+
+/* ---------- Interruptor ---------- */
+.w-interruptor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--espacio-1);
+}
+.w-interruptor__control {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--espacio-3);
+  min-height: var(--toque-minimo);
+  padding: var(--espacio-1) 0;
+  border: 0;
+  background: none;
+  color: var(--tinta);
+  font: var(--tipo-cuerpo-fuerte);
+  text-align: left;
+  cursor: pointer;
+  align-self: flex-start;
+}
+.w-interruptor__control:focus-visible {
+  outline: 3px solid var(--foco);
+  outline-offset: 2px;
+  border-radius: var(--radio-sm);
+}
+.w-interruptor__control:disabled {
+  cursor: default;
+}
+.w-interruptor__pista {
+  position: relative;
+  flex: none;
+  width: 52px;
+  height: 32px;
+  border-radius: var(--radio-pill);
+  border: 1px solid var(--borde-control);
+  background: var(--fondo-suave);
+  transition: background 150ms ease-out;
+}
+.w-interruptor__perilla {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radio-pill);
+  background: var(--blanco);
+  border: 1px solid var(--borde-control);
+  color: var(--tinta-suave);
+  transition: transform 150ms ease-out;
+}
+.w-interruptor__control[aria-checked='true'] .w-interruptor__pista {
+  background: var(--turquesa);
+}
+.w-interruptor__control[aria-checked='true'] .w-interruptor__perilla {
+  transform: translateX(20px);
+  color: var(--tinta);
+}
+.w-interruptor__estado {
+  font: var(--tipo-etiqueta);
+  color: var(--tinta-suave);
+}
+@media (prefers-reduced-motion: reduce) {
+  .w-interruptor__pista,
+  .w-interruptor__perilla {
+    transition: none;
+  }
+}
+
+/* ---------- Disponibilidad ---------- */
+.w-disp-tramo {
+  display: flex;
+  flex-direction: column;
+  gap: var(--espacio-2);
+  width: 100%;
+  padding: var(--espacio-3);
+  border: 1px solid var(--borde);
+  border-radius: var(--radio-control);
+  background: var(--blanco);
+}
+.w-disp-tramo__campos {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--espacio-2) var(--espacio-3);
+  align-items: start;
+}
+.w-disp-tramo__ancho {
+  grid-column: 1 / -1;
+}
+@media (min-width: 768px) {
+  .w-disp-tramo__campos {
+    grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 2fr);
+  }
+  .w-disp-tramo__ancho {
+    grid-column: auto;
+  }
+}
+.w-disp-tramo__pie {
+  display: flex;
+  justify-content: flex-end;
+}
+.w-disp-ajeno {
+  display: flex;
+  align-items: center;
+  gap: var(--espacio-2);
+  color: var(--tinta-suave);
+  margin: 0;
+}
+
+/* ---------- Listas ---------- */
+.w-lista-simple {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.w-lista-simple > li {
+  padding: var(--espacio-3) 0;
+  border-bottom: 1px solid var(--borde);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--espacio-2) var(--espacio-3);
+}
+.w-lista-simple__texto {
+  flex: 1 1 220px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--espacio-1);
+}
+.w-lista-simple__titulo {
+  font: var(--tipo-cuerpo-fuerte);
+  margin: 0;
+}
+.w-fila-fechas {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--espacio-2) var(--espacio-3);
+  align-items: start;
+}
+.w-formulario-en-linea {
+  display: flex;
+  flex-direction: column;
+  gap: var(--espacio-3);
+  margin-top: var(--espacio-4);
+}
+@media (min-width: 768px) {
+  .w-formulario-en-linea {
+    max-width: 560px;
+  }
+}
+
+/* ---------- Tratamientos ---------- */
+.w-filtros-simples {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--espacio-3);
+  margin-bottom: var(--espacio-6);
+}
+@media (min-width: 480px) {
+  .w-filtros-simples {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (min-width: 1024px) {
+  .w-filtros-simples {
+    grid-template-columns: repeat(2, minmax(0, 280px));
+  }
+}
+.w-monto {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.w-acciones-fila {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--espacio-2);
+}
+.w-campo-monto .cn-campo__control {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- Reserva online ---------- */
+.w-par-campos {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--espacio-2) var(--espacio-3);
+}
+.w-grupo {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--espacio-2);
+}
+.w-grupo__leyenda {
+  font: var(--tipo-etiqueta);
+  padding: 0;
+  margin-bottom: var(--espacio-1);
+}

@@ -5,11 +5,12 @@
  *   resto → JWT (con `session_id`) → límite de pedidos por usuario →
  *     cierre de sesión: solo la identidad (sin clínica, sin membresía, con aal1)
  *     resto: clínica, membresía, sesión y doble factor (`ResolvedorContexto`) → permiso
+ *     (en las rutas `archivo`, el permiso lo exige el handler: ver acceso-archivo.ts)
  * y deja el `ContextoPedido` disponible para `@Ctx()` (o la identidad para `@Identidad()`).
  */
 import { Inject, Injectable, type CanActivate, type ExecutionContext } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { CABECERA_CLINICA, type Accion, type Modulo } from '@conecta/shared';
+import { CABECERA_CLINICA } from '@conecta/shared';
 import type { Request } from 'express';
 import { VERIFICADOR_JWT, tokenDeCabecera, type VerificadorJwt } from '../auth/verificador-jwt.js';
 import { CONFIG, type Config } from '../config.js';
@@ -18,33 +19,10 @@ import { ipDe, idPedidoDe } from '../comun/pedido.js';
 import { REGISTRO, type Registro } from '../comun/registro.js';
 import { errores } from '../errores/error-api.js';
 import { ACCESO, type Acceso } from './acceso.js';
+import { AccesoPorCategoria, fijarAccesoArchivo } from './acceso-archivo.js';
 import { fijarContexto, fijarIdentidad, tienePermiso } from './contexto-pedido.js';
+import { mensajeSinPermiso } from './mensajes.js';
 import { ResolvedorContexto } from './resolvedor-contexto.js';
-
-const NOMBRE_MODULO: Record<Modulo, string> = {
-  inicio: 'Inicio',
-  agenda: 'Agenda',
-  pacientes: 'Pacientes',
-  ficha_clinica: 'Ficha clínica',
-  presupuestos: 'Presupuestos',
-  caja: 'Caja',
-  contabilidad: 'Contabilidad',
-  reportes: 'Reportes',
-  personal: 'Personal',
-  inventario: 'Inventario',
-  mensajeria: 'Mensajería',
-  sedes: 'Sedes',
-  auditoria: 'Auditoría',
-  configuracion: 'Configuración',
-};
-
-const VERBO_ACCION: Record<Accion, string> = {
-  ver: 'ver',
-  crear: 'crear',
-  editar: 'editar',
-  anular: 'dar de baja',
-  exportar: 'exportar',
-};
 
 @Injectable()
 export class GuardContexto implements CanActivate {
@@ -94,10 +72,14 @@ export class GuardContexto implements CanActivate {
     );
 
     if (acceso.tipo === 'permiso' && !tienePermiso(contexto, acceso.modulo, acceso.accion)) {
-      throw errores.sinPermiso(
-        `Tu rol no tiene permiso para ${VERBO_ACCION[acceso.accion]} en ${NOMBRE_MODULO[acceso.modulo]}. ` +
-          'Pedile acceso a quien administra la clínica.',
-      );
+      throw errores.sinPermiso(mensajeSinPermiso(acceso.modulo, acceso.accion));
+    }
+
+    // Archivos: el permiso lo exige el handler según la categoría (ver acceso-archivo.ts); hasta
+    // entonces no hay ContextoPedido para @Ctx().
+    if (acceso.tipo === 'archivo') {
+      fijarAccesoArchivo(req, new AccesoPorCategoria(contexto));
+      return true;
     }
 
     fijarContexto(req, contexto);

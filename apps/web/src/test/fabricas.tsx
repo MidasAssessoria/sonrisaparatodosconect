@@ -1,11 +1,16 @@
 import {
   ACCIONES,
   MODULOS,
+  sesionSchema,
   type Accion,
   type Modulo,
   type Permiso,
+  type Persona,
+  type Profesional,
+  type Rol,
   type Sede,
   type Sesion,
+  type Tratamiento,
 } from '@conecta/shared';
 import { render } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
@@ -18,7 +23,8 @@ import type {
   ServicioAuth,
   SesionAuth,
 } from '../auth/servicioAuth.js';
-import { registrarRutaNoSimulada } from './rutasNoSimuladas.js';
+import { problemasDelPedido } from './pedidosContrato.js';
+import { registrarPedidoInvalido, registrarRutaNoSimulada } from './rutasNoSimuladas.js';
 
 /** UUID v4 válido y legible: uuid(1) → 00000000-0000-4000-8000-000000000001. */
 export function uuid(n: number): string {
@@ -38,7 +44,7 @@ export const IDS = {
   factor: uuid(40),
 };
 
-function matriz(filas: [Modulo, Accion[]][]): Permiso[] {
+export function matriz(filas: [Modulo, Accion[]][]): Permiso[] {
   return filas.flatMap(([modulo, acciones]) => acciones.map((accion) => ({ modulo, accion })));
 }
 
@@ -139,13 +145,18 @@ export function sedeDe(parcial: Partial<Sede> = {}): Sede {
 
 export interface OpcionesAuthFalso {
   conSesion?: boolean;
+  /** Cuenta de la sesión (por defecto Lorena). `iniciarSesion` entra con el correo que recibe. */
+  usuario?: SesionAuth;
   nivel?: { actual: NivelAutenticacion; siguiente: NivelAutenticacion };
   factores?: FactorTotp[];
 }
 
 /** Servicio de autenticación falso con `vi.fn` en cada método. */
 export function crearAuthFalso(op: OpcionesAuthFalso = {}) {
-  const usuario: SesionAuth = { usuarioId: IDS.usuario, email: 'lorena@ejemplo.test' };
+  const usuario: SesionAuth = op.usuario ?? {
+    usuarioId: IDS.usuario,
+    email: 'lorena@ejemplo.test',
+  };
   const estado = {
     sesion: op.conSesion ? usuario : null,
     nivel: op.nivel ?? {
@@ -159,9 +170,9 @@ export function crearAuthFalso(op: OpcionesAuthFalso = {}) {
     estado,
     obtenerSesion: vi.fn(() => Promise.resolve(estado.sesion)),
     obtenerToken: vi.fn(() => Promise.resolve(estado.sesion ? 'token-de-prueba' : null)),
-    iniciarSesion: vi.fn<(email: string, clave: string) => Promise<SesionAuth>>(() => {
-      estado.sesion = usuario;
-      return Promise.resolve(usuario);
+    iniciarSesion: vi.fn<(email: string, clave: string) => Promise<SesionAuth>>((email) => {
+      estado.sesion = { usuarioId: usuario.usuarioId, email: email.trim().toLowerCase() };
+      return Promise.resolve(estado.sesion);
     }),
     cerrarSesion: vi.fn(() => {
       estado.sesion = null;
@@ -242,9 +253,15 @@ const RUTAS_POR_DEFECTO: Record<string, RespuestaFalsa> = {
  * `fetch` falso con rutas «MÉTODO /ruta» (con `:param`). Una ruta que la prueba no simuló
  * responde 500 y queda registrada: `setup.ts` hace fallar la prueba. `pedidos` guarda todo lo
  * que se pidió. Un manejador puede devolver una promesa (para respuestas tardías).
+ *
+ * Cada pedido se valida contra el contrato (`pedidosContrato.ts`): cuerpo según el esquema de
+ * entrada de la ruta, sin campos de más, sin sedes que quien pide no ve (según la última sesión
+ * que respondió este `fetch`) y `Authorization` donde se exige. Un pedido que no cumple responde
+ * 400 y `setup.ts` hace fallar la prueba, aunque la pantalla se trague el error.
  */
 export function crearFetchFalso(rutas: Record<string, Manejador | RespuestaFalsa>) {
   const pedidos: PedidoRegistrado[] = [];
+  let sesionActual: Sesion | null = null;
   const todas: Record<string, Manejador | RespuestaFalsa> = { ...RUTAS_POR_DEFECTO, ...rutas };
   const fn = vi.fn(async (entrada: RequestInfo | URL, init?: RequestInit) => {
     const texto =
@@ -252,10 +269,26 @@ export function crearFetchFalso(rutas: Record<string, Manejador | RespuestaFalsa
     const url = new URL(texto, 'http://localhost');
     const metodo = (init?.method ?? 'GET').toUpperCase();
     const cabeceras = new Headers(init?.headers);
-    const cuerpo: unknown = typeof init?.body === 'string' ? JSON.parse(init.body) : undefined;
+    const cuerpo: unknown =
+      typeof init?.body === 'string'
+        ? JSON.parse(init.body)
+        : init?.body instanceof FormData
+          ? init.body
+          : undefined;
     pedidos.push({ metodo, url, cuerpo, cabeceras });
     const ruta = url.pathname.replace(/^\/api\/v1/, '');
     const clave = `${metodo} ${ruta}`;
+    const problemas = problemasDelPedido({ clave, cuerpo, cabeceras, sesion: sesionActual });
+    if (problemas.length) {
+      problemas.forEach(registrarPedidoInvalido);
+      return Response.json(
+        {
+          codigo: 'datos_invalidos',
+          mensaje: `Pedido fuera del contrato: ${problemas.join('; ')}`,
+        },
+        { status: 400 },
+      );
+    }
     const manejador =
       todas[clave] ??
       Object.entries(todas).find(([patron]) => {
@@ -276,6 +309,10 @@ export function crearFetchFalso(rutas: Record<string, Manejador | RespuestaFalsa
       return Response.json({ codigo: 'error_interno', mensaje: 'Sin respuesta.' }, { status: 500 });
     }
     const estado = r.estado ?? 200;
+    if (clave === 'GET /sesion' && estado === 200) {
+      const s = sesionSchema.safeParse(r.cuerpo);
+      if (s.success) sesionActual = s.data;
+    }
     const headers = new Headers(r.cabeceras);
     if (estado === 204) return new Response(null, { status: 204, headers });
     return Response.json(r.cuerpo ?? null, { status: estado, headers });
@@ -306,4 +343,153 @@ export function renderApp({
       <App servicios={{ auth, fetch: fetchFalso }} />
     </MemoryRouter>,
   );
+}
+
+/** Monta la app con sesión abierta (Dueño/a por defecto) y las rutas simuladas. */
+export function montar(
+  rutas: Record<string, Manejador | RespuestaFalsa>,
+  ruta: string,
+  sesion: Partial<Sesion> = {},
+) {
+  const auth = crearAuthFalso({ conSesion: true });
+  const f = crearFetchFalso({ 'GET /sesion': { cuerpo: sesionDe(sesion) }, ...rutas });
+  renderApp({ auth, fetch: f.fetch, ruta });
+  return { ...f, auth };
+}
+
+/* ── Equipo, roles e invitaciones ─────────────────────────────────────────────────────────── */
+
+export const IDS_PERSONAL = {
+  ana: uuid(501),
+  gloria: uuid(502),
+  carlos: uuid(503),
+  usuarioAna: uuid(601),
+  usuarioCarlos: uuid(603),
+  rolAsistente: uuid(34),
+  rolPropio: uuid(35),
+  /** Sede que existe en la clínica pero que la sesión de prueba no ve. */
+  sedeOculta: uuid(29),
+};
+
+export function personaDe(parcial: Partial<Persona> = {}): Persona {
+  return {
+    membresiaId: IDS_PERSONAL.ana,
+    usuarioId: IDS_PERSONAL.usuarioAna,
+    nombre: 'Marta Acosta',
+    email: 'marta@ejemplo.test',
+    telefono: null,
+    rol: { id: IDS.rolRecepcion, codigo: 'recepcion', nombre: 'Recepción y caja' },
+    estado: 'activo',
+    sedeIds: [IDS.sedeCentro],
+    sedeDefectoId: IDS.sedeCentro,
+    ultimoAcceso: '2026-11-19T12:05:00Z',
+    mfaActivo: false,
+    invitacionVenceEn: null,
+    profesionalId: null,
+    ...parcial,
+  };
+}
+
+export function rolDe(parcial: Partial<Rol> = {}): Rol {
+  return {
+    id: IDS.rolRecepcion,
+    codigo: 'recepcion',
+    nombre: 'Recepción y caja',
+    esSistema: true,
+    activo: true,
+    todasLasSedes: false,
+    exigeMfa: false,
+    inactividadMin: 30,
+    permisos: PERMISOS_RECEPCION,
+    personas: 2,
+    ...parcial,
+  };
+}
+
+export const ROL_DUENO_COMPLETO = rolDe({
+  id: IDS.rol,
+  codigo: 'dueno',
+  nombre: 'Dueño/a',
+  todasLasSedes: true,
+  exigeMfa: true,
+  inactividadMin: 15,
+  permisos: PERMISOS_DUENO,
+  personas: 1,
+});
+
+export const ROL_ADMINISTRACION_COMPLETO = rolDe({
+  id: IDS.rolAdministracion,
+  codigo: 'administracion',
+  nombre: 'Administración',
+  todasLasSedes: true,
+  exigeMfa: true,
+  inactividadMin: 15,
+  permisos: PERMISOS_ADMINISTRACION,
+  personas: 1,
+});
+
+/** Sesión de Administración (no es dueña). */
+export const ROL_SESION_ADMINISTRACION = {
+  id: IDS.rolAdministracion,
+  codigo: 'administracion',
+  nombre: 'Administración',
+  exigeMfa: true,
+};
+
+/** Solo mira el equipo (sin crear, editar ni anular). */
+export const PERMISOS_SOLO_VER_EQUIPO = matriz([
+  ['inicio', ['ver']],
+  ['personal', ['ver']],
+]);
+
+/** `navigator.clipboard` falso (jsdom no lo trae). */
+export function portapapelesFalso() {
+  const writeText = vi.fn<(t: string) => Promise<void>>(() => Promise.resolve());
+  Object.defineProperty(navigator, 'clipboard', {
+    value: { writeText },
+    configurable: true,
+  });
+  return writeText;
+}
+
+/* ── Profesionales y tratamientos ─────────────────────────────────────────────────────────── */
+
+export const IDS_CATALOGO = {
+  acosta: uuid(500),
+  rojas: uuid(501),
+  sillonCentro: uuid(510),
+  sedeAjena: uuid(520),
+  bloqueo: uuid(530),
+  membresiaGloria: uuid(540),
+  limpieza: uuid(600),
+  extraccion: uuid(601),
+  blanqueamiento: uuid(602),
+};
+
+export function profesionalDe(parcial: Partial<Profesional> = {}): Profesional {
+  return {
+    id: IDS_CATALOGO.acosta,
+    membresiaId: null,
+    nombre: 'Dra. Marta Acosta',
+    especialidad: 'Ortodoncia',
+    color: '#2e9bec',
+    registroProf: 'RP 1234',
+    activo: true,
+    disponibilidad: [],
+    bloqueos: [],
+    ...parcial,
+  };
+}
+
+export function tratamientoDe(parcial: Partial<Tratamiento> = {}): Tratamiento {
+  return {
+    id: IDS_CATALOGO.limpieza,
+    nombre: 'Limpieza dental',
+    categoria: 'Prevención',
+    precio: 150_000,
+    iva: 10,
+    duracionMin: 30,
+    activo: true,
+    ...parcial,
+  };
 }

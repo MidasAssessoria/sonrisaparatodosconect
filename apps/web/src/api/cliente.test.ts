@@ -1,6 +1,6 @@
 import { CODIGOS_ERROR, type CodigoError } from '@conecta/shared';
 import { describe, expect, it, vi } from 'vitest';
-import { crearFetchFalso, IDS, sedeDe, sesionDe } from '../test/fabricas.js';
+import { crearFetchFalso, IDS, personaDe, sedeDe, sesionDe } from '../test/fabricas.js';
 import { crearClienteConsultas } from '../App.js';
 import { baseApi, crearClienteApi, reintentarDesde } from './cliente.js';
 import {
@@ -121,7 +121,7 @@ describe('cliente de API', () => {
     });
     const { api } = cliente(f.fetch);
     const error = (await api.sedes
-      .crear({ nombre: 'x', estado: 'abierta' })
+      .crear({ nombre: 'Centro', estado: 'abierta' })
       .catch((e: unknown) => e)) as ErrorConecta;
     expect(error.detalles).toEqual([{ campo: 'nombre', mensaje: 'Poné el nombre de la sede.' }]);
   });
@@ -255,5 +255,116 @@ describe('429 y 503', () => {
     expect(reintentarDesde('Fri, 20 Nov 2026 12:01:00 GMT', ahora)).toBe(ahora + 60_000);
     expect(reintentarDesde(null, ahora)).toBeNull();
     expect(reintentarDesde('mañana', ahora)).toBeNull();
+  });
+});
+
+describe('cliente de API: endpoints del Sprint 2 (un solo cliente)', () => {
+  it('consultar una invitación va sin token ni clínica y sin reacciones globales', async () => {
+    const f = crearFetchFalso({
+      'POST /invitaciones/consultar': {
+        estado: 404,
+        cuerpo: { codigo: 'no_encontrado', mensaje: 'No encontramos esa invitación.' },
+      },
+    });
+    const { api, alError } = cliente(f.fetch);
+    await expect(api.invitaciones.consultar('t'.repeat(30))).rejects.toMatchObject({
+      codigo: 'no_encontrado',
+    });
+    expect(f.pedidos[0]?.cabeceras.has('authorization')).toBe(false);
+    expect(f.pedidos[0]?.cabeceras.has('x-clinica-id')).toBe(false);
+    expect(alError).not.toHaveBeenCalled();
+  });
+
+  it('aceptar va con Authorization y sin X-Clinica-Id; sin sesión no sale', async () => {
+    const f = crearFetchFalso({
+      'POST /invitaciones/aceptar': {
+        cuerpo: { email: 'rosa@ejemplo.test', clinicaId: IDS.clinicaB },
+      },
+    });
+    const { api } = cliente(f.fetch);
+    await expect(api.invitaciones.aceptar('t'.repeat(30))).resolves.toEqual({
+      email: 'rosa@ejemplo.test',
+      clinicaId: IDS.clinicaB,
+    });
+    expect(f.pedidos[0]?.cabeceras.get('authorization')).toBe('Bearer tok');
+    expect(f.pedidos[0]?.cabeceras.has('x-clinica-id')).toBe(false);
+    expect(f.pedidos[0]?.cuerpo).toEqual({ token: 't'.repeat(30) });
+
+    const sinSesion = cliente(f.fetch, { token: null });
+    await expect(sinSesion.api.invitaciones.aceptar('t'.repeat(30))).rejects.toMatchObject({
+      codigo: 'no_autenticado',
+    });
+    expect(f.pedidos).toHaveLength(1);
+  });
+
+  it('desactivar y reactivar devuelven la Persona que responde la API', async () => {
+    const persona = personaDe({ estado: 'inactivo' });
+    const f = crearFetchFalso({
+      'POST /personal/:id/desactivar': { cuerpo: persona },
+      'POST /personal/:id/reactivar': { cuerpo: { ...persona, estado: 'activo' } },
+    });
+    const { api } = cliente(f.fetch);
+    await expect(
+      api.personal.desactivar(persona.membresiaId, { motivo: 'Se fue' }),
+    ).resolves.toEqual(persona);
+    await expect(api.personal.reactivar(persona.membresiaId)).resolves.toMatchObject({
+      estado: 'activo',
+    });
+    expect(f.pedidos[1]?.cuerpo).toBeUndefined();
+  });
+
+  it('subir un archivo: multipart con categoria antes que archivo, sin Content-Type a mano', async () => {
+    const archivo = {
+      id: IDS.factor,
+      categoria: 'firma_profesional',
+      nombreOriginal: 'firma.png',
+      tipo: 'image/png',
+      bytes: 3,
+      ancho: 1,
+      alto: 1,
+      sha256: 'a'.repeat(64),
+      subidoEn: '2026-11-21T12:00:00Z',
+    };
+    const f = crearFetchFalso({ 'POST /archivos': { estado: 201, cuerpo: archivo } });
+    const { api } = cliente(f.fetch);
+    const r = await api.archivos.subir(
+      'firma_profesional',
+      new File(['png'], 'firma.png', { type: 'image/png' }),
+    );
+    expect(r.id).toBe(IDS.factor);
+    const pedido = f.pedidos[0];
+    expect(pedido?.cabeceras.has('content-type')).toBe(false);
+    expect(pedido?.cuerpo).toBeInstanceOf(FormData);
+    const form = pedido?.cuerpo as FormData;
+    expect([...form.keys()]).toEqual(['categoria', 'archivo']);
+    expect(form.get('categoria')).toBe('firma_profesional');
+    expect((form.get('archivo') as File).name).toBe('firma.png');
+    expect(pedido?.cabeceras.get('x-clinica-id')).toBe(IDS.clinicaA);
+  });
+
+  it('la URL de un archivo se usa tal cual (absoluta); una relativa no cumple el contrato', async () => {
+    const absoluta = 'https://almacen.conecta.test/firmas/abc?t=123';
+    const f = crearFetchFalso({
+      'GET /archivos/:id/url': ({ url }) => ({
+        cuerpo: {
+          url: url.pathname.includes(IDS.factor) ? absoluta : '/api/v1/archivos/descarga?t=1',
+          venceEn: '2026-11-21T12:05:00Z',
+        },
+      }),
+    });
+    const { api } = cliente(f.fetch, {});
+    await expect(api.archivos.url(IDS.factor)).resolves.toMatchObject({ url: absoluta });
+    await expect(api.archivos.url(IDS.usuario)).rejects.toMatchObject({
+      codigo: 'respuesta_invalida',
+    });
+  });
+
+  it('un 503 sin cuerpo en tratamientos es servicio_no_disponible y no se reintenta solo', async () => {
+    const fetchImpl: typeof fetch = () => Promise.resolve(new Response(null, { status: 503 }));
+    const { api, alError } = cliente(fetchImpl);
+    const error = (await api.tratamientos.listar().catch((e: unknown) => e)) as ErrorConecta;
+    expect(error.codigo).toBe('servicio_no_disponible');
+    expect(esReintentable(error)).toBe(false);
+    expect(alError).toHaveBeenCalledWith(error);
   });
 });

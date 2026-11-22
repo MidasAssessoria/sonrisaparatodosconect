@@ -214,6 +214,13 @@ describe('sin contexto o con contexto inválido', () => {
     'numerador',
     'audit_log',
     'sesion',
+    'invitacion',
+    'profesional',
+    'profesional_disponibilidad',
+    'profesional_bloqueo',
+    'tratamiento',
+    'agenda_config',
+    'archivo',
   ];
 
   it.each(contextos)('%s: cero filas en todas las tablas', async (_nombre, contexto) => {

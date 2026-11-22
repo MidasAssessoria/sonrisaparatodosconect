@@ -9,6 +9,7 @@ import type pg from 'pg';
 import { beforeAll, describe, expect, it } from 'vitest';
 import {
   crearClinicaDePrueba,
+  crearRolDePrueba,
   crearSedeDePrueba,
   crearUsuarioDePrueba,
   type ClinicaDePrueba,
@@ -27,6 +28,10 @@ interface Plantel extends ClinicaDePrueba {
   odontologo: UsuarioDePrueba;
   pendiente: UsuarioDePrueba;
   inactivo: UsuarioDePrueba;
+  /** Rol de la clínica con permisos incluidos en los de Administración (0015: ella lo puede dar). */
+  rolAdministrable: string;
+  /** Inactiva con `rolAdministrable`: Administración la puede reincorporar. */
+  inactivoAdministrable: UsuarioDePrueba;
   /** Dueño de otra clínica: no tiene nada en esta. */
   ajeno: string;
 }
@@ -45,6 +50,16 @@ async function prepararPlantel(): Promise<Plantel> {
       crearUsuarioDePrueba(admin, { clinicaId: id, rol: 'asistente', estado: 'pendiente' }),
       crearUsuarioDePrueba(admin, { clinicaId: id, rol: 'asistente', estado: 'inactivo' }),
     ]);
+  const { rolId: rolAdministrable } = await crearRolDePrueba(admin, {
+    clinicaId: id,
+    nombre: 'Cobranzas',
+    permisos: ['inicio:ver', 'caja:ver', 'caja:exportar'],
+  });
+  const inactivoAdministrable = await crearUsuarioDePrueba(admin, {
+    clinicaId: id,
+    rolId: rolAdministrable,
+    estado: 'inactivo',
+  });
   return {
     ...clinica,
     sedeId,
@@ -54,6 +69,8 @@ async function prepararPlantel(): Promise<Plantel> {
     odontologo,
     pendiente,
     inactivo,
+    rolAdministrable,
+    inactivoAdministrable,
     ajeno: otra.duenoId,
   };
 }
@@ -108,20 +125,25 @@ describe('permisos que exige la base', () => {
     }
   });
 
-  it('administración (personal:crear/editar, configuracion:editar) gestiona personal y roles ajenos', async () => {
+  it('administración (personal:crear/editar, configuracion:editar) gestiona personal y roles ajenos dentro de lo que ella tiene', async () => {
     await como(K, K.administra.usuarioId, async (c) => {
+      // Desde 0010 la membresía nace sin usuario (lo recibe al aceptar la invitación); desde 0015,
+      // con un rol que no dé más que el de quien invita.
       expect(
-        await intentar(c, SQL.altaMembresia(), [K.clinicaId, K.ajeno, K.roles.asistente]),
+        await intentar(c, SQL.altaMembresia(), [K.clinicaId, null, K.rolAdministrable]),
       ).toMatchObject({ ok: true, cantidad: 1 });
+      // Dar de baja a alguien con otro rol, sí (no otorga nada), con motivo.
       expect(
-        await intentar(c, "update app.membresia set estado = 'inactivo' where id = $1", [
-          K.recepcion.membresiaId,
-        ]),
+        await intentar(
+          c,
+          "update app.membresia set estado = 'inactivo', motivo_baja = 'Renunció' where id = $1",
+          [K.recepcion.membresiaId],
+        ),
       ).toMatchObject({ ok: true, cantidad: 1 });
-      // Reincorporar a quien fue miembro.
+      // Reincorporar a quien fue miembro, con un rol que ella puede dar.
       expect(
         await intentar(c, "update app.membresia set estado = 'activo' where id = $1", [
-          K.inactivo.membresiaId,
+          K.inactivoAdministrable.membresiaId,
         ]),
       ).toMatchObject({ ok: true, cantidad: 1 });
       expect(
@@ -131,6 +153,28 @@ describe('permisos que exige la base', () => {
       expect(await intentar(c, SQL.altaPermiso, [K.clinicaId, rol, 'caja', 'ver'])).toMatchObject({
         ok: true,
       });
+      expect(
+        await intentar(
+          c,
+          'update app.rol set exige_mfa = true, inactividad_min = 10 where id = $1',
+          [rol],
+        ),
+      ).toMatchObject({ ok: true, cantidad: 1 });
+      // Los roles de sistema y su matriz, solo un dueño (0015).
+      expect(
+        await intentar(
+          c,
+          'update app.rol set exige_mfa = true, inactividad_min = 10 where id = $1',
+          [K.roles.odontologo],
+        ),
+      ).toMatchObject(rechazo('42501', 'rol_sistema_solo_dueno'));
+      expect(
+        await intentar(c, 'update app.rol_permiso set activo = false where rol_id = $1', [
+          K.roles.recepcion,
+        ]),
+      ).toMatchObject(rechazo('42501', 'rol_sistema_solo_dueno'));
+    });
+    await como(K, K.duenoId, async (c) => {
       expect(
         await intentar(
           c,
@@ -164,22 +208,28 @@ describe('permisos que exige la base', () => {
         await intentar(c, SQL.altaMembresia(), [p.clinicaId, p.ajeno, p.roles.asistente]),
       ).toMatchObject(rechazo('42501', 'acceso_sin_permiso'));
       expect(
-        await intentar(c, "update app.membresia set estado = 'inactivo' where id = $1", [
-          p.recepcion.membresiaId,
-        ]),
+        await intentar(
+          c,
+          "update app.membresia set estado = 'inactivo', motivo_baja = 'Baja' where id = $1",
+          [p.recepcion.membresiaId],
+        ),
       ).toMatchObject({ ok: true, cantidad: 1 });
     });
-    await como(
-      p,
-      p.duenoId,
+    // Desde 0010 un rol en uso no se desactiva por la API (rol_en_uso): lo hace la administración
+    // del sistema, para probar que la defensa igual mira que el rol del actor esté activo.
+    await enTransaccion(
+      admin,
+      { clinica: p.clinicaId, usuario: '' },
       (c) => c.query('update app.rol set activo = false where id = $1', [p.roles.administracion]),
       { confirmar: true },
     );
     await como(p, p.administra.usuarioId, async (c) => {
       expect(
-        await intentar(c, "update app.membresia set estado = 'inactivo' where id = $1", [
-          p.recepcion.membresiaId,
-        ]),
+        await intentar(
+          c,
+          "update app.membresia set estado = 'inactivo', motivo_baja = 'Baja' where id = $1",
+          [p.recepcion.membresiaId],
+        ),
       ).toMatchObject(rechazo('42501', 'acceso_sin_membresia'));
     });
   });
@@ -285,15 +335,18 @@ describe('nadie toca lo propio', () => {
     });
   });
 
-  it('escalada por un rol nuevo: se puede crear con todo, pero no asignárselo a uno mismo', async () => {
+  it('escalada por un rol nuevo: no se le da a un rol lo que uno no tiene (0015), ni uno se asigna otro rol', async () => {
     await como(K, K.administra.usuarioId, async (c) => {
       const rol = await valor<string>(c, SQL.altaRol, [K.clinicaId, 'todopoderoso']);
-      await c.query(
-        `insert into app.rol_permiso (clinica_id, rol_id, modulo, accion)
-         select $1, $2, m, a from unnest(array['ficha_clinica', 'personal', 'configuracion']) m
-         cross join unnest(array['ver', 'crear', 'editar']) a`,
-        [K.clinicaId, rol],
-      );
+      expect(
+        await intentar(
+          c,
+          `insert into app.rol_permiso (clinica_id, rol_id, modulo, accion)
+           select $1, $2, m, a from unnest(array['ficha_clinica', 'personal', 'configuracion']) m
+           cross join unnest(array['ver', 'crear', 'editar']) a`,
+          [K.clinicaId, rol],
+        ),
+      ).toMatchObject(rechazo('42501', 'rol_permisos_ajenos'));
       expect(
         await intentar(c, 'update app.membresia set rol_id = $1 where id = $2', [
           rol,
@@ -341,9 +394,11 @@ describe('el rol dueño', () => {
         ]),
       ).toMatchObject({ ok: true, cantidad: 1 });
       expect(
-        await intentar(c, "update app.membresia set estado = 'inactivo' where id = $1", [
-          K.dueno2.membresiaId,
-        ]),
+        await intentar(
+          c,
+          "update app.membresia set estado = 'inactivo', motivo_baja = 'Vendió su parte' where id = $1",
+          [K.dueno2.membresiaId],
+        ),
       ).toMatchObject({ ok: true, cantidad: 1 });
       // El rol dueño y sus permisos: ni el dueño (es su propio rol).
       expect(
@@ -404,9 +459,10 @@ describe('una clínica no se queda sin dueño', () => {
       p,
       p.duenoId,
       (c) =>
-        c.query("update app.membresia set estado = 'inactivo' where id = $1", [
-          p.dueno2.membresiaId,
-        ]),
+        c.query(
+          "update app.membresia set estado = 'inactivo', motivo_baja = 'Vendió su parte' where id = $1",
+          [p.dueno2.membresiaId],
+        ),
       { confirmar: true },
     );
     await enTransaccion(admin, { clinica: p.clinicaId, usuario: '' }, async (c) => {
@@ -484,12 +540,8 @@ describe('una clínica no se queda sin dueño', () => {
       await fijar(uno, p.duenoId);
       await fijar(dos, p.dueno2.usuarioId);
       const resultados = await Promise.allSettled([
-        uno.query("update app.membresia set estado = 'inactivo' where id = $1", [
-          p.dueno2.membresiaId,
-        ]),
-        dos.query("update app.membresia set estado = 'inactivo' where id = $1", [
-          p.membresiaDuenoId,
-        ]),
+        uno.query("select app.desactivar_membresia($1, 'Se va')", [p.dueno2.membresiaId]),
+        dos.query("select app.desactivar_membresia($1, 'Se va')", [p.membresiaDuenoId]),
       ]);
       // Una se bloquea con la otra: o el detector de interbloqueos aborta una, o la segunda falla
       // al ver que ya no es dueña / que no queda otro dueño. Nunca pasan las dos.
@@ -517,24 +569,45 @@ describe('una clínica no se queda sin dueño', () => {
 });
 
 describe('invitación pendiente: no da acceso al perfil de la persona', () => {
-  it('una clínica crea una membresía pendiente para alguien de otra clínica y no ve nada de su perfil', async () => {
+  it('una clínica no crea una membresía con el usuario de otra persona, ni ve nada de su perfil', async () => {
     await como(K, K.administra.usuarioId, async (c) => {
+      // 0009 dejaba crearla (pendiente, sin ver el perfil); desde 0010 ni eso: la membresía nace sin
+      // usuario y lo recibe solo al aceptar la invitación con su enlace.
       expect(
         await intentar(c, SQL.altaMembresia(), [K.clinicaId, K.ajeno, K.roles.asistente]),
-      ).toMatchObject({ ok: true });
+      ).toMatchObject(rechazo('42501', 'membresia_por_invitacion'));
       expect(await valor(c, 'select count(*)::int from app.usuario where id = $1', [K.ajeno])).toBe(
         0,
       );
-      // Ni activándola, ni pasándola a inactiva (las inactivas se ven), ni creándola así.
+      // Una pendiente CON usuario (anterior a 0010, la crea la administración): ni activándola, ni
+      // pasándola a inactiva (las inactivas se ven).
       for (const estado of ['activo', 'inactivo']) {
         expect(
-          await intentar(
-            c,
-            'update app.membresia set estado = $3 where clinica_id = $1 and usuario_id = $2',
-            [K.clinicaId, K.ajeno, estado],
-          ),
+          await intentar(c, 'update app.membresia set estado = $2 where id = $1', [
+            K.pendiente.membresiaId,
+            estado,
+          ]),
         ).toMatchObject(rechazo('42501', 'membresia_nace_pendiente'));
       }
+      // Ni poniéndole un usuario a una pendiente sin usuario.
+      const sinUsuario = await valor<string>(
+        c,
+        'insert into app.membresia (clinica_id, rol_id) values ($1, $2) returning id',
+        [K.clinicaId, K.rolAdministrable],
+      );
+      for (const set of [
+        `usuario_id = '${K.ajeno}'`,
+        `usuario_id = '${K.ajeno}', estado = 'activo'`,
+        `usuario_id = '${K.recepcion.usuarioId}', estado = 'activo'`,
+      ]) {
+        expect(
+          await intentar(c, `update app.membresia set ${set} where id = $1`, [sinUsuario]),
+        ).toMatchObject(rechazo('42501', 'membresia_por_invitacion'));
+      }
+      // Ni activándola sin usuario (sin rodeos: la base pide un usuario para estar activa).
+      expect(
+        await intentar(c, "update app.membresia set estado = 'activo' where id = $1", [sinUsuario]),
+      ).toMatchObject(rechazo('42501', 'membresia_nace_pendiente'));
     });
     await como(K, K.administra.usuarioId, async (c) => {
       for (const estado of ['activo', 'inactivo']) {

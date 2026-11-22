@@ -98,6 +98,25 @@ export async function enTransaccion<T>(
   }
 }
 
+/** Error de Postgres de una promesa que tiene que fallar (también envuelto por Drizzle en `cause`). */
+export async function errorDe(
+  promesa: Promise<unknown>,
+): Promise<{ codigo: string; restriccion: string | null; mensaje: string }> {
+  try {
+    await promesa;
+  } catch (error) {
+    type ErrorPg = { code?: string; constraint?: string; message?: string; cause?: unknown };
+    let e: ErrorPg = error as ErrorPg;
+    for (let i = 0; i < 3 && e.code === undefined && e.cause; i++) e = e.cause;
+    return {
+      codigo: e.code ?? '?',
+      restriccion: e.constraint ?? null,
+      mensaje: e.message ?? String(error),
+    };
+  }
+  throw new Error('Se esperaba un error y la operación terminó bien.');
+}
+
 /** Primera columna de la primera fila. */
 export async function valor<T = unknown>(
   cliente: pg.ClientBase,

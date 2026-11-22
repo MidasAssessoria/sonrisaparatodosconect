@@ -200,6 +200,26 @@ export async function conUsuario<T>(
   }, opciones.config);
 }
 
+/**
+ * Transacción SIN usuario ni clínica (contexto vacío): para las rutas públicas de invitación
+ * (`consultarInvitacion`, `aceptarInvitacion`), cuyas funciones resuelven la clínica por el token.
+ * Las tablas de negocio no devuelven nada en esta transacción. `ip` queda para la auditoría.
+ */
+export async function sinContexto<T>(
+  pool: pg.Pool,
+  fn: (tx: TransaccionConecta) => Promise<T>,
+  opciones: { ip?: string | null | undefined; config?: PgTransactionConfig } = {},
+): Promise<T> {
+  const ip = ipValida(opciones.ip);
+  return baseDeDatos(pool).transaction(async (tx) => {
+    await tx.execute(sql`select
+      set_config('app.clinica_id', '', true),
+      set_config('app.usuario_id', '', true),
+      set_config('app.ip', ${ip}, true)`);
+    return fn(tx);
+  }, opciones.config);
+}
+
 export interface MembresiaActiva {
   membresiaId: string;
   rolId: string;

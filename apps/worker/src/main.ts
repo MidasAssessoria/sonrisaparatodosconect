@@ -1,16 +1,24 @@
+import { cargarConfig } from './config.js';
+import { crearRegistroConsola } from './registro.js';
 import { iniciarWorker } from './worker.js';
 
-const worker = iniciarWorker({ info: (mensaje) => console.log(mensaje) });
+const registro = crearRegistroConsola();
 
-for (const senal of ['SIGTERM', 'SIGINT'] as const) {
-  process.once(senal, () => {
-    void worker.detener(senal);
-  });
+try {
+  const config = cargarConfig();
+  const worker = await iniciarWorker(config, registro);
+  for (const senal of ['SIGTERM', 'SIGINT'] as const) {
+    process.once(senal, () => {
+      void worker.detener(senal);
+    });
+  }
+  await worker.cerrado;
+} catch (error) {
+  // Solo el mensaje de configuración (no trae valores) o el nombre del error.
+  if (error instanceof Error && error.name === 'ErrorDeConfiguracion') console.error(error.message);
+  else
+    registro.error('worker_no_arranco', {
+      error: error instanceof Error ? error.name : 'desconocido',
+    });
+  process.exitCode = 1;
 }
-
-// Mantiene vivo el proceso hasta recibir una señal; sin cola todavía no hay otro trabajo pendiente.
-const latido = setInterval(() => undefined, 60_000);
-
-await worker.cerrado;
-clearInterval(latido);
-console.log('worker cerrado');

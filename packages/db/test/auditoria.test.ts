@@ -106,7 +106,10 @@ describe('trigger app.auditar()', () => {
       await c.query('update app.sede_horario set intervalo_min = 20 where id = $1', [a.horarioId]);
       await c.query("update app.rol set nombre = 'Recepción (módulo)' where id = $1", [a.rolId]);
       await c.query('update app.rol_permiso set activo = false where id = $1', [a.rolPermisoId]);
-      await c.query("update app.membresia set estado = 'inactivo' where id = $1", [a.membresiaId]);
+      await c.query(
+        "update app.membresia set estado = 'inactivo', motivo_baja = 'Renunció' where id = $1",
+        [a.membresiaId],
+      );
       await c.query('update app.usuario_sede set activo = false where id = $1', [a.usuarioSedeId]);
       await c.query('update app.clinica set tope_descuento_pct = 30 where id = $1', [a.clinicaId]);
       const ultima = async (id: string): Promise<Pick<FilaAudit, 'modulo' | 'sede_id'>> => {
