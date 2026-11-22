@@ -18,7 +18,12 @@ import {
   encolar as encolarEnTx,
   SCHEMA_COLA,
 } from '@conecta/db';
-import { crearClinicaDePrueba, urlCon, type ClinicaDePrueba } from '@conecta/db/pruebas';
+import {
+  CLAVES_DE_PRUEBA,
+  crearClinicaDePrueba,
+  urlCon,
+  type ClinicaDePrueba,
+} from '@conecta/db/pruebas';
 import pg from 'pg';
 import { PgBoss } from 'pg-boss';
 import { afterAll, beforeAll, describe, expect, inject, it } from 'vitest';
@@ -171,7 +176,8 @@ beforeAll(async () => {
   admin = new pg.Pool({ connectionString: urlAdmin, max: 3 });
   admin.on('error', () => undefined);
   // LOGIN y contraseña de app_worker: fuera de las migraciones, como los de app_api.
-  const clave = randomBytes(18).toString('base64url');
+  // Contraseña fija: en CI otras suites usan el mismo Postgres y el mismo rol (ver CLAVES_DE_PRUEBA).
+  const clave = CLAVES_DE_PRUEBA.worker;
   await admin.query(`alter role app_worker login password '${clave}'`);
   directorio = await mkdtemp(path.join(tmpdir(), 'conecta-worker-'));
   config = {

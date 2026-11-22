@@ -3,7 +3,7 @@
  * worker no salta RLS ni es dueño de nada; app_api no toca el schema cola: encola solo con
  * app.encolar, que pone la clínica del contexto y las opciones de la cola.
  */
-import { randomBytes, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
@@ -16,6 +16,7 @@ import {
 } from '../src/cola.js';
 import { conContexto, crearPool } from '../src/index.js';
 import {
+  CLAVES_DE_PRUEBA,
   crearArchivoDePrueba,
   crearClinicaDePrueba,
   urlCon,
@@ -38,7 +39,8 @@ async function consultar<T>(texto: string, parametros: unknown[] = []): Promise<
 
 beforeAll(async () => {
   // LOGIN y contraseña de app_worker: fuera de las migraciones, como los de app_api.
-  const clave = randomBytes(18).toString('base64url');
+  // Contraseña fija: en CI otras suites usan el mismo Postgres y el mismo rol (ver CLAVES_DE_PRUEBA).
+  const clave = CLAVES_DE_PRUEBA.worker;
   await admin.query(`alter role app_worker login password '${clave}'`);
   worker = new pg.Pool({
     connectionString: urlCon(urls().urlApi, { usuario: 'app_worker', clave }),

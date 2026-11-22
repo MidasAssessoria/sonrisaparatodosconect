@@ -4,6 +4,7 @@
  * `const { urlAdmin, urlApi } = inject('conectaDb')`.
  */
 export {
+  CLAVES_DE_PRUEBA,
   crearBaseVacia,
   iniciarBanco,
   ROL_MIGRADOR_DE_PRUEBA,
