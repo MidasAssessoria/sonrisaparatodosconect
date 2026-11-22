@@ -38,6 +38,8 @@ export interface MarcoAppProps<I extends string = string> {
   notificaciones?: number | undefined;
   onNotificaciones?: (() => void) | undefined;
 
+  /** `false` quita el buscador global de la barra superior. Por defecto se muestra. */
+  conBuscador?: boolean | undefined;
   resultados?: PacienteResultado[] | undefined;
   onElegirPaciente?: ((p: PacienteResultado) => void) | undefined;
   valorBusqueda?: string | undefined;
@@ -78,6 +80,7 @@ export function MarcoApp<I extends string = string>({
   onIdioma,
   notificaciones,
   onNotificaciones,
+  conBuscador,
   resultados,
   onElegirPaciente,
   valorBusqueda,
@@ -121,6 +124,7 @@ export function MarcoApp<I extends string = string>({
           usuario={usuario}
           onCerrarSesion={onCerrarSesion}
           accionesUsuario={accionesUsuario}
+          conBuscador={conBuscador}
           resultados={resultados}
           onElegirPaciente={onElegirPaciente}
           valorBusqueda={valorBusqueda}

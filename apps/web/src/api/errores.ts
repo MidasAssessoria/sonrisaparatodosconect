@@ -1,4 +1,4 @@
-import type { CodigoError } from '@conecta/shared';
+import type { CodigoError, PacienteResumen } from '@conecta/shared';
 
 /**
  * Códigos que ve la web. Los de la API (`CodigoError`) más dos propios:
@@ -35,6 +35,20 @@ export class ErrorConecta extends Error {
     this.estado = opciones.estado ?? null;
     this.detalles = opciones.detalles ?? [];
     this.reintentarDesde = opciones.reintentarDesde ?? null;
+  }
+}
+
+/**
+ * 409 por CI duplicada al guardar un paciente (contrato/pacientes.ts): trae el paciente que ya
+ * tiene esa cédula. No bloquea: para guardar igual se reenvía con `confirmarCiDuplicada: true`.
+ */
+export class ErrorCiDuplicada extends ErrorConecta {
+  readonly existente: PacienteResumen;
+
+  constructor(mensaje: string, existente: PacienteResumen, detalles: DetalleCampo[] = []) {
+    super('conflicto', mensaje, { estado: 409, detalles });
+    this.name = 'ErrorCiDuplicada';
+    this.existente = existente;
   }
 }
 

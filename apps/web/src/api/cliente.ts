@@ -1,15 +1,21 @@
 import {
   agendaConfigSchema,
+  alertaManualSchema,
   archivoSchema,
   bloqueoSchema,
   CABECERA_CLINICA,
+  ciDuplicadaSchema,
   errorApiSchema,
   invitacionAceptadaSchema,
   invitacionCreadaSchema,
   invitacionPublicaSchema,
   paginaAuditoriaSchema,
+  paginaPacientesSchema,
+  pacienteSchema,
   personaSchema,
   profesionalSchema,
+  relacionSchema,
+  resultadoBuscarSchema,
   rolSchema,
   sedeSchema,
   sesionSchema,
@@ -17,18 +23,23 @@ import {
   tratamientoSchema,
   urlArchivoSchema,
   type AgendaConfig,
+  type AlertaManual,
   type Archivo,
   type Baja,
   type Bloqueo,
   type CategoriaArchivo,
   type ConsultaAuditoria,
+  type ConsultaPacientes,
   type CrearBloqueo,
   type CrearInvitacion,
+  type CrearPaciente,
   type CrearProfesional,
+  type CrearRelacion,
   type CrearRol,
   type CrearSede,
   type CrearSillon,
   type CrearTratamiento,
+  type EditarPaciente,
   type EditarPersona,
   type EditarProfesional,
   type EditarRol,
@@ -39,10 +50,13 @@ import {
   type InvitacionCreada,
   type InvitacionPublica,
   type PaginaAuditoria,
+  type Paciente,
+  type PacienteResumen,
   type Persona,
   type Profesional,
   type ReemplazarDisponibilidad,
   type ReemplazarHorarios,
+  type Relacion,
   type Rol,
   type Sede,
   type Sesion,
@@ -51,7 +65,12 @@ import {
   type UrlArchivo,
 } from '@conecta/shared';
 import { z } from 'zod';
-import { ErrorConecta, TEXTO_DEMASIADOS_PEDIDOS, TEXTO_SERVICIO_NO_DISPONIBLE } from './errores.js';
+import {
+  ErrorCiDuplicada,
+  ErrorConecta,
+  TEXTO_DEMASIADOS_PEDIDOS,
+  TEXTO_SERVICIO_NO_DISPONIBLE,
+} from './errores.js';
 
 const RUTA_API = '/api/v1';
 
@@ -108,6 +127,37 @@ interface Pedido<T> {
   silencioso?: boolean;
   /** `false`: sin `Authorization` aunque haya sesión. `'exigido'`: sin token, el pedido no sale. */
   token?: false | 'exigido';
+  /**
+   * Error propio de esta ruta a partir del cuerpo crudo de la respuesta (p. ej. el 409 de CI
+   * duplicada, que trae más que `errorApiSchema`). `undefined` = el error genérico.
+   */
+  errorPropio?: (estado: number, cuerpo: unknown) => ErrorConecta | undefined;
+}
+
+/** Página de la lista de pacientes (`GET /pacientes`). */
+export type PaginaPacientes = z.infer<typeof paginaPacientesSchema>;
+
+/** 409 con `existente` (contrato/pacientes.ts, `ciDuplicadaSchema`) → `ErrorCiDuplicada` tipado. */
+function errorCiDuplicada(estado: number, cuerpo: unknown): ErrorConecta | undefined {
+  if (estado !== 409) return undefined;
+  const r = ciDuplicadaSchema.safeParse(cuerpo);
+  if (!r.success) return undefined;
+  const detalles = errorApiSchema.safeParse(cuerpo);
+  return new ErrorCiDuplicada(
+    r.data.mensaje,
+    r.data.existente,
+    detalles.success ? (detalles.data.detalles ?? []) : [],
+  );
+}
+
+/** Parámetros de una consulta, sin los vacíos. */
+function consultaComoTexto(consulta: Record<string, string | number | undefined>): string {
+  const parametros = new URLSearchParams();
+  for (const [clave, valor] of Object.entries(consulta)) {
+    if (valor !== undefined && valor !== '') parametros.set(clave, String(valor));
+  }
+  const qs = parametros.toString();
+  return qs ? `?${qs}` : '';
 }
 
 /** URL firmada de un archivo: absoluta (contrato), se usa tal cual. */
@@ -180,6 +230,8 @@ export function crearClienteApi(opciones: OpcionesClienteApi) {
       }
       const desde =
         respuesta.status === 429 ? reintentarDesde(respuesta.headers.get('retry-after')) : null;
+      const propio = p.errorPropio?.(respuesta.status, cuerpoError);
+      if (propio) return fallar(propio);
       const error = errorApiSchema.safeParse(cuerpoError);
       if (error.success) {
         return fallar(
@@ -475,6 +527,83 @@ export function crearClienteApi(opciones: OpcionesClienteApi) {
           esquema: urlArchivoAbsolutaSchema,
         }),
     },
+    /**
+     * Pacientes (contrato/pacientes.ts). La búsqueda (`q`) viaja tal como se escribió: la API
+     * normaliza tildes, puntos de la CI y formatos de teléfono.
+     */
+    pacientes: {
+      listar: (consulta: Partial<ConsultaPacientes>): Promise<PaginaPacientes> =>
+        pedir({
+          metodo: 'GET',
+          ruta: `/pacientes${consultaComoTexto({ ...consulta })}`,
+          esquema: paginaPacientesSchema,
+        }),
+      /** Abrir la ficha queda en auditoría como `ver`. */
+      obtener: (pid: string): Promise<Paciente> =>
+        pedir({ metodo: 'GET', ruta: `/pacientes/${seg(pid)}`, esquema: pacienteSchema }),
+      /** 409 por CI que ya tiene otro paciente → `ErrorCiDuplicada` (con `existente`). */
+      crear: (datos: CrearPaciente): Promise<Paciente> =>
+        pedir({
+          metodo: 'POST',
+          ruta: '/pacientes',
+          cuerpo: datos,
+          esquema: pacienteSchema,
+          errorPropio: errorCiDuplicada,
+        }),
+      /** `null` borra el dato. 409 por CI duplicada → `ErrorCiDuplicada`. */
+      editar: (pid: string, datos: EditarPaciente): Promise<Paciente> =>
+        pedir({
+          metodo: 'PATCH',
+          ruta: `/pacientes/${seg(pid)}`,
+          cuerpo: datos,
+          esquema: pacienteSchema,
+          errorPropio: errorCiDuplicada,
+        }),
+      desactivar: (pid: string, baja: Baja): Promise<Paciente> =>
+        pedir({
+          metodo: 'POST',
+          ruta: `/pacientes/${seg(pid)}/desactivar`,
+          cuerpo: baja,
+          esquema: pacienteSchema,
+        }),
+      reactivar: (pid: string): Promise<Paciente> =>
+        pedir({
+          metodo: 'POST',
+          ruta: `/pacientes/${seg(pid)}/reactivar`,
+          esquema: pacienteSchema,
+        }),
+      /** Crea el vínculo y su espejo; responde la relación vista desde `pid`. */
+      crearRelacion: (pid: string, datos: CrearRelacion): Promise<Relacion> =>
+        pedir({
+          metodo: 'POST',
+          ruta: `/pacientes/${seg(pid)}/relaciones`,
+          cuerpo: datos,
+          esquema: relacionSchema,
+        }),
+      /** Da de baja el vínculo y su espejo (204). */
+      quitarRelacion: (relacionId: string): Promise<void> =>
+        pedir({ metodo: 'DELETE', ruta: `/relaciones/${seg(relacionId)}`, esquema: null }),
+      crearAlerta: (pid: string, datos: { texto: string }): Promise<AlertaManual> =>
+        pedir({
+          metodo: 'POST',
+          ruta: `/pacientes/${seg(pid)}/alertas`,
+          cuerpo: datos,
+          esquema: alertaManualSchema,
+        }),
+      /**
+       * Activa o desactiva una alerta. El contrato no dice qué responde: no se lee la respuesta y
+       * quien llama actualiza la ficha que tiene en pantalla.
+       */
+      editarAlerta: (alertaId: string, datos: { activa: boolean }): Promise<void> =>
+        pedir({ metodo: 'PATCH', ruta: `/alertas/${seg(alertaId)}`, cuerpo: datos, esquema: null }),
+    },
+    /** Buscador global: hasta 6 pacientes activos. Con menos de 2 caracteres no hace falta pedir. */
+    buscar: (q: string): Promise<PacienteResumen[]> =>
+      pedir({
+        metodo: 'GET',
+        ruta: `/buscar${consultaComoTexto({ q })}`,
+        esquema: resultadoBuscarSchema,
+      }).then((r) => r.pacientes),
   };
 }
 

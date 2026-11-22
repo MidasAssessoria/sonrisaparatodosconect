@@ -93,3 +93,21 @@ describe('fetch falso: valida los pedidos contra el contrato', () => {
     expect(invalidos.some((i) => i.includes('orden categoria, archivo'))).toBe(true);
   });
 });
+
+describe('fetch falso: parámetros de consulta', () => {
+  it('valida los parámetros de GET /pacientes y GET /buscar contra el contrato', async () => {
+    const f = crearFetchFalso({
+      'GET /pacientes': { cuerpo: { items: [], siguienteCursor: null } },
+      'GET /buscar': { cuerpo: { pacientes: [] } },
+    });
+    await f.fetch('/api/v1/pacientes?filtro=con_saldo&orden=nombre');
+    const invalidos = tomarPedidosInvalidos();
+    expect(invalidos.some((i) => i.includes('filtro'))).toBe(true);
+    expect(invalidos.some((i) => i.includes('parámetros que el contrato no tiene: orden'))).toBe(
+      true,
+    );
+    await f.fetch('/api/v1/pacientes?q=gonzalez&filtro=pediatricos&cursor=abc');
+    await f.fetch('/api/v1/buscar?q=an');
+    expect(tomarPedidosInvalidos()).toEqual([]);
+  });
+});

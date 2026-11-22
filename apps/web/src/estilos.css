@@ -4,13 +4,23 @@
  * pasarlas a @conecta/ui.
  */
 
-/* En el Sprint 1 no hay búsqueda de pacientes ni notificaciones: no se muestran controles muertos. */
-.w-marco .cn-superior .cn-buscador,
+/* Todavía no hay notificaciones: no se muestra un control muerto. */
 .w-marco .cn-superior__campana {
   display: none;
 }
 .w-marco .cn-superior {
   justify-content: flex-end;
+}
+/* Celular: el buscador global en su propia fila, arriba del contenido (README «Layout»). */
+@media (max-width: 767.98px) {
+  .w-marco .cn-superior {
+    flex-wrap: wrap;
+  }
+  .w-marco .cn-superior .cn-buscador {
+    order: 3;
+    flex: 1 1 100%;
+    max-width: none;
+  }
 }
 
 /* ---------- Acceso ---------- */

@@ -1,8 +1,10 @@
 import { Boton, HojaInferior, MarcoApp, type ItemNavegacion, type RenderEnlace } from '@conecta/ui';
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router';
 import { useIdioma } from '../i18n/idioma.js';
 import { modulosVisibles, moduloDeRuta, type IdModuloWeb } from '../modulos.js';
+import { useBuscarPacientes } from '../paginas/pacientes/consultas.js';
+import { resultadoBuscador } from '../paginas/pacientes/formato.js';
 import { useSesionLista } from '../sesion/ProveedorSesion.js';
 import { useInactividad } from '../sesion/useInactividad.js';
 
@@ -25,6 +27,11 @@ export function Armazon({ children }: { children: ReactNode }) {
     useSesionLista();
   const ubicacion = useLocation();
   const navegar = useNavigate();
+
+  // Buscador global de pacientes (`GET /buscar`): solo con `pacientes:ver`.
+  const conBuscador = puede('pacientes', 'ver');
+  const [busqueda, setBusqueda] = useState('');
+  const { resultados } = useBuscarPacientes(busqueda, conBuscador);
 
   const items: ItemNavegacion<IdModuloWeb>[] = modulosVisibles(puede).map((m) => ({
     id: m.id,
@@ -68,6 +75,15 @@ export function Armazon({ children }: { children: ReactNode }) {
       renderEnlace={renderEnlace}
       usuario={{ nombre: sesion.usuario.nombre, rol: sesion.rol.nombre }}
       accionesUsuario={acciones}
+      conBuscador={conBuscador}
+      valorBusqueda={busqueda}
+      onBusqueda={setBusqueda}
+      resultados={resultados?.map((p) => resultadoBuscador(t.pacientes, p))}
+      onElegirPaciente={(r) => {
+        if (!r.id) return;
+        setBusqueda('');
+        void navegar(`/pacientes/${r.id}`);
+      }}
       onCerrarSesion={() => void cerrarSesion()}
       {...(sedeActiva.tipo === 'ninguna'
         ? { sede: t.inicio.sinSede, sedes: [] }

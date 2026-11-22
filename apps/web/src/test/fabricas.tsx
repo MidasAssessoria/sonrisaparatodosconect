@@ -4,6 +4,8 @@ import {
   sesionSchema,
   type Accion,
   type Modulo,
+  type Paciente,
+  type PacienteResumen,
   type Permiso,
   type Persona,
   type Profesional,
@@ -53,6 +55,16 @@ export function matriz(filas: [Modulo, Accion[]][]): Permiso[] {
  * Si la migración cambia, cambiá esto también.
  */
 
+/** odontologo: agenda, pacientes y ficha clínica completa (sin anular pacientes). */
+export const PERMISOS_ODONTOLOGO: Permiso[] = matriz([
+  ['inicio', ['ver']],
+  ['agenda', ['ver', 'crear', 'editar']],
+  ['pacientes', ['ver', 'crear', 'editar']],
+  ['ficha_clinica', ['ver', 'crear', 'editar', 'anular']],
+  ['presupuestos', ['ver', 'crear', 'editar', 'anular']],
+  ['reportes', ['ver']],
+]);
+
 /** dueno: todos los módulos y todas las acciones. */
 export const PERMISOS_DUENO: Permiso[] = matriz(MODULOS.map((m) => [m, [...ACCIONES]]));
 
@@ -96,6 +108,12 @@ export const ROL_RECEPCION = {
   id: IDS.rolRecepcion,
   codigo: 'recepcion',
   nombre: 'Recepción y caja',
+  exigeMfa: false,
+};
+export const ROL_ODONTOLOGO = {
+  id: uuid(37),
+  codigo: 'odontologo',
+  nombre: 'Odontólogo/a',
   exigeMfa: false,
 };
 export const ROL_LECTURA_SEDES = {
@@ -278,7 +296,13 @@ export function crearFetchFalso(rutas: Record<string, Manejador | RespuestaFalsa
     pedidos.push({ metodo, url, cuerpo, cabeceras });
     const ruta = url.pathname.replace(/^\/api\/v1/, '');
     const clave = `${metodo} ${ruta}`;
-    const problemas = problemasDelPedido({ clave, cuerpo, cabeceras, sesion: sesionActual });
+    const problemas = problemasDelPedido({
+      clave,
+      cuerpo,
+      cabeceras,
+      sesion: sesionActual,
+      consulta: url.searchParams,
+    });
     if (problemas.length) {
       problemas.forEach(registrarPedidoInvalido);
       return Response.json(
@@ -490,6 +514,90 @@ export function tratamientoDe(parcial: Partial<Tratamiento> = {}): Tratamiento {
     iva: 10,
     duracionMin: 30,
     activo: true,
+    ...parcial,
+  };
+}
+
+/* ── Pacientes ────────────────────────────────────────────────────────────────────────────── */
+
+/** Personajes del README del design system. */
+export const IDS_PACIENTES = {
+  ana: uuid(701),
+  mateo: uuid(702),
+  lucia: uuid(703),
+  carlos: uuid(704),
+  rosa: uuid(705),
+  tomas: uuid(706),
+  alerta: uuid(711),
+  alertaVieja: uuid(712),
+  relacion: uuid(721),
+};
+
+export function resumenDe(parcial: Partial<PacienteResumen> = {}): PacienteResumen {
+  return {
+    id: IDS_PACIENTES.ana,
+    nombres: 'Ana',
+    apellidos: 'Giménez',
+    ci: '4123456',
+    telefono: '+595981123456',
+    fechaNac: '1992-03-14',
+    edad: 34,
+    pediatrico: false,
+    conAlerta: false,
+    activo: true,
+    ...parcial,
+  };
+}
+
+export const MATEO = resumenDe({
+  id: IDS_PACIENTES.mateo,
+  nombres: 'Mateo',
+  apellidos: 'Giménez',
+  ci: null,
+  telefono: null,
+  fechaNac: '2019-06-02',
+  edad: 7,
+  pediatrico: true,
+});
+
+export const LUCIA = resumenDe({
+  id: IDS_PACIENTES.lucia,
+  nombres: 'Lucía',
+  apellidos: 'Benítez',
+  ci: '3456789',
+  telefono: '+595971222333',
+  fechaNac: '1988-09-30',
+  edad: 38,
+  conAlerta: true,
+});
+
+export const CARLOS = resumenDe({
+  id: IDS_PACIENTES.carlos,
+  nombres: 'Carlos',
+  apellidos: 'Ayala',
+  ci: '2345678',
+  telefono: '+595991444555',
+  fechaNac: '1975-01-20',
+  edad: 51,
+  activo: false,
+});
+
+export function pacienteDe(parcial: Partial<Paciente> = {}): Paciente {
+  return {
+    ...resumenDe(),
+    ruc: null,
+    sexo: 'F',
+    email: 'ana@ejemplo.test',
+    ciudad: 'Asunción',
+    direccion: null,
+    idioma: 'es',
+    aceptaWhatsapp: true,
+    origen: 'recepcion',
+    notaInterna: null,
+    alertas: [],
+    relaciones: [],
+    motivoBaja: null,
+    creadoEn: '2026-11-02T13:00:00Z',
     ...parcial,
   };
 }

@@ -219,6 +219,28 @@ describe('Pacientes y estado (render)', () => {
     fireEvent.click(screen.getByRole('button'));
     expect(onAbrir).toHaveBeenCalledOnce();
   });
+  it('TarjetaPaciente con documento y edades en singular', () => {
+    const { rerender } = render(
+      <TarjetaPaciente
+        nombre="Ana Giménez"
+        edad={34}
+        documento="CI 4.123.456"
+        telefono="0981 123 456"
+      />,
+    );
+    expect(screen.getByText('34 años · CI 4.123.456 · 0981 123 456')).toBeInTheDocument();
+    rerender(<TarjetaPaciente nombre="Mateo Giménez" edad={1} />);
+    expect(screen.getByText('1 año')).toBeInTheDocument();
+    rerender(<TarjetaPaciente nombre="Mateo Giménez" edad={0} />);
+    expect(screen.getByText('Menos de 1 año')).toBeInTheDocument();
+  });
+  it('BarraSuperior sin buscador (conBuscador={false})', () => {
+    const { rerender } = render(<BarraSuperior />);
+    expect(screen.getByRole('combobox', { name: 'Buscar paciente' })).toBeInTheDocument();
+    rerender(<BarraSuperior conBuscador={false} />);
+    expect(screen.queryByRole('combobox')).toBeNull();
+    expect(screen.queryByRole('search')).toBeNull();
+  });
   it('AlertaClinica: vacía, completa y compacta', () => {
     const { rerender } = render(<AlertaClinica alertas={[]} />);
     expect(screen.getByText('Sin alertas clínicas registradas')).toBeInTheDocument();

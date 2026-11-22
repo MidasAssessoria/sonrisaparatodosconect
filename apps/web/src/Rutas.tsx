@@ -51,6 +51,12 @@ const DetalleProfesional = lazy(() =>
     default: m.DetalleProfesional,
   })),
 );
+const ListaPacientes = lazy(() =>
+  import('./paginas/pacientes/ListaPacientes.js').then((m) => ({ default: m.ListaPacientes })),
+);
+const FichaPaciente = lazy(() =>
+  import('./paginas/pacientes/FichaPaciente.js').then((m) => ({ default: m.FichaPaciente })),
+);
 const Tratamientos = lazy(() =>
   import('./paginas/catalogos/Tratamientos.js').then((m) => ({ default: m.Tratamientos })),
 );
@@ -183,6 +189,22 @@ export function Rutas() {
           <Suspense fallback={<Esqueleto filas={4} etiqueta={t.comun.cargando} />}>
             <Routes>
               <Route path="/" element={<RutaRaiz />} />
+              <Route
+                path="/pacientes"
+                element={
+                  <RutaModulo modulo="pacientes">
+                    <ListaPacientes />
+                  </RutaModulo>
+                }
+              />
+              <Route
+                path="/pacientes/:id/:pestana?"
+                element={
+                  <RutaModulo modulo="pacientes">
+                    <FichaPaciente />
+                  </RutaModulo>
+                }
+              />
               <Route
                 path="/sedes"
                 element={

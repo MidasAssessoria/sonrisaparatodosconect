@@ -1,9 +1,18 @@
 import { CODIGOS_ERROR, type CodigoError } from '@conecta/shared';
 import { describe, expect, it, vi } from 'vitest';
-import { crearFetchFalso, IDS, personaDe, sedeDe, sesionDe } from '../test/fabricas.js';
+import {
+  crearFetchFalso,
+  IDS,
+  IDS_PACIENTES,
+  personaDe,
+  resumenDe,
+  sedeDe,
+  sesionDe,
+} from '../test/fabricas.js';
 import { crearClienteConsultas } from '../App.js';
 import { baseApi, crearClienteApi, reintentarDesde } from './cliente.js';
 import {
+  ErrorCiDuplicada,
   ErrorConecta,
   esReintentable,
   mensajeDeError,
@@ -366,5 +375,63 @@ describe('cliente de API: endpoints del Sprint 2 (un solo cliente)', () => {
     expect(error.codigo).toBe('servicio_no_disponible');
     expect(esReintentable(error)).toBe(false);
     expect(alError).toHaveBeenCalledWith(error);
+  });
+});
+
+describe('cliente de API: pacientes', () => {
+  it('el 409 por CI duplicada llega tipado con el paciente que ya la tiene', async () => {
+    const existente = resumenDe();
+    const f = crearFetchFalso({
+      'POST /pacientes': {
+        estado: 409,
+        cuerpo: {
+          codigo: 'conflicto',
+          mensaje: 'Esa cédula ya está cargada.',
+          detalles: [{ campo: 'ci', mensaje: 'Ya la tiene Ana Giménez.' }],
+          existente,
+        },
+      },
+    });
+    const { api, alError } = cliente(f.fetch);
+    const error = await api.pacientes
+      .crear({ nombres: 'Ana', ci: '4123456' })
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ErrorCiDuplicada);
+    expect((error as ErrorCiDuplicada).existente).toEqual(existente);
+    expect((error as ErrorCiDuplicada).codigo).toBe('conflicto');
+    expect((error as ErrorCiDuplicada).detalles).toEqual([
+      { campo: 'ci', mensaje: 'Ya la tiene Ana Giménez.' },
+    ]);
+    expect(alError).toHaveBeenCalledOnce();
+  });
+
+  it('un 409 sin `existente` sigue siendo un conflicto común', async () => {
+    const f = crearFetchFalso({
+      'PATCH /pacientes/:id': {
+        estado: 409,
+        cuerpo: { codigo: 'conflicto', mensaje: 'Alguien cambió estos datos.' },
+      },
+    });
+    const { api } = cliente(f.fetch);
+    const error = await api.pacientes
+      .editar(IDS_PACIENTES.ana, { ciudad: null })
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ErrorConecta);
+    expect(error).not.toBeInstanceOf(ErrorCiDuplicada);
+  });
+
+  it('la búsqueda viaja tal como se escribió y el buscador devuelve la lista', async () => {
+    const f = crearFetchFalso({
+      'GET /pacientes': { cuerpo: { items: [resumenDe()], siguienteCursor: null } },
+      'GET /buscar': { cuerpo: { pacientes: [resumenDe()] } },
+    });
+    const { api } = cliente(f.fetch);
+    await api.pacientes.listar({ q: 'Giménez 4.123.456', filtro: 'pediatricos', cursor: 'c2' });
+    const url = f.pedidos[0]?.url;
+    expect(url?.searchParams.get('q')).toBe('Giménez 4.123.456');
+    expect(url?.searchParams.get('filtro')).toBe('pediatricos');
+    expect(url?.searchParams.get('cursor')).toBe('c2');
+    expect(await api.buscar('0981 123')).toHaveLength(1);
+    expect(f.pedidos[1]?.url.searchParams.get('q')).toBe('0981 123');
   });
 });

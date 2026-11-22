@@ -29,6 +29,8 @@ export interface BarraSuperiorProps {
   onCerrarSesion?: (() => void) | undefined;
   /** Acciones extra del menú de usuario, antes de «Cerrar sesión». */
   accionesUsuario?: AccionUsuario[] | undefined;
+  /** `false` quita el buscador global (p. ej. un rol sin acceso a pacientes). Por defecto se muestra. */
+  conBuscador?: boolean | undefined;
   resultados?: PacienteResultado[] | undefined;
   onElegirPaciente?: ((p: PacienteResultado) => void) | undefined;
   /** Buscador controlado (búsqueda en el servidor): valor + onBusqueda. */
@@ -225,6 +227,7 @@ export function BarraSuperior({
   usuario,
   onCerrarSesion,
   accionesUsuario,
+  conBuscador = true,
   resultados,
   onElegirPaciente,
   valorBusqueda,
@@ -243,13 +246,15 @@ export function BarraSuperior({
   return (
     <header className={cx('cn-superior', compacta && 'cn-superior--compacta', className)}>
       {conMarca && <Marca logo={logo} />}
-      <Buscador
-        compacto={true}
-        resultados={resultados}
-        onElegir={onElegirPaciente}
-        valor={valorBusqueda}
-        onCambio={onBusqueda}
-      />
+      {conBuscador ? (
+        <Buscador
+          compacto={true}
+          resultados={resultados}
+          onElegir={onElegirPaciente}
+          valor={valorBusqueda}
+          onCambio={onBusqueda}
+        />
+      ) : null}
       <div className="cn-superior__acciones">
         <SelectorIdioma valor={idioma} onCambio={onIdioma} />
         {conSelector && sedes && onSede ? (
