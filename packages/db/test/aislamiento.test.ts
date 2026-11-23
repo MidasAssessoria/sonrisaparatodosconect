@@ -221,6 +221,11 @@ describe('sin contexto o con contexto inválido', () => {
     'tratamiento',
     'agenda_config',
     'archivo',
+    'paciente',
+    'paciente_busqueda',
+    'paciente_relacion',
+    'paciente_alerta',
+    'paciente_nota',
   ];
 
   it.each(contextos)('%s: cero filas en todas las tablas', async (_nombre, contexto) => {

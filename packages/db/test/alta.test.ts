@@ -178,14 +178,14 @@ describe('semilla de desarrollo', () => {
       clinicaId: DEMO.clinicaId,
       duenoId: DEMO.duenoId,
       creada: true,
-      agregados: { profesionales: 3, tramos: 15, tratamientos: 12 },
+      agregados: { profesionales: 3, tramos: 15, tratamientos: 12, pacientes: 6, relaciones: 1 },
     });
     const segunda = await sembrarDemo(admin);
     expect(segunda).toEqual({
       clinicaId: DEMO.clinicaId,
       duenoId: DEMO.duenoId,
       creada: false,
-      agregados: { profesionales: 0, tramos: 0, tratamientos: 0 },
+      agregados: { profesionales: 0, tramos: 0, tratamientos: 0, pacientes: 0, relaciones: 0 },
     });
 
     await enTransaccion(admin, { clinica: DEMO.clinicaId, usuario: DEMO.duenoId }, async (c) => {
@@ -260,12 +260,14 @@ describe('semilla de desarrollo', () => {
         clinicaId: DEMO.clinicaId,
         duenoId: DEMO.duenoId,
         creada: false,
-        agregados: { profesionales: 3, tramos: 15, tratamientos: 11 },
+        agregados: { profesionales: 3, tramos: 15, tratamientos: 11, pacientes: 6, relaciones: 1 },
       });
       expect((await sembrarDemo(pool)).agregados).toEqual({
         profesionales: 0,
         tramos: 0,
         tratamientos: 0,
+        pacientes: 0,
+        relaciones: 0,
       });
       await enTransaccion(pool, { clinica: DEMO.clinicaId, usuario: DEMO.duenoId }, async (c) => {
         await esperarDemoCompleta(c);
@@ -332,5 +334,42 @@ async function esperarDemoCompleta(c: pg.ClientBase): Promise<void> {
   expect(await valor(c, 'select count(*)::int from app.tratamiento where activo')).toBe(12);
   expect(await valor(c, 'select count(distinct iva)::int from app.tratamiento where activo')).toBe(
     3,
+  );
+  // Pacientes del design system; Mateo es hijo de Ana (y Ana, su madre, tutora y quien paga).
+  const pacientes = await c.query<{ nombre: string }>(
+    "select nombres || ' ' || apellidos as nombre from app.paciente where activo",
+  );
+  expect(pacientes.rows.map((f) => f.nombre).sort()).toEqual(
+    [
+      'Ana Giménez',
+      'Carlos Ayala',
+      'Lucía Benítez',
+      'Mateo Giménez',
+      'Rosa Duarte',
+      'Tomás Villalba',
+    ].sort(),
+  );
+  const vinculos = await c.query(
+    `select paciente_id, familiar_id, tipo, es_tutor_legal, es_responsable_pago
+     from app.paciente_relacion where deleted_at is null order by tipo`,
+  );
+  expect(vinculos.rows).toEqual([
+    {
+      paciente_id: DEMO.pacientes.ana,
+      familiar_id: DEMO.pacientes.mateo,
+      tipo: 'hijo',
+      es_tutor_legal: true,
+      es_responsable_pago: true,
+    },
+    {
+      paciente_id: DEMO.pacientes.mateo,
+      familiar_id: DEMO.pacientes.ana,
+      tipo: 'madre',
+      es_tutor_legal: false,
+      es_responsable_pago: false,
+    },
+  ]);
+  expect(await valor(c, 'select ci from app.paciente where id = $1', [DEMO.pacientes.ana])).toBe(
+    '4123456',
   );
 }

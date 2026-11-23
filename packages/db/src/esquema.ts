@@ -10,13 +10,18 @@ import type {
   AccionAuditoria,
   CategoriaArchivo,
   EstadoSede,
+  IDIOMAS_PACIENTE,
   Modulo,
+  ORIGENES_PACIENTE,
+  SEXOS,
   TasaIva,
+  TipoRelacion,
 } from '@conecta/shared';
 import { sql } from 'drizzle-orm';
 import {
   bigint,
   boolean,
+  date,
   inet,
   integer,
   jsonb,
@@ -192,6 +197,60 @@ export const RESTRICCIONES_COLA = [
   'cola_datos_invalidos',
 ] as const;
 export type RestriccionCola = (typeof RESTRICCIONES_COLA)[number];
+
+/**
+ * Nombres de regla del Sprint 3 (pacientes, grupo familiar, alertas y nota interna, migraciones
+ * 0019–0022) que la base pone en el campo `constraint` de sus errores. Código entre paréntesis.
+ * Además de estas, los nombres de restricciones reales que la API puede recibir:
+ *   - 23514: `paciente_nombres_check`, `paciente_apellidos_check`, `paciente_ci_check`,
+ *     `paciente_ruc_check`, `paciente_fecha_nac_check`, `paciente_sexo_check`,
+ *     `paciente_telefono_check`, `paciente_email_check`, `paciente_ciudad_check`,
+ *     `paciente_direccion_check`, `paciente_idioma_check`, `paciente_origen_check`,
+ *     `paciente_motivo_baja_check`, `paciente_relacion_tipo_check`,
+ *     `paciente_relacion_consigo_mismo`, `paciente_relacion_motivo_baja_check`,
+ *     `paciente_alerta_texto_check`, `paciente_nota_texto_check`;
+ *   - 23505: `paciente_relacion_par_activo` (ya hay un vínculo activo entre esos dos pacientes);
+ *   - 23503: `paciente_relacion_paciente_fkey`, `paciente_relacion_familiar_fkey` (paciente que no
+ *     es de la clínica), `paciente_alerta_paciente_fkey`, `paciente_nota_paciente_fkey`.
+ * Y `baja_sin_motivo` (23514, de `RESTRICCIONES_LIMITES`) al desactivar un paciente sin motivo.
+ */
+export const RESTRICCIONES_PACIENTES = [
+  /** (42501) Al actor le falta pacientes:crear / pacientes:editar / pacientes:anular. */
+  'pacientes_sin_permiso',
+  /** (42501) Al actor le falta ficha_clinica:editar (alertas manuales y nota interna). */
+  'ficha_clinica_sin_permiso',
+  /** (22023) Alta de un paciente ya inactivo. */
+  'paciente_nace_activo',
+  /** (23514) Fecha de nacimiento posterior a hoy (zona de la clínica). */
+  'paciente_fecha_nac_futura',
+  /** (P0002) `desactivar_paciente` / `reactivar_paciente` con un id que no es de la clínica. */
+  'paciente_no_encontrado',
+  /** (22023) Vínculo con un paciente inactivo. */
+  'relacion_paciente_inactivo',
+  /** (23514) madre con un familiar de sexo M, o padre con uno de sexo F. */
+  'relacion_tipo_sexo',
+  /** (23514) El otro sentido ya existe con un tipo que no corresponde. */
+  'relacion_espejo_inconsistente',
+  /** (23514) Tutor legal o responsable de pago marcado en los dos sentidos. */
+  'relacion_marca_un_sentido',
+  /** (22023) Cambiar un vínculo dado de baja (o crearlo ya dado de baja). */
+  'relacion_dada_de_baja',
+  /** (P0002) `baja_relacion` con un id que no es de la clínica. */
+  'relacion_no_encontrada',
+  /** (P0002) `cambiar_alerta` con un id que no es de la clínica. */
+  'alerta_no_encontrada',
+  /** (22023) Cursor de `listar_pacientes` que no es un id de paciente de la clínica. */
+  'cursor_invalido',
+  /** (22023) Límite fuera de 1..1000. */
+  'pacientes_limite',
+  /** (22023) Filtro que no está en FILTROS_PACIENTES. */
+  'pacientes_filtro',
+] as const;
+export type RestriccionPaciente = (typeof RESTRICCIONES_PACIENTES)[number];
+
+export type SexoPaciente = (typeof SEXOS)[number];
+export type IdiomaPaciente = (typeof IDIOMAS_PACIENTE)[number];
+export type OrigenPaciente = (typeof ORIGENES_PACIENTE)[number];
 
 /** Dónde está guardado un archivo (`app.archivo.almacen`). */
 export const ALMACENES_ARCHIVO = ['local', 'supabase'] as const;
@@ -514,6 +573,101 @@ export const archivo = esquemaApp.table('archivo', {
   ...auditoriaFila,
 });
 
+/**
+ * Paciente (módulo pacientes). La base normaliza al guardar (CI sin puntos, teléfono a E.164,
+ * correo en minúsculas, texto opcional vacío -> NULL) y valida el formato con CHECK. La CI NO es
+ * única. Se desactiva con motivo (`app.desactivar_paciente`), no se borra. `origen` no cambia.
+ * La nota interna NO está acá: ver `pacienteNota`.
+ */
+export const paciente = esquemaApp.table('paciente', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  clinicaId: uuid('clinica_id').notNull(),
+  nombres: text('nombres').notNull(),
+  apellidos: text('apellidos'),
+  /** Solo dígitos, sin ceros a la izquierda. */
+  ci: text('ci'),
+  /** `base-dv`. */
+  ruc: text('ruc'),
+  /** `YYYY-MM-DD`. */
+  fechaNac: date('fecha_nac', { mode: 'string' }),
+  sexo: text('sexo').$type<SexoPaciente>(),
+  /** E.164. */
+  telefono: text('telefono'),
+  email: text('email'),
+  ciudad: text('ciudad'),
+  direccion: text('direccion'),
+  idioma: text('idioma').$type<IdiomaPaciente>().notNull().default('es'),
+  aceptaWhatsapp: boolean('acepta_whatsapp').notNull().default(false),
+  origen: text('origen').$type<OrigenPaciente>().notNull().default('recepcion'),
+  activo: boolean('activo').notNull().default(true),
+  motivoBaja: text('motivo_baja'),
+  /** Generada (COLLATE "C"): clave de orden de los apellidos. */
+  ordenApellidos: text('orden_apellidos').generatedAlwaysAs(sql`app.clave_orden(apellidos)`),
+  /** Generada (COLLATE "C"): clave de orden de los nombres. */
+  ordenNombres: text('orden_nombres').generatedAlwaysAs(sql`app.clave_orden(nombres)`),
+  ...auditoriaFila,
+});
+
+/**
+ * Índice de búsqueda (dato derivado; lo mantiene la base, app_api solo lee). Usalo a través de
+ * `buscarPacientes` / `listarPacientes`: su política solo muestra las filas que coinciden con la
+ * búsqueda en curso.
+ */
+export const pacienteBusqueda = esquemaApp.table('paciente_busqueda', {
+  /** = paciente.id */
+  id: uuid('id').primaryKey(),
+  clinicaId: uuid('clinica_id').notNull(),
+  texto: text('texto').notNull(),
+  /** Copia de paciente.activo. */
+  activo: boolean('activo').notNull(),
+  /** Copia de paciente.orden_apellidos (COLLATE "C"). */
+  ordenApellidos: text('orden_apellidos').notNull(),
+  /** Copia de paciente.orden_nombres (COLLATE "C"). */
+  ordenNombres: text('orden_nombres').notNull(),
+  ...auditoriaFila,
+});
+
+/**
+ * Vínculo del grupo familiar: «familiar es `tipo` de paciente». La base crea y da de baja el otro
+ * sentido. paciente_id, familiar_id y tipo no cambian.
+ */
+export const pacienteRelacion = esquemaApp.table('paciente_relacion', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  clinicaId: uuid('clinica_id').notNull(),
+  pacienteId: uuid('paciente_id').notNull(),
+  familiarId: uuid('familiar_id').notNull(),
+  tipo: text('tipo').$type<TipoRelacion>().notNull(),
+  /** paciente_id es tutor legal de familiar_id. */
+  esTutorLegal: boolean('es_tutor_legal').notNull().default(false),
+  /** paciente_id paga por familiar_id. */
+  esResponsablePago: boolean('es_responsable_pago').notNull().default(false),
+  ...bajaLogica,
+  ...auditoriaFila,
+});
+
+/** Alerta manual (módulo ficha_clinica). Solo se activa o desactiva. `creadaPor` la fija la base. */
+export const pacienteAlerta = esquemaApp.table('paciente_alerta', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  clinicaId: uuid('clinica_id').notNull(),
+  pacienteId: uuid('paciente_id').notNull(),
+  texto: text('texto').notNull(),
+  activa: boolean('activa').notNull().default(true),
+  creadaPor: uuid('creada_por'),
+  ...auditoriaFila,
+});
+
+/**
+ * Nota interna (módulo ficha_clinica), una por paciente. Sin `ficha_clinica:ver` la fila no se ve
+ * (RLS); escribirla exige `ficha_clinica:editar`. `texto` NULL = borrada.
+ */
+export const pacienteNota = esquemaApp.table('paciente_nota', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  clinicaId: uuid('clinica_id').notNull(),
+  pacienteId: uuid('paciente_id').notNull(),
+  texto: text('texto'),
+  ...auditoriaFila,
+});
+
 /** Todas las tablas, para `drizzle(pool, { schema })` y para la prueba de introspección. */
 export const esquema = {
   usuario,
@@ -535,5 +689,10 @@ export const esquema = {
   tratamiento,
   agendaConfig,
   archivo,
+  paciente,
+  pacienteBusqueda,
+  pacienteRelacion,
+  pacienteAlerta,
+  pacienteNota,
 };
 export type Esquema = typeof esquema;

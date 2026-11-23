@@ -40,6 +40,15 @@ export interface DatosClinica extends ClinicaDePrueba {
   /** Otra persona de la clínica (rol asistente), sin sedes asignadas. */
   otroUsuarioId: string;
   otraMembresiaId: string;
+  /** Paciente con un vínculo (con pacienteFamiliarId), una alerta y la nota interna. */
+  pacienteId: string;
+  pacienteFamiliarId: string;
+  /** Paciente sin vínculos ni nota: sirve para insertar. */
+  pacienteLibreId: string;
+  /** Vínculo pacienteId -> pacienteFamiliarId (y su espejo). */
+  relacionId: string;
+  alertaId: string;
+  notaId: string;
 }
 
 export async function poblarClinica(admin: pg.Pool): Promise<DatosClinica> {
@@ -130,8 +139,43 @@ export async function poblarClinica(admin: pg.Pool): Promise<DatosClinica> {
          returning id`,
         [clinica.clinicaId, `${clinica.clinicaId}/logo_clinica/${randomUUID()}.png`, hashAlAzar()],
       );
+      const pacientes: string[] = [];
+      for (const nombres of ['Ana', 'Mateo', 'Lucía']) {
+        pacientes.push(
+          await valor<string>(
+            c,
+            `insert into app.paciente (clinica_id, nombres, apellidos, ci, telefono)
+             values ($1, $2, 'Escenario', '4123456', '0981 123 456') returning id`,
+            [clinica.clinicaId, nombres],
+          ),
+        );
+      }
+      const relacionId = await valor<string>(
+        c,
+        `insert into app.paciente_relacion (clinica_id, paciente_id, familiar_id, tipo)
+         values ($1, $2, $3, 'hijo') returning id`,
+        [clinica.clinicaId, pacientes[0], pacientes[1]],
+      );
+      const alertaId = await valor<string>(
+        c,
+        `insert into app.paciente_alerta (clinica_id, paciente_id, texto)
+         values ($1, $2, 'Alergia a la penicilina') returning id`,
+        [clinica.clinicaId, pacientes[0]],
+      );
+      const notaId = await valor<string>(
+        c,
+        `insert into app.paciente_nota (clinica_id, paciente_id, texto)
+         values ($1, $2, 'Nota del escenario') returning id`,
+        [clinica.clinicaId, pacientes[0]],
+      );
       return {
         ...clinica,
+        pacienteId: pacientes[0]!,
+        pacienteFamiliarId: pacientes[1]!,
+        pacienteLibreId: pacientes[2]!,
+        relacionId,
+        alertaId,
+        notaId,
         invitacionId: invitacion.invitacionId,
         membresiaLibreId,
         profesionalId,
@@ -386,6 +430,70 @@ export const CASOS: CasoTabla[] = [
                                 nombre_original, tipo, bytes, sha256)
        values ($1, 'logo_clinica', $2, 'local', 'pruebas', $3, 'x.png', 'image/png', 10, $4)`,
       [p.clinicaId, a.sedeId, `${p.clinicaId}/logo_clinica/${randomUUID()}.png`, hashAlAzar()],
+    ],
+  },
+  {
+    tabla: 'paciente',
+    id: (d) => d.pacienteId,
+    editar: "ciudad = 'Editada'",
+    baja: "activo = false, motivo_baja = 'ataque'",
+    insertar: (d) => [
+      "insert into app.paciente (clinica_id, nombres) values ($1, 'Paciente X')",
+      [d.clinicaId],
+    ],
+    referenciarAjena: null,
+  },
+  {
+    tabla: 'paciente_busqueda',
+    id: (d) => d.pacienteId,
+    // Derivada: app_api solo la lee.
+    editar: null,
+    baja: null,
+    insertar: null,
+    referenciarAjena: null,
+  },
+  {
+    tabla: 'paciente_relacion',
+    id: (d) => d.relacionId,
+    editar: 'es_responsable_pago = es_responsable_pago',
+    baja: "deleted_at = now(), motivo_baja = 'ataque'",
+    insertar: (d) => [
+      `insert into app.paciente_relacion (clinica_id, paciente_id, familiar_id, tipo)
+       values ($1, $2, $3, 'hermano')`,
+      [d.clinicaId, d.pacienteLibreId, d.pacienteId],
+    ],
+    referenciarAjena: (p, a) => [
+      `insert into app.paciente_relacion (clinica_id, paciente_id, familiar_id, tipo)
+       values ($1, $2, $3, 'hermano')`,
+      [p.clinicaId, p.pacienteLibreId, a.pacienteId],
+    ],
+  },
+  {
+    tabla: 'paciente_alerta',
+    id: (d) => d.alertaId,
+    editar: 'activa = activa',
+    baja: 'activa = false',
+    insertar: (d) => [
+      "insert into app.paciente_alerta (clinica_id, paciente_id, texto) values ($1, $2, 'Embarazo')",
+      [d.clinicaId, d.pacienteId],
+    ],
+    referenciarAjena: (p, a) => [
+      "insert into app.paciente_alerta (clinica_id, paciente_id, texto) values ($1, $2, 'Embarazo')",
+      [p.clinicaId, a.pacienteId],
+    ],
+  },
+  {
+    tabla: 'paciente_nota',
+    id: (d) => d.notaId,
+    editar: "texto = 'Editada'",
+    baja: null,
+    insertar: (d) => [
+      "insert into app.paciente_nota (clinica_id, paciente_id, texto) values ($1, $2, 'Nota')",
+      [d.clinicaId, d.pacienteLibreId],
+    ],
+    referenciarAjena: (p, a) => [
+      "insert into app.paciente_nota (clinica_id, paciente_id, texto) values ($1, $2, 'Nota')",
+      [p.clinicaId, a.pacienteId],
     ],
   },
   {

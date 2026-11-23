@@ -15,10 +15,13 @@ export {
   type UrlsDeBanco,
 } from './banco.js';
 export {
+  crearAlertaDePrueba,
   crearArchivoDePrueba,
   crearClinicaDePrueba,
   crearInvitacionDePrueba,
+  crearPacienteDePrueba,
   crearProfesionalDePrueba,
+  crearRelacionDePrueba,
   crearRolDePrueba,
   crearSedeDePrueba,
   crearTratamientoDePrueba,

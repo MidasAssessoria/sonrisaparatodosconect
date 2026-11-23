@@ -10,7 +10,11 @@ import {
   ESTADOS_SEDE,
   MODULOS,
   NOMBRES_CATEGORIA_ARCHIVO,
+  IDIOMAS_PACIENTE,
+  ORIGENES_PACIENTE,
+  SEXOS,
   TASAS_IVA,
+  TIPOS_RELACION,
 } from '@conecta/shared';
 import { describe, expect, it } from 'vitest';
 import {
@@ -73,7 +77,7 @@ const SQL_CONCESIONES_EXPUESTAS = `
 
 describe('RLS en todo el schema app', () => {
   it('toda tabla tiene RLS habilitado y forzado y al menos una política', async () => {
-    expect(await tablasDeApp()).toHaveLength(19);
+    expect(await tablasDeApp()).toHaveLength(24);
     expect(await consultar(SQL_TABLAS_SIN_RLS)).toEqual([]);
   });
 
@@ -236,6 +240,12 @@ describe('privilegios', () => {
       // UPDATE solo por columna (abajo): email y mfa_activo no son escribibles por app_api.
       usuario: ['SELECT'],
       usuario_sede: ['INSERT', 'SELECT', 'UPDATE'],
+      paciente: ['INSERT', 'SELECT', 'UPDATE'],
+      // Índice de búsqueda: lo escribe la base (paciente_indexar).
+      paciente_busqueda: ['SELECT'],
+      paciente_relacion: ['INSERT', 'SELECT', 'UPDATE'],
+      paciente_alerta: ['INSERT', 'SELECT', 'UPDATE'],
+      paciente_nota: ['INSERT', 'SELECT', 'UPDATE'],
     };
     const filas = await consultar<{ tabla: string; privilegios: string[] }>(
       `select c.relname as tabla,
@@ -303,6 +313,26 @@ describe('privilegios', () => {
         'app.siguiente_numero(text,uuid)',
         'app.tocar_sesion(uuid,integer)',
         'app.usuario_actual()',
+        // 0019–0022: pacientes (todas SECURITY INVOKER, ver la prueba siguiente).
+        'app.baja_relacion(uuid,text)',
+        'app.buscar_pacientes(text,integer,boolean,timestamp with time zone)',
+        'app.cambiar_alerta(uuid,boolean)',
+        'app.clave_orden(text)',
+        'app.crear_alerta(uuid,text)',
+        'app.crear_relacion(uuid,uuid,text,boolean,boolean)',
+        'app.desactivar_paciente(uuid,text)',
+        'app.escapar_like(text)',
+        'app.guardar_nota_interna(uuid,text)',
+        'app.hoy_clinica(timestamp with time zone)',
+        'app.listar_pacientes(text,text,text,integer,timestamp with time zone)',
+        'app.normalizar_busqueda(text)',
+        'app.pacientes_con_ci(text,uuid,timestamp with time zone)',
+        'app.patron_busqueda()',
+        'app.reactivar_paciente(uuid)',
+        'app.terminos_busqueda(text)',
+        'app.tiene_permiso(text,text)',
+        'app.tipo_relacion_inverso(text,text)',
+        'app.tipos_relacion_compatibles(text,text)',
       ].sort(),
     );
   });
@@ -320,6 +350,17 @@ describe('privilegios', () => {
           'desactivar_membresia',
           'desactivar_rol',
           'encolar',
+          'buscar_pacientes',
+          'listar_pacientes',
+          'pacientes_con_ci',
+          'desactivar_paciente',
+          'reactivar_paciente',
+          'crear_relacion',
+          'baja_relacion',
+          'crear_alerta',
+          'cambiar_alerta',
+          'guardar_nota_interna',
+          'tiene_permiso',
         ],
       ],
     );
@@ -330,6 +371,17 @@ describe('privilegios', () => {
       'app.desactivar_membresia(uuid,text)': false,
       'app.desactivar_rol(uuid,text)': false,
       'app.encolar(text,jsonb)': true,
+      'app.buscar_pacientes(text,integer,boolean,timestamp with time zone)': false,
+      'app.listar_pacientes(text,text,text,integer,timestamp with time zone)': false,
+      'app.pacientes_con_ci(text,uuid,timestamp with time zone)': false,
+      'app.desactivar_paciente(uuid,text)': false,
+      'app.reactivar_paciente(uuid)': false,
+      'app.crear_relacion(uuid,uuid,text,boolean,boolean)': false,
+      'app.baja_relacion(uuid,text)': false,
+      'app.crear_alerta(uuid,text)': false,
+      'app.cambiar_alerta(uuid,boolean)': false,
+      'app.guardar_nota_interna(uuid,text)': false,
+      'app.tiene_permiso(text,text)': false,
     });
   });
 
@@ -363,13 +415,14 @@ describe('privilegios', () => {
        from pg_proc p join pg_namespace n on n.oid = p.pronamespace
        where n.nspname = 'app'
          and p.proname in ('proteger_acceso', 'proteger_invitacion', 'proteger_profesional',
-                           'limitar_rol_al_actor')
+                           'limitar_rol_al_actor', 'proteger_pacientes')
        order by 1`,
     );
     expect(filas).toEqual([
       { funcion: 'limitar_rol_al_actor', ok: true },
       { funcion: 'proteger_acceso', ok: true },
       { funcion: 'proteger_invitacion', ok: true },
+      { funcion: 'proteger_pacientes', ok: true },
       { funcion: 'proteger_profesional', ok: true },
     ]);
   });
@@ -391,6 +444,8 @@ describe('funciones', () => {
         'app.consultar_invitacion(text)',
         'app.desactivar_mfa()',
         'app.encolar(text,jsonb)',
+        // 0019: mantiene el índice de búsqueda (app_api no escribe paciente_busqueda).
+        'app.indexar_paciente()',
         'app.registrar_evento(text,text,uuid,jsonb,uuid)',
         'app.siguiente_numero(text,uuid)',
         'app.tocar_sesion(uuid,integer)',
@@ -418,7 +473,8 @@ describe('funciones', () => {
 describe('triggers de auditoría y de no borrado', () => {
   // tgtype: 1 fila, 2 BEFORE, 4 INSERT, 8 DELETE, 16 UPDATE, 32 TRUNCATE.
   // numerador y sesion cambian en cada pedido: su registro es otro (el documento numerado, 'ingresar').
-  const SIN_AUDITAR = ['audit_log', 'numerador', 'sesion'];
+  // paciente_busqueda es un dato derivado de paciente (cuyos cambios sí se auditan).
+  const SIN_AUDITAR = ['audit_log', 'numerador', 'sesion', 'paciente_busqueda'];
 
   async function triggers(): Promise<
     { tabla: string; funcion: string; tipo: number; argumentos: string[] }[]
@@ -461,6 +517,10 @@ describe('triggers de auditoría y de no borrado', () => {
       tratamiento: 'configuracion',
       usuario: 'personal',
       usuario_sede: 'personal',
+      paciente: 'pacientes',
+      paciente_relacion: 'pacientes',
+      paciente_alerta: 'ficha_clinica',
+      paciente_nota: 'ficha_clinica',
     });
   });
 
@@ -491,7 +551,7 @@ describe('triggers de auditoría y de no borrado', () => {
       numerador: null,
       audit_log: null,
       migracion: null,
-      paciente: null,
+      paciente: 'pacientes',
       Sede: null,
       'sede"; select 1; --': null,
     });
@@ -679,6 +739,10 @@ describe('valores de los CHECK sincronizados con el código', () => {
     ['sesion_motivo_cierre_check', MOTIVOS_CIERRE_SESION],
     ['archivo_categoria_check', NOMBRES_CATEGORIA_ARCHIVO],
     ['archivo_almacen_check', ALMACENES_ARCHIVO],
+    ['paciente_sexo_check', SEXOS],
+    ['paciente_idioma_check', IDIOMAS_PACIENTE],
+    ['paciente_origen_check', ORIGENES_PACIENTE],
+    ['paciente_relacion_tipo_check', TIPOS_RELACION],
   ] as const)('%s coincide con el código', async (restriccion, valores) => {
     expect((await valoresDelCheck(restriccion)).sort()).toEqual([...valores].sort());
   });
