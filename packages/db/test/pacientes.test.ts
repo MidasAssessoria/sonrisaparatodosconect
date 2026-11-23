@@ -364,19 +364,21 @@ describe('alertas manuales', () => {
     for (const quien of ['recepcion', 'asistente'] as const) {
       await como(quien, async (c) => {
         expect(
-          await intentar(c, "select app.crear_alerta($1, 'Alergia al látex')", [pacienteId]),
+          await intentar(c, "select app.crear_alerta($1, 'alergia', 'Alergia al látex')", [
+            pacienteId,
+          ]),
         ).toMatchObject(rechazo('42501', 'ficha_clinica_sin_permiso'));
         expect(
           await intentar(
             c,
-            `insert into app.paciente_alerta (clinica_id, paciente_id, texto) values ($1, $2, 'Embarazo')`,
+            `insert into app.paciente_alerta (clinica_id, paciente_id, tipo, texto) values ($1, $2, 'condicion', 'Embarazo')`,
             [clinica.clinicaId, pacienteId],
           ),
         ).toMatchObject(rechazo('42501', 'ficha_clinica_sin_permiso'));
       });
     }
     const alerta = await conApi('odontologo', (tx) =>
-      crearAlerta(tx, pacienteId, '  Alergia a la penicilina  '),
+      crearAlerta(tx, pacienteId, { tipo: 'alergia', texto: '  Alergia a la penicilina  ' }),
     );
     expect(alerta).toMatchObject({
       texto: 'Alergia a la penicilina',
@@ -414,7 +416,7 @@ describe('alertas manuales', () => {
         ).toMatchObject({ ok: false, codigo: '42501' });
         for (const texto of ['ab', '   ', 'x'.repeat(201)]) {
           expect(
-            await intentar(c, 'select app.crear_alerta($1, $2)', [pacienteId, texto]),
+            await intentar(c, "select app.crear_alerta($1, 'alergia', $2)", [pacienteId, texto]),
           ).toMatchObject(rechazo('23514', 'paciente_alerta_texto_check'));
         }
         expect(
@@ -423,8 +425,8 @@ describe('alertas manuales', () => {
         // creada_por sale del contexto aunque el cliente mande otro.
         const otra = await valor<string>(
           c,
-          `insert into app.paciente_alerta (clinica_id, paciente_id, texto, creada_por)
-         values ($1, $2, 'Diabetes', $3) returning creada_por`,
+          `insert into app.paciente_alerta (clinica_id, paciente_id, tipo, texto, creada_por)
+         values ($1, $2, 'condicion', 'Diabetes', $3) returning creada_por`,
           [clinica.clinicaId, pacienteId, clinica.duenoId],
         );
         expect(otra).toBe(usuarios.odontologo);
@@ -638,7 +640,7 @@ describe('obtenerPaciente', () => {
         idioma: 'gn',
         aceptaWhatsapp: true,
       });
-      await crearAlerta(tx, nuevo, 'Hipertensión');
+      await crearAlerta(tx, nuevo, { tipo: 'condicion', texto: 'Hipertensión' });
       return nuevo;
     });
     const ficha = await conApi('recepcion', (tx) =>

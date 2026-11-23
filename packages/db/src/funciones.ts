@@ -11,6 +11,7 @@ import type {
   AlertaManual,
   CrearPaciente,
   EditarPaciente,
+  EditarRelacion,
   EstadoMembresia,
   FILTROS_PACIENTES,
   Modulo,
@@ -18,6 +19,7 @@ import type {
   PacienteResumen,
   Persona,
   Relacion,
+  TipoAlerta,
   TipoRelacion,
 } from '@conecta/shared';
 import { sql } from 'drizzle-orm';
@@ -513,15 +515,18 @@ export async function listarPersonal(
 }
 
 // ---------------------------------------------------------------------------------------------
-// Pacientes (Sprint 3, migraciones 0019–0022)
+// Pacientes (Sprint 3, migraciones 0019–0027)
 // ---------------------------------------------------------------------------------------------
 //
 // Todo corre como app_api con el contexto de la clínica: RLS y `app.proteger_pacientes` deciden.
 // Permisos que exige la base (además de los de la API): alta pacientes:crear; edición
-// pacientes:editar; desactivar/reactivar pacientes:anular; vínculos pacientes:editar; alertas y
-// nota interna ficha_clinica:editar. La nota interna solo se LEE con ficha_clinica:ver (si no, la
-// base la oculta y estas funciones devuelven null). Nombres de regla de los errores:
-// `RESTRICCIONES_PACIENTES` (src/esquema.ts).
+// pacientes:editar; desactivar/reactivar pacientes:anular; vínculos pacientes:editar; alertas
+// ficha_clinica:editar (y ver para cargar, desactivar o tocar una inactiva); nota interna
+// ficha_clinica:editar y ver. La nota interna y las alertas inactivas solo se LEEN con
+// ficha_clinica:ver (si no, no existen: estas funciones devuelven null o no las incluyen), y lo
+// mismo su historial en audit_log. Edad, pediátrico y con alerta salen de un solo lugar de la base
+// (`app.resumen_pacientes`). Nombres de regla de los errores: `RESTRICCIONES_PACIENTES`
+// (src/esquema.ts).
 
 /** Fila que devuelven `app.buscar_pacientes`, `app.listar_pacientes` y `app.pacientes_con_ci`. */
 type FilaResumen = {
@@ -571,8 +576,9 @@ export interface OpcionesBuscarPacientes {
 }
 
 /**
- * `app.buscar_pacientes(texto, limite, incluir_inactivos, ahora)`: buscador por nombre (sin tildes
- * ni mayúsculas, la ñ cuenta), CI (con o sin puntos) o teléfono (en cualquier formato). Todos los
+ * `app.buscar_pacientes(texto, limite, incluir_inactivos, ahora)`: buscador por nombre (sin tildes,
+ * mayúsculas ni puntuación, la ñ cuenta: igual que `normalizarBusqueda` de @conecta/shared), CI (con
+ * o sin puntos, con o sin ceros a la izquierda) o teléfono (en cualquier formato). Todos los
  * términos tienen que aparecer. Orden: CI o teléfono exacto, después los que empiezan una palabra,
  * después el resto; dentro de cada grupo, activos primero y por apellidos, nombres. Un texto sin
  * letras ni dígitos devuelve `[]` (la regla de «menos de 2 caracteres» la aplica la API).
@@ -603,25 +609,30 @@ export interface ConsultaListarPacientes {
 }
 
 /**
- * `app.listar_pacientes(...)`: una página de la lista, ordenada por apellidos, nombres e id (sin
- * tildes; la ñ entre la n y la o; sin apellidos, primero). `siguienteCursor` es el id del último
- * de la página (null si no hay más): la página siguiente empieza justo después de él, sin repetidos
- * ni saltos. Si ese paciente cambia de nombre entre una página y la otra, la lista sigue desde su
- * posición nueva. Errores: `cursor_invalido`, `pacientes_filtro`, `pacientes_limite` (22023).
+ * `app.listar_pacientes(...)`: una página de la lista, ordenada por apellidos (o, si no tiene, por
+ * nombres), nombres e id (sin tildes ni puntuación; la ñ entre la n y la o). `siguienteCursor` es
+ * opaco (null si no hay más): lleva la posición de la última fila de la página tal como se vio, y
+ * la página siguiente empieza justo después de esa posición, sin repetidos ni saltos, aunque ese
+ * paciente (u otro) se renombre o se agreguen pacientes entre una página y la otra. Se pasa tal
+ * cual; no se arma ni se interpreta. Errores: `cursor_invalido`, `pacientes_filtro`,
+ * `pacientes_limite` (22023).
  */
 export async function listarPacientes(
   tx: TransaccionConecta,
   consulta: ConsultaListarPacientes = {},
 ): Promise<{ items: PacienteResumen[]; siguienteCursor: string | null }> {
   const limite = consulta.limite ?? 50;
-  const { rows } = await tx.execute<FilaResumen>(
-    sql`select ${COLUMNAS_RESUMEN} from app.listar_pacientes(${consulta.texto ?? null}::text,
+  const { rows } = await tx.execute<FilaResumen & { cursor: string }>(
+    sql`select ${COLUMNAS_RESUMEN}, cursor from app.listar_pacientes(${consulta.texto ?? null}::text,
           ${consulta.filtro ?? 'todos'}::text, ${consulta.cursor ?? null}::text,
           ${limite + 1}::integer, ${ahoraSql(consulta.ahora)})`,
   );
-  const items = rows.slice(0, limite).map(resumen);
-  const ultimo = items[items.length - 1];
-  return { items, siguienteCursor: rows.length > limite && ultimo ? ultimo.id : null };
+  const pagina = rows.slice(0, limite);
+  const ultima = pagina[pagina.length - 1];
+  return {
+    items: pagina.map(resumen),
+    siguienteCursor: rows.length > limite && ultima ? ultima.cursor : null,
+  };
 }
 
 /**
@@ -748,20 +759,15 @@ export async function obtenerPaciente(
       nota_interna: string | null;
     }
   >(sql`
-    with hoy as (select app.hoy_clinica(${ahoraSql(opciones.ahora)}) as fecha),
-         clinica as (select c.edad_pediatrica from app.clinica c where c.id = app.clinica_actual())
-    select p.id, p.nombres, p.apellidos, p.ci, p.telefono, p.fecha_nac::text as fecha_nac,
-           date_part('year', age(hoy.fecha, p.fecha_nac))::integer as edad,
-           coalesce(date_part('year', age(hoy.fecha, p.fecha_nac)) < clinica.edad_pediatrica, false)
-             as pediatrico,
-           exists (select 1 from app.paciente_alerta a
-                   where a.clinica_id = p.clinica_id and a.paciente_id = p.id and a.activa) as con_alerta,
-           p.activo, p.ruc, p.sexo, p.email, p.ciudad, p.direccion, p.idioma, p.acepta_whatsapp,
+    select r.id, r.nombres, r.apellidos, r.ci, r.telefono, r.fecha_nac::text as fecha_nac, r.edad,
+           r.pediatrico, r.con_alerta, r.activo, r.sexo,
+           p.ruc, p.email, p.ciudad, p.direccion, p.idioma, p.acepta_whatsapp,
            p.origen, p.motivo_baja, p.created_at,
            (select n.texto from app.paciente_nota n
             where n.clinica_id = p.clinica_id and n.paciente_id = p.id) as nota_interna
-    from app.paciente p cross join hoy cross join clinica
-    where p.id = ${pacienteId}::uuid`);
+    from app.resumen_pacientes(${ahoraSql(opciones.ahora)}) r
+    join app.paciente p on p.clinica_id = r.clinica_id and p.id = r.id
+    where r.id = ${pacienteId}::uuid`);
   const fila = rows[0];
   if (!fila) return null;
   const alertas = await listarAlertas(tx, pacienteId);
@@ -825,6 +831,10 @@ export interface DatosRelacion {
   esTutorLegal?: boolean | undefined;
   /** El paciente paga por el familiar. */
   esResponsablePago?: boolean | undefined;
+  /** El familiar es tutor legal del paciente (se guarda en el otro sentido). */
+  familiarEsTutorLegal?: boolean | undefined;
+  /** El familiar paga por el paciente (se guarda en el otro sentido). */
+  familiarEsResponsablePago?: boolean | undefined;
 }
 
 type FilaRelacion = {
@@ -854,24 +864,25 @@ function relacionDe(f: FilaRelacion): Relacion {
 function consultaRelaciones(filtro: ReturnType<typeof sql>, ahora: Date | undefined) {
   return sql`
     select r.id, f.id as familiar_id,
-           f.nombres || coalesce(' ' || f.apellidos, '') as nombre,
-           date_part('year', age(app.hoy_clinica(${ahoraSql(ahora)}), f.fecha_nac))::integer as edad,
+           f.nombres || coalesce(' ' || f.apellidos, '') as nombre, f.edad,
            r.tipo, r.es_tutor_legal, r.es_responsable_pago,
            coalesce(e.es_tutor_legal, false) as familiar_es_tutor_legal,
            coalesce(e.es_responsable_pago, false) as familiar_es_responsable_pago
     from app.paciente_relacion r
-    join app.paciente f on f.clinica_id = r.clinica_id and f.id = r.familiar_id
+    join app.resumen_pacientes(${ahoraSql(ahora)}) f on f.clinica_id = r.clinica_id and f.id = r.familiar_id
     left join app.paciente_relacion e
       on e.clinica_id = r.clinica_id and e.paciente_id = r.familiar_id
      and e.familiar_id = r.paciente_id and e.deleted_at is null
     where r.clinica_id = app.clinica_actual() and r.deleted_at is null and ${filtro}
-    order by f.orden_apellidos, f.orden_nombres, f.id`;
+    order by f.orden_apellidos collate "C", f.orden_nombres collate "C", f.id`;
 }
 
 /**
  * `app.crear_relacion(...)`: crea el vínculo y su espejo (con el tipo inverso: madre/padre ↔ hijo
  * según el sexo, abuelo ↔ nieto, tutor ↔ tutelado; hermano, pareja y otro iguales) en la misma
- * transacción. Devuelve la `Relacion` vista desde `pacienteId`. Permiso de la base: pacientes:editar.
+ * transacción, con las marcas de los dos lados (`familiarEs*` van en el espejo). El tipo del espejo
+ * sigue al sexo: si cambia el sexo del paciente, la base lo recalcula. Devuelve la `Relacion` vista
+ * desde `pacienteId`. Permiso de la base: pacientes:editar.
  * Errores: `paciente_relacion_par_activo` (23505, ya están vinculados), `paciente_relacion_consigo_mismo`
  * y `relacion_tipo_sexo` / `relacion_marca_un_sentido` / `relacion_espejo_inconsistente` (23514),
  * `relacion_paciente_inactivo` (22023), `paciente_relacion_paciente_fkey` /
@@ -884,13 +895,40 @@ export async function crearRelacion(
 ): Promise<Relacion> {
   const { rows } = await tx.execute<{ id: string }>(
     sql`select app.crear_relacion(${datos.pacienteId}::uuid, ${datos.familiarId}::uuid, ${datos.tipo},
-          ${datos.esTutorLegal ?? false}::boolean, ${datos.esResponsablePago ?? false}::boolean) as id`,
+          ${datos.esTutorLegal ?? false}::boolean, ${datos.esResponsablePago ?? false}::boolean,
+          ${datos.familiarEsTutorLegal ?? false}::boolean,
+          ${datos.familiarEsResponsablePago ?? false}::boolean) as id`,
   );
   const id = primera(rows, 'app.crear_relacion').id;
   const creada = await tx.execute<FilaRelacion>(
     consultaRelaciones(sql`r.id = ${id}::uuid`, undefined),
   );
   return relacionDe(primera(creada.rows, 'paciente_relacion'));
+}
+
+/**
+ * `app.editar_relacion(relacion, ...)`: cambia las marcas de un vínculo activo vistas desde el lado
+ * `relacionId` (el id de cualquiera de los dos sentidos): `esTutorLegal`/`esResponsablePago` de
+ * este lado y `familiarEsTutorLegal`/`familiarEsResponsablePago` del otro; lo que no viene no
+ * cambia. Las cuatro se aplican juntas (se puede pasar la tutoría de un lado al otro en un pedido).
+ * Devuelve la `Relacion` vista desde `relacionId` (haya cambiado algo o no). Errores:
+ * `relacion_no_encontrada` (P0002), `relacion_dada_de_baja` (22023), `relacion_marca_un_sentido`
+ * y `relacion_espejo_inconsistente` (23514), `pacientes_sin_permiso` (42501).
+ */
+export async function editarRelacion(
+  tx: TransaccionConecta,
+  relacionId: string,
+  cambios: EditarRelacion,
+): Promise<Relacion> {
+  await tx.execute(
+    sql`select app.editar_relacion(${relacionId}::uuid, ${cambios.esTutorLegal ?? null}::boolean,
+          ${cambios.esResponsablePago ?? null}::boolean, ${cambios.familiarEsTutorLegal ?? null}::boolean,
+          ${cambios.familiarEsResponsablePago ?? null}::boolean)`,
+  );
+  const { rows } = await tx.execute<FilaRelacion>(
+    consultaRelaciones(sql`r.id = ${relacionId}::uuid`, undefined),
+  );
+  return relacionDe(primera(rows, 'paciente_relacion'));
 }
 
 /**
@@ -923,8 +961,15 @@ export async function listarRelaciones(
 
 // Alertas manuales y nota interna ---------------------------------------------------------------
 
+/** Datos de una alerta manual nueva (`crearAlertaSchema` del contrato). */
+export interface DatosAlerta {
+  tipo: TipoAlerta;
+  texto: string;
+}
+
 type FilaAlerta = {
   id: string;
+  tipo: TipoAlerta;
   texto: string;
   activa: boolean;
   created_at: Date | string;
@@ -933,7 +978,7 @@ type FilaAlerta = {
 
 function consultaAlertas(filtro: ReturnType<typeof sql>) {
   return sql`
-    select a.id, a.texto, a.activa, a.created_at, u.nombre as creada_por
+    select a.id, a.tipo, a.texto, a.activa, a.created_at, u.nombre as creada_por
     from app.paciente_alerta a left join app.usuario u on u.id = a.creada_por
     where a.clinica_id = app.clinica_actual() and ${filtro}
     order by a.created_at, a.id`;
@@ -942,6 +987,7 @@ function consultaAlertas(filtro: ReturnType<typeof sql>) {
 function alertaDe(f: FilaAlerta): AlertaManual {
   return {
     id: f.id,
+    tipo: f.tipo,
     texto: f.texto,
     activa: f.activa,
     creadaEn: fecha(f.created_at).toISOString(),
@@ -949,7 +995,10 @@ function alertaDe(f: FilaAlerta): AlertaManual {
   };
 }
 
-/** Alertas manuales de un paciente (activas; con `incluirInactivas`, todas), las más viejas primero. `creadaPor` es el nombre. */
+/**
+ * Alertas manuales de un paciente (activas; con `incluirInactivas`, también las inactivas, que la base
+ * solo muestra a quien tiene `ficha_clinica:ver`), las más viejas primero. `creadaPor` es el nombre.
+ */
 export async function listarAlertas(
   tx: TransaccionConecta,
   pacienteId: string,
@@ -962,7 +1011,7 @@ export async function listarAlertas(
   return rows.map(alertaDe);
 }
 
-/** Una alerta por id (o null si no es de la clínica). */
+/** Una alerta por id (o null si no es de la clínica, o si es inactiva y falta `ficha_clinica:ver`). */
 export async function obtenerAlerta(
   tx: TransaccionConecta,
   alertaId: string,
@@ -972,17 +1021,18 @@ export async function obtenerAlerta(
 }
 
 /**
- * `app.crear_alerta(paciente, texto)`: alerta manual activa (`ficha_clinica:editar`). Devuelve la
- * alerta. Errores: `ficha_clinica_sin_permiso` (42501), `paciente_alerta_texto_check` (23514, 3 a
- * 200 caracteres), `paciente_alerta_paciente_fkey` (23503).
+ * `app.crear_alerta(paciente, tipo, texto)`: alerta manual activa (`ficha_clinica:editar`) de tipo
+ * `alergia` o `condicion`. Devuelve la alerta. Errores: `ficha_clinica_sin_permiso` (42501),
+ * `paciente_alerta_texto_check` (23514, 3 a 200 caracteres), `paciente_alerta_tipo_check` (23514),
+ * `paciente_alerta_paciente_fkey` (23503).
  */
 export async function crearAlerta(
   tx: TransaccionConecta,
   pacienteId: string,
-  texto: string,
+  datos: DatosAlerta,
 ): Promise<AlertaManual> {
   const { rows } = await tx.execute<{ id: string }>(
-    sql`select app.crear_alerta(${pacienteId}::uuid, ${texto}) as id`,
+    sql`select app.crear_alerta(${pacienteId}::uuid, ${datos.tipo}, ${datos.texto}) as id`,
   );
   const alerta = await obtenerAlerta(tx, primera(rows, 'app.crear_alerta').id);
   if (!alerta) throw new Error('app.crear_alerta no dejó ver la alerta creada.');
@@ -990,9 +1040,10 @@ export async function crearAlerta(
 }
 
 /**
- * `app.cambiar_alerta(alerta, activa)`: activa o desactiva (`ficha_clinica:editar`; desactivar queda
- * en auditoría como «anular»). `false` si ya estaba así. Errores: `alerta_no_encontrada` (P0002),
- * `ficha_clinica_sin_permiso` (42501).
+ * `app.cambiar_alerta(alerta, activa)`: activa o desactiva (`ficha_clinica:editar` y, para
+ * desactivar o reactivar, también `ficha_clinica:ver`; desactivar queda en auditoría como «anular»).
+ * `false` si ya estaba así. Errores: `alerta_no_encontrada` (P0002; también una inactiva para quien
+ * no tiene `ficha_clinica:ver`), `ficha_clinica_sin_permiso` (42501).
  */
 export async function cambiarAlerta(
   tx: TransaccionConecta,
@@ -1007,8 +1058,7 @@ export async function cambiarAlerta(
 
 /**
  * `app.guardar_nota_interna(paciente, texto)`: crea o reemplaza la nota interna; `null` o vacío la
- * borra (`ficha_clinica:editar`; para reemplazar una existente hace falta también
- * `ficha_clinica:ver`). Errores: `ficha_clinica_sin_permiso` (42501), `paciente_nota_texto_check`
+ * borra (`ficha_clinica:editar` y `ficha_clinica:ver`). Errores: `ficha_clinica_sin_permiso` (42501), `paciente_nota_texto_check`
  * (23514, más de 2000 caracteres), `paciente_nota_paciente_fkey` (23503).
  */
 export async function guardarNotaInterna(

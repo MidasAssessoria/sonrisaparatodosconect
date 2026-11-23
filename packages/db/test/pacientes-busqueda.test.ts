@@ -134,9 +134,13 @@ describe('buscador', () => {
   it('varias palabras en cualquier orden; los comodines de LIKE no comodinan', async () => {
     expect(nombres(await buscar('gimenez ana'))).toEqual(['Ana Giménez']);
     expect(nombres(await buscar('benitez jose'))).toEqual(['José GONZÁLEZ Benítez']);
-    expect(await buscar('a_a')).toEqual([]);
+    // Desde 0024 «%» y «_» son puntuación: separan palabras, como en normalizarBusqueda.
+    expect(await buscar('a_a')).toEqual(await buscar('a a'));
+    expect(await buscar('g%z')).toEqual(await buscar('g z'));
+    expect(await buscar('gim%nez')).toEqual(await buscar('gim nez'));
     expect(await buscar('%')).toEqual([]);
-    expect(await buscar('g%z')).toEqual([]);
+    expect(await buscar('_')).toEqual([]);
+    expect(await buscar('\\')).toEqual([]);
     expect(await buscar('')).toEqual([]);
     expect(await buscar('  .  ')).toEqual([]);
   });
@@ -195,6 +199,31 @@ describe('buscador', () => {
             ids['ajena'],
           ]),
         ).toBe(0);
+        // Un patrón malformado (fijado a mano) no ve nada y nunca da error (0024): antes, uno
+        // terminado en «\» fallaba solo si otra clínica tenía la coincidencia («gonzalo» solo está
+        // en la otra clínica).
+        const malformados = [
+          '%gonzalo\\',
+          '%gonz\\',
+          'gonz',
+          '%gon_alez%',
+          '%gon%alez%',
+          '%\\%',
+          '%%%',
+          '%x\\y%',
+        ];
+        for (const patron of malformados) {
+          await c.query("select set_config('app.busqueda_patron', $1, true)", [patron]);
+          expect({
+            patron,
+            r: await intentar(c, 'select count(*)::int as n from app.paciente_busqueda'),
+          }).toMatchObject({ patron, r: { ok: true, filas: [{ n: 0 }] } });
+        }
+        // Bien formados, escapados como los arma app.escapar_like: sí.
+        await c.query("select set_config('app.busqueda_patron', $1, true)", ['%gonz\\%%']);
+        expect(await valor(c, 'select count(*)::int from app.paciente_busqueda')).toBe(0);
+        await c.query("select set_config('app.busqueda_patron', '%gonzalez%', true)");
+        expect(await valor(c, 'select count(*)::int from app.paciente_busqueda')).toBe(3);
         // La tabla del paciente no depende del patrón.
         await c.query("select set_config('app.busqueda_patron', '%zzz%', true)");
         expect(await valor(c, 'select count(*)::int from app.paciente')).toBe(7);
@@ -398,11 +427,24 @@ describe('lista: cursor estable', () => {
     return vistos;
   }
 
-  it('el orden es apellidos, nombres, id sin tildes ni mayúsculas, la ñ entre la n y la o', async () => {
+  it('el orden es apellidos (o nombres, sin apellido), nombres, id sin tildes ni mayúsculas, la ñ entre la n y la o', async () => {
     const todos = await pagina(null, 500);
     expect(todos.siguienteCursor).toBeNull();
-    const etiquetas = [...new Set(todos.items.map((p) => normalizarBusqueda(p.apellidos ?? '')))];
-    expect(etiquetas).toEqual(['', 'alvarez', 'gimenez', 'ñañez', 'pena', 'peña', 'zarate']);
+    const etiquetas = [
+      ...new Set(todos.items.map((p) => normalizarBusqueda(p.apellidos ?? p.nombres))),
+    ];
+    // Sin apellido: «Ana», «Ángel» y «Zoe» quedan entre los apellidos, por su nombre (0024).
+    expect(etiquetas).toEqual([
+      'alvarez',
+      'ana',
+      'angel',
+      'gimenez',
+      'ñañez',
+      'pena',
+      'peña',
+      'zarate',
+      'zoe',
+    ]);
   });
 
   it('páginas de cualquier tamaño cubren la lista sin repetidos ni saltos', async () => {
@@ -441,9 +483,18 @@ describe('lista: cursor estable', () => {
     expect(nuevos.length).toBe(6);
   });
 
-  it('un cursor de otra clínica no sirve', async () => {
-    const ajeno = (await crearPacienteDePrueba(admin, { clinicaId: otra.clinicaId })).pacienteId;
-    expect(await errorDe(pagina(ajeno, 5))).toMatchObject({
+  it('un cursor de otra clínica solo es una posición: no trae nada de esa clínica', async () => {
+    await crearPacienteDePrueba(admin, { clinicaId: otra.clinicaId, apellidos: 'Aaa' });
+    await crearPacienteDePrueba(admin, { clinicaId: otra.clinicaId, apellidos: 'Bbb' });
+    const deOtra = await pagina(null, 1, otra);
+    expect(deOtra.siguienteCursor).not.toBeNull();
+    const propios = new Set((await pagina(null, 500)).items.map((p) => p.id));
+    const conCursorAjeno = await pagina(deOtra.siguienteCursor, 500);
+    expect(conCursorAjeno.items.length).toBeGreaterThan(0);
+    expect(conCursorAjeno.items.every((p) => propios.has(p.id))).toBe(true);
+    // El id de un paciente (el cursor de antes de 0025) ya no es un cursor.
+    const id = [...propios][0]!;
+    expect(await errorDe(pagina(id, 5))).toMatchObject({
       codigo: '22023',
       restriccion: 'cursor_invalido',
     });
@@ -522,6 +573,14 @@ describe('rendimiento con 20.000 pacientes', () => {
     );
     resultados['lista pediátricos'] = await medir(() =>
       enClinica(clinica, (tx) => listarPacientes(tx, { filtro: 'pediatricos' })),
+    );
+    resultados['lista con alerta'] = await medir(() =>
+      enClinica(clinica, (tx) => listarPacientes(tx, { filtro: 'con_alerta' })),
+    );
+    // Una página del medio, con el cursor opaco de la anterior (0025).
+    const primera = await enClinica(clinica, (tx) => listarPacientes(tx, { limite: 500 }));
+    resultados['lista con cursor'] = await medir(() =>
+      enClinica(clinica, (tx) => listarPacientes(tx, { cursor: primera.siguienteCursor })),
     );
     if (SALIDA_RENDIMIENTO) {
       appendFileSync(

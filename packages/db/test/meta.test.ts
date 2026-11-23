@@ -14,6 +14,7 @@ import {
   ORIGENES_PACIENTE,
   SEXOS,
   TASAS_IVA,
+  TIPOS_ALERTA,
   TIPOS_RELACION,
 } from '@conecta/shared';
 import { describe, expect, it } from 'vitest';
@@ -111,6 +112,37 @@ describe('RLS en todo el schema app', () => {
          and (coalesce(qual, '') ~* '^\\(?true\\)?$' or coalesce(with_check, '') ~* '^\\(?true\\)?$')`,
     );
     expect(filas).toEqual([]);
+  });
+
+  it('las políticas RESTRICTIVAS son las previstas (0023: ficha_clinica solo con ver, auditoría por módulo)', async () => {
+    const filas = await consultar<{ tabla: string; politica: string; cmd: string }>(
+      `select tablename as tabla, policyname as politica, cmd from pg_policies
+       where schemaname = 'app' and permissive = 'RESTRICTIVE' order by 1, 2`,
+    );
+    expect(filas).toEqual([
+      { tabla: 'audit_log', politica: 'audit_log_modulo', cmd: 'SELECT' },
+      { tabla: 'paciente_alerta', politica: 'paciente_alerta_inactiva_editar', cmd: 'UPDATE' },
+      { tabla: 'paciente_alerta', politica: 'paciente_alerta_inactiva_ver', cmd: 'SELECT' },
+      { tabla: 'paciente_nota', politica: 'paciente_nota_editar_ver', cmd: 'UPDATE' },
+      { tabla: 'paciente_nota', politica: 'paciente_nota_escribir_ver', cmd: 'INSERT' },
+    ]);
+    // La de auditoría mira el módulo de la fila contra los módulos con «ver» del usuario.
+    const [auditoria] = await consultar<{ qual: string }>(
+      `select qual from pg_policies where schemaname = 'app' and policyname = 'audit_log_modulo'`,
+    );
+    expect(auditoria?.qual).toMatch(/modulos_con_accion\('ver'::text\)/);
+    // Todas exceptúan solo a una SESIÓN del dueño (como las defensas): current_user y session_user.
+    const sinExcepcion = await consultar<{ politica: string }>(
+      `select policyname as politica from pg_policies
+       where schemaname = 'app' and permissive = 'RESTRICTIVE'
+         and coalesce(qual, with_check) !~ 'sesion_del_dueno\\(\\)'`,
+    );
+    expect(sinExcepcion).toEqual([]);
+    const [cuerpo] = await consultar<{ src: string }>(
+      `select prosrc as src from pg_proc where oid = 'app.sesion_del_dueno()'::regprocedure`,
+    );
+    expect(cuerpo?.src).toMatch(/pg_has_role\(current_user/);
+    expect(cuerpo?.src).toMatch(/pg_has_role\(session_user/);
   });
 
   it('toda tabla con clinica_id tiene una política que la compara con app.clinica_actual()', async () => {
@@ -318,8 +350,8 @@ describe('privilegios', () => {
         'app.buscar_pacientes(text,integer,boolean,timestamp with time zone)',
         'app.cambiar_alerta(uuid,boolean)',
         'app.clave_orden(text)',
-        'app.crear_alerta(uuid,text)',
-        'app.crear_relacion(uuid,uuid,text,boolean,boolean)',
+        'app.crear_alerta(uuid,text,text)',
+        'app.crear_relacion(uuid,uuid,text,boolean,boolean,boolean,boolean)',
         'app.desactivar_paciente(uuid,text)',
         'app.escapar_like(text)',
         'app.guardar_nota_interna(uuid,text)',
@@ -333,6 +365,13 @@ describe('privilegios', () => {
         'app.tiene_permiso(text,text)',
         'app.tipo_relacion_inverso(text,text)',
         'app.tipos_relacion_compatibles(text,text)',
+        // 0023–0027: revisión del Sprint 3 (todas SECURITY INVOKER).
+        'app.cursor_paciente(text,text,uuid)',
+        'app.edad_en(date,date)',
+        'app.editar_relacion(uuid,boolean,boolean,boolean,boolean)',
+        'app.modulos_con_accion(text)',
+        'app.resumen_pacientes(timestamp with time zone)',
+        'app.sesion_del_dueno()',
       ].sort(),
     );
   });
@@ -361,6 +400,13 @@ describe('privilegios', () => {
           'cambiar_alerta',
           'guardar_nota_interna',
           'tiene_permiso',
+          'editar_relacion',
+          'resumen_pacientes',
+          'modulos_con_accion',
+          'cursor_paciente',
+          'edad_en',
+          'revisar_vinculos_por_sexo',
+          'sesion_del_dueno',
         ],
       ],
     );
@@ -376,12 +422,20 @@ describe('privilegios', () => {
       'app.pacientes_con_ci(text,uuid,timestamp with time zone)': false,
       'app.desactivar_paciente(uuid,text)': false,
       'app.reactivar_paciente(uuid)': false,
-      'app.crear_relacion(uuid,uuid,text,boolean,boolean)': false,
+      'app.crear_relacion(uuid,uuid,text,boolean,boolean,boolean,boolean)': false,
       'app.baja_relacion(uuid,text)': false,
-      'app.crear_alerta(uuid,text)': false,
+      'app.crear_alerta(uuid,text,text)': false,
       'app.cambiar_alerta(uuid,boolean)': false,
       'app.guardar_nota_interna(uuid,text)': false,
       'app.tiene_permiso(text,text)': false,
+      'app.editar_relacion(uuid,boolean,boolean,boolean,boolean)': false,
+      'app.resumen_pacientes(timestamp with time zone)': false,
+      'app.modulos_con_accion(text)': false,
+      'app.cursor_paciente(text,text,uuid)': false,
+      'app.edad_en(date,date)': false,
+      // Trigger de cambio de sexo: también corre como app_api (RLS y pacientes:editar).
+      'app.revisar_vinculos_por_sexo()': false,
+      'app.sesion_del_dueno()': false,
     });
   });
 
@@ -743,6 +797,7 @@ describe('valores de los CHECK sincronizados con el código', () => {
     ['paciente_idioma_check', IDIOMAS_PACIENTE],
     ['paciente_origen_check', ORIGENES_PACIENTE],
     ['paciente_relacion_tipo_check', TIPOS_RELACION],
+    ['paciente_alerta_tipo_check', TIPOS_ALERTA],
   ] as const)('%s coincide con el código', async (restriccion, valores) => {
     expect((await valoresDelCheck(restriccion)).sort()).toEqual([...valores].sort());
   });

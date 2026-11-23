@@ -158,8 +158,8 @@ export async function poblarClinica(admin: pg.Pool): Promise<DatosClinica> {
       );
       const alertaId = await valor<string>(
         c,
-        `insert into app.paciente_alerta (clinica_id, paciente_id, texto)
-         values ($1, $2, 'Alergia a la penicilina') returning id`,
+        `insert into app.paciente_alerta (clinica_id, paciente_id, tipo, texto)
+         values ($1, $2, 'alergia', 'Alergia a la penicilina') returning id`,
         [clinica.clinicaId, pacientes[0]],
       );
       const notaId = await valor<string>(
@@ -474,11 +474,11 @@ export const CASOS: CasoTabla[] = [
     editar: 'activa = activa',
     baja: 'activa = false',
     insertar: (d) => [
-      "insert into app.paciente_alerta (clinica_id, paciente_id, texto) values ($1, $2, 'Embarazo')",
+      "insert into app.paciente_alerta (clinica_id, paciente_id, tipo, texto) values ($1, $2, 'condicion', 'Embarazo')",
       [d.clinicaId, d.pacienteId],
     ],
     referenciarAjena: (p, a) => [
-      "insert into app.paciente_alerta (clinica_id, paciente_id, texto) values ($1, $2, 'Embarazo')",
+      "insert into app.paciente_alerta (clinica_id, paciente_id, tipo, texto) values ($1, $2, 'condicion', 'Embarazo')",
       [p.clinicaId, a.pacienteId],
     ],
   },

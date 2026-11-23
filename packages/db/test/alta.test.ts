@@ -350,7 +350,7 @@ async function esperarDemoCompleta(c: pg.ClientBase): Promise<void> {
     ].sort(),
   );
   const vinculos = await c.query(
-    `select paciente_id, familiar_id, tipo, es_tutor_legal, es_responsable_pago
+    `select paciente_id, familiar_id, tipo, es_tutor_legal, es_responsable_pago, espejo
      from app.paciente_relacion where deleted_at is null order by tipo`,
   );
   expect(vinculos.rows).toEqual([
@@ -360,6 +360,7 @@ async function esperarDemoCompleta(c: pg.ClientBase): Promise<void> {
       tipo: 'hijo',
       es_tutor_legal: true,
       es_responsable_pago: true,
+      espejo: false,
     },
     {
       paciente_id: DEMO.pacientes.mateo,
@@ -367,8 +368,13 @@ async function esperarDemoCompleta(c: pg.ClientBase): Promise<void> {
       tipo: 'madre',
       es_tutor_legal: false,
       es_responsable_pago: false,
+      // El otro sentido lo creó la base: sigue al sexo de Ana (F, cargado).
+      espejo: true,
     },
   ]);
+  expect(await valor(c, 'select sexo from app.paciente where id = $1', [DEMO.pacientes.ana])).toBe(
+    'F',
+  );
   expect(await valor(c, 'select ci from app.paciente where id = $1', [DEMO.pacientes.ana])).toBe(
     '4123456',
   );

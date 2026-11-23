@@ -15,6 +15,7 @@ import type {
   ORIGENES_PACIENTE,
   SEXOS,
   TasaIva,
+  TipoAlerta,
   TipoRelacion,
 } from '@conecta/shared';
 import { sql } from 'drizzle-orm';
@@ -200,7 +201,7 @@ export type RestriccionCola = (typeof RESTRICCIONES_COLA)[number];
 
 /**
  * Nombres de regla del Sprint 3 (pacientes, grupo familiar, alertas y nota interna, migraciones
- * 0019–0022) que la base pone en el campo `constraint` de sus errores. Código entre paréntesis.
+ * 0019–0027) que la base pone en el campo `constraint` de sus errores. Código entre paréntesis.
  * Además de estas, los nombres de restricciones reales que la API puede recibir:
  *   - 23514: `paciente_nombres_check`, `paciente_apellidos_check`, `paciente_ci_check`,
  *     `paciente_ruc_check`, `paciente_fecha_nac_check`, `paciente_sexo_check`,
@@ -208,7 +209,9 @@ export type RestriccionCola = (typeof RESTRICCIONES_COLA)[number];
  *     `paciente_direccion_check`, `paciente_idioma_check`, `paciente_origen_check`,
  *     `paciente_motivo_baja_check`, `paciente_relacion_tipo_check`,
  *     `paciente_relacion_consigo_mismo`, `paciente_relacion_motivo_baja_check`,
- *     `paciente_alerta_texto_check`, `paciente_nota_texto_check`;
+ *     `paciente_alerta_texto_check`, `paciente_alerta_tipo_check` (0027),
+ *     `paciente_nota_texto_check`. `paciente_ruc_check` exige desde 0027 una base de 3 a 9
+ *     caracteres sin ceros a la izquierda (como normalizarRuc);
  *   - 23505: `paciente_relacion_par_activo` (ya hay un vínculo activo entre esos dos pacientes);
  *   - 23503: `paciente_relacion_paciente_fkey`, `paciente_relacion_familiar_fkey` (paciente que no
  *     es de la clínica), `paciente_alerta_paciente_fkey`, `paciente_nota_paciente_fkey`.
@@ -217,7 +220,11 @@ export type RestriccionCola = (typeof RESTRICCIONES_COLA)[number];
 export const RESTRICCIONES_PACIENTES = [
   /** (42501) Al actor le falta pacientes:crear / pacientes:editar / pacientes:anular. */
   'pacientes_sin_permiso',
-  /** (42501) Al actor le falta ficha_clinica:editar (alertas manuales y nota interna). */
+  /**
+   * (42501) Al actor le falta ficha_clinica:editar (alertas manuales y nota interna) o, desde 0023,
+   * ficha_clinica:ver para escribir la nota interna o para cargar, desactivar o tocar una alerta
+   * inactiva.
+   */
   'ficha_clinica_sin_permiso',
   /** (22023) Alta de un paciente ya inactivo. */
   'paciente_nace_activo',
@@ -227,19 +234,28 @@ export const RESTRICCIONES_PACIENTES = [
   'paciente_no_encontrado',
   /** (22023) Vínculo con un paciente inactivo. */
   'relacion_paciente_inactivo',
-  /** (23514) madre con un familiar de sexo M, o padre con uno de sexo F. */
+  /**
+   * (23514) madre con un familiar de sexo M, o padre con uno de sexo F. Desde 0026 también al
+   * cambiar el sexo de un paciente que figura como madre/padre en un vínculo cargado a mano.
+   */
   'relacion_tipo_sexo',
-  /** (23514) El otro sentido ya existe con un tipo que no corresponde. */
+  /**
+   * (23514) El otro sentido ya existe con un tipo que no corresponde; un espejo cargado a mano; o
+   * (`editarRelacion`) falta el otro sentido.
+   */
   'relacion_espejo_inconsistente',
   /** (23514) Tutor legal o responsable de pago marcado en los dos sentidos. */
   'relacion_marca_un_sentido',
-  /** (22023) Cambiar un vínculo dado de baja (o crearlo ya dado de baja). */
+  /** (22023) Cambiar un vínculo dado de baja (o crearlo ya dado de baja; o `editarRelacion`). */
   'relacion_dada_de_baja',
-  /** (P0002) `baja_relacion` con un id que no es de la clínica. */
+  /** (P0002) `baja_relacion` / `editar_relacion` con un id que no es de la clínica. */
   'relacion_no_encontrada',
-  /** (P0002) `cambiar_alerta` con un id que no es de la clínica. */
+  /**
+   * (P0002) `cambiar_alerta` con un id que no es de la clínica (o, sin ficha_clinica:ver, de una
+   * alerta inactiva: no existe para quien no la puede ver).
+   */
   'alerta_no_encontrada',
-  /** (22023) Cursor de `listar_pacientes` que no es un id de paciente de la clínica. */
+  /** (22023) Cursor de `listar_pacientes` que no se puede decodificar (desde 0025 es opaco). */
   'cursor_invalido',
   /** (22023) Límite fuera de 1..1000. */
   'pacientes_limite',
@@ -601,8 +617,10 @@ export const paciente = esquemaApp.table('paciente', {
   origen: text('origen').$type<OrigenPaciente>().notNull().default('recepcion'),
   activo: boolean('activo').notNull().default(true),
   motivoBaja: text('motivo_baja'),
-  /** Generada (COLLATE "C"): clave de orden de los apellidos. */
-  ordenApellidos: text('orden_apellidos').generatedAlwaysAs(sql`app.clave_orden(apellidos)`),
+  /** Generada (COLLATE "C"): clave de orden de los apellidos o, si no hay, de los nombres. */
+  ordenApellidos: text('orden_apellidos').generatedAlwaysAs(
+    sql`app.clave_orden(COALESCE(apellidos, nombres))`,
+  ),
   /** Generada (COLLATE "C"): clave de orden de los nombres. */
   ordenNombres: text('orden_nombres').generatedAlwaysAs(sql`app.clave_orden(nombres)`),
   ...auditoriaFila,
@@ -629,7 +647,8 @@ export const pacienteBusqueda = esquemaApp.table('paciente_busqueda', {
 
 /**
  * Vínculo del grupo familiar: «familiar es `tipo` de paciente». La base crea y da de baja el otro
- * sentido. paciente_id, familiar_id y tipo no cambian.
+ * sentido. paciente_id, familiar_id, espejo y tipo no cambian (el tipo de un espejo lo recalcula la
+ * base cuando cambia el sexo del familiar).
  */
 export const pacienteRelacion = esquemaApp.table('paciente_relacion', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -641,15 +660,22 @@ export const pacienteRelacion = esquemaApp.table('paciente_relacion', {
   esTutorLegal: boolean('es_tutor_legal').notNull().default(false),
   /** paciente_id paga por familiar_id. */
   esResponsablePago: boolean('es_responsable_pago').notNull().default(false),
+  /** true si la creó la base como el otro sentido de un vínculo (0026). */
+  espejo: boolean('espejo').notNull().default(false),
   ...bajaLogica,
   ...auditoriaFila,
 });
 
-/** Alerta manual (módulo ficha_clinica). Solo se activa o desactiva. `creadaPor` la fija la base. */
+/**
+ * Alerta manual (módulo ficha_clinica). Solo se activa o desactiva. `creadaPor` la fija la base. Las
+ * inactivas solo existen para quien tiene `ficha_clinica:ver` (RLS, 0023).
+ */
 export const pacienteAlerta = esquemaApp.table('paciente_alerta', {
   id: uuid('id').primaryKey().defaultRandom(),
   clinicaId: uuid('clinica_id').notNull(),
   pacienteId: uuid('paciente_id').notNull(),
+  /** alergia o condicion (0027). No cambia. */
+  tipo: text('tipo').$type<TipoAlerta>().notNull(),
   texto: text('texto').notNull(),
   activa: boolean('activa').notNull().default(true),
   creadaPor: uuid('creada_por'),
@@ -657,8 +683,9 @@ export const pacienteAlerta = esquemaApp.table('paciente_alerta', {
 });
 
 /**
- * Nota interna (módulo ficha_clinica), una por paciente. Sin `ficha_clinica:ver` la fila no se ve
- * (RLS); escribirla exige `ficha_clinica:editar`. `texto` NULL = borrada.
+ * Nota interna (módulo ficha_clinica), una por paciente. Sin `ficha_clinica:ver` no se ve ni la
+ * fila (RLS) ni su historial en audit_log (0023); escribirla exige `ficha_clinica:editar` y `ver`.
+ * `texto` NULL = borrada.
  */
 export const pacienteNota = esquemaApp.table('paciente_nota', {
   id: uuid('id').primaryKey().defaultRandom(),

@@ -12,6 +12,7 @@ import {
   type CategoriaArchivo,
   type RolSistema,
   type TasaIva,
+  type TipoAlerta,
   type TipoRelacion,
 } from '@conecta/shared';
 import type pg from 'pg';
@@ -497,7 +498,10 @@ export async function crearPacienteDePrueba(
   );
 }
 
-/** Crea un vínculo «familiar es `tipo` de paciente» (la base crea el espejo). */
+/**
+ * Crea un vínculo «familiar es `tipo` de paciente» (la base crea el espejo). `familiarEs*` son las
+ * marcas del otro lado (se guardan en el espejo).
+ */
 export async function crearRelacionDePrueba(
   admin: pg.Pool,
   opciones: {
@@ -507,6 +511,8 @@ export async function crearRelacionDePrueba(
     tipo: TipoRelacion;
     esTutorLegal?: boolean;
     esResponsablePago?: boolean;
+    familiarEsTutorLegal?: boolean;
+    familiarEsResponsablePago?: boolean;
   },
 ): Promise<{ relacionId: string }> {
   return conContextoCliente(
@@ -529,34 +535,55 @@ export async function crearRelacionDePrueba(
       );
       const relacionId = rows[0]?.id;
       if (!relacionId) throw new Error('No se pudo crear el vínculo de prueba.');
+      if (opciones.familiarEsTutorLegal || opciones.familiarEsResponsablePago) {
+        await cliente.query(
+          `update app.paciente_relacion set es_tutor_legal = $3, es_responsable_pago = $4
+           where paciente_id = $1 and familiar_id = $2 and deleted_at is null`,
+          [
+            opciones.familiarId,
+            opciones.pacienteId,
+            opciones.familiarEsTutorLegal ?? false,
+            opciones.familiarEsResponsablePago ?? false,
+          ],
+        );
+      }
       return { relacionId };
     },
     SIN_VERIFICAR,
   );
 }
 
-/** Crea una alerta manual (activa por defecto). */
+/**
+ * Crea una alerta manual (activa y de tipo alergia por defecto), como alta del sistema.
+ */
 export async function crearAlertaDePrueba(
   admin: pg.Pool,
-  opciones: { clinicaId: string; pacienteId: string; texto?: string; activa?: boolean },
+  opciones: {
+    clinicaId: string;
+    pacienteId: string;
+    tipo?: TipoAlerta;
+    texto?: string;
+    activa?: boolean;
+  },
 ): Promise<{ alertaId: string }> {
   return conContextoCliente(
     admin,
     { clinicaId: opciones.clinicaId, usuarioId: randomUUID() },
     async (cliente) => {
       await cliente.query("select set_config('app.usuario_id', '', true)");
-      const { rows } = await cliente.query<{ id: string }>(
-        `insert into app.paciente_alerta (clinica_id, paciente_id, texto, activa)
-         values ($1, $2, $3, $4) returning id`,
+      const alertaId = randomUUID();
+      await cliente.query(
+        `insert into app.paciente_alerta (id, clinica_id, paciente_id, tipo, texto, activa)
+         values ($1, $2, $3, $4, $5, $6)`,
         [
+          alertaId,
           opciones.clinicaId,
           opciones.pacienteId,
+          opciones.tipo ?? 'alergia',
           opciones.texto ?? 'Alergia a la penicilina',
           opciones.activa ?? true,
         ],
       );
-      const alertaId = rows[0]?.id;
-      if (!alertaId) throw new Error('No se pudo crear la alerta de prueba.');
       return { alertaId };
     },
     SIN_VERIFICAR,
