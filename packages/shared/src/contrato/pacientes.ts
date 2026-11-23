@@ -221,7 +221,7 @@ export const FILTROS_PACIENTES = ['todos', 'pediatricos', 'con_alerta', 'inactiv
 export const consultaPacientesSchema = z.object({
   q: z.string().trim().max(80).optional(),
   filtro: z.enum(FILTROS_PACIENTES).default('todos'),
-  cursor: z.string().max(200).optional(),
+  cursor: z.string().max(400).optional(),
   limite: z.coerce.number().int().min(1).max(100).default(50),
 });
 export type ConsultaPacientes = z.infer<typeof consultaPacientesSchema>;
