@@ -5,6 +5,7 @@ import { AuthModule } from './auth/auth.module.js';
 import { BaseModule } from './base/base.module.js';
 import { CatalogosModule } from './catalogos/catalogos.module.js';
 import { ContextoModule } from './contexto/contexto.module.js';
+import { PacientesModule } from './pacientes/pacientes.module.js';
 import { PersonalModule } from './personal/personal.module.js';
 import { ProfesionalesModule } from './profesionales/profesionales.module.js';
 import { SaludModule } from './salud/salud.module.js';
@@ -24,6 +25,7 @@ import { SesionModule } from './sesion/sesion.module.js';
     ProfesionalesModule,
     CatalogosModule,
     ArchivosModule,
+    PacientesModule,
   ],
 })
 export class AppModule {}

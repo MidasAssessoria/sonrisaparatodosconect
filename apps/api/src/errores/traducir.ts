@@ -17,6 +17,7 @@ import { MENSAJES_ARCHIVOS } from './restricciones/archivos.js';
 import { MENSAJES_CATALOGOS } from './restricciones/catalogos.js';
 import { MENSAJES_COLA } from './restricciones/cola.js';
 import { MENSAJES_LIMITES, MENSAJES_LIMITES_COLUMNAS } from './restricciones/limites.js';
+import { MENSAJES_PACIENTES, MENSAJES_PACIENTES_COLUMNAS } from './restricciones/pacientes.js';
 import { MENSAJES_PERSONAL } from './restricciones/personal.js';
 import { MENSAJES_PROFESIONALES } from './restricciones/profesionales.js';
 
@@ -161,6 +162,9 @@ const MENSAJES_RESTRICCION: Record<string, (error: ErrorPostgres) => ErrorApi> =
   ...MENSAJES_PROFESIONALES,
   ...MENSAJES_CATALOGOS,
   ...MENSAJES_ARCHIVOS,
+  // Sprint 3: pacientes, grupo familiar, alertas manuales y nota interna (0019–0022).
+  ...MENSAJES_PACIENTES,
+  ...MENSAJES_PACIENTES_COLUMNAS,
   sede_nombre_unico: () => errores.conflicto('Ya hay una sede con ese nombre. Elegí otro nombre.'),
   sillon_nombre_unico: () =>
     errores.conflicto('Esa sede ya tiene un sillón activo con ese nombre. Elegí otro nombre.'),
