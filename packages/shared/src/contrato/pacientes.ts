@@ -19,6 +19,8 @@ import { fechaHoraSchema, idSchema } from './comun.js';
  *   - El 409 de CI duplicada trae `existente` solo si quien pide tiene `pacientes:ver`; si no,
  *     solo el mensaje.
  *   - Una alerta inactiva nunca se devuelve (ni su texto) a quien no tiene `ficha_clinica:ver`.
+ *   - Crear o editar un vínculo responde datos del familiar: exige además `pacientes:ver`.
+ *     `PATCH /alertas/:id` responde el texto: exige `pacientes:ver` o `ficha_clinica:ver`.
  *
  * Datos (decisiones por defecto mientras el cliente no responda P4 y P6, ver docs/plan.md §7):
  *   - CI: solo dígitos; puede faltar (niños). Una CI que ya existe en la clínica NO bloquea: la API
@@ -221,7 +223,7 @@ export const FILTROS_PACIENTES = ['todos', 'pediatricos', 'con_alerta', 'inactiv
 export const consultaPacientesSchema = z.object({
   q: z.string().trim().max(80).optional(),
   filtro: z.enum(FILTROS_PACIENTES).default('todos'),
-  cursor: z.string().max(400).optional(),
+  cursor: z.string().max(1000).optional(),
   limite: z.coerce.number().int().min(1).max(100).default(50),
 });
 export type ConsultaPacientes = z.infer<typeof consultaPacientesSchema>;
