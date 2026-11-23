@@ -5,8 +5,9 @@
 
 /** Cédula de identidad: solo dígitos, de 5 a 9. «4.123.456» → «4123456». Devuelve null si no sirve. */
 export function normalizarCi(texto: string): string | null {
-  const digitos = texto.replace(/[\s.-]/g, '');
-  return /^\d{5,9}$/.test(digitos) ? digitos.replace(/^0+(?=\d)/, '') : null;
+  // Los ceros a la izquierda no cuentan: «01234» son 4 dígitos y no sirve (la base exige 5 a 9).
+  const digitos = texto.replace(/[\s.-]/g, '').replace(/^0+(?=\d)/, '');
+  return /^\d{5,9}$/.test(digitos) ? digitos : null;
 }
 
 /** Cédula para mostrar con puntos de miles: «4123456» → «4.123.456». */

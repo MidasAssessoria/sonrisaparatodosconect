@@ -16,6 +16,7 @@ describe('cédula', () => {
     expect(normalizarCi(' 4123456 ')).toBe('4123456');
     expect(normalizarCi('0412345')).toBe('412345');
     expect(normalizarCi('123')).toBeNull();
+    expect(normalizarCi('01234')).toBeNull();
     expect(normalizarCi('4123456a')).toBeNull();
     expect(formatoCi('4123456')).toBe('4.123.456');
     expect(formatoCi('812345')).toBe('812.345');
