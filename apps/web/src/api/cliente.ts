@@ -5,6 +5,7 @@ import {
   bloqueoSchema,
   CABECERA_CLINICA,
   ciDuplicadaSchema,
+  crearAlertaSchema,
   errorApiSchema,
   invitacionAceptadaSchema,
   invitacionCreadaSchema,
@@ -42,6 +43,7 @@ import {
   type EditarPaciente,
   type EditarPersona,
   type EditarProfesional,
+  type EditarRelacion,
   type EditarRol,
   type EditarSede,
   type EditarSillon,
@@ -134,20 +136,28 @@ interface Pedido<T> {
   errorPropio?: (estado: number, cuerpo: unknown) => ErrorConecta | undefined;
 }
 
+/** Cuerpo de `POST /pacientes/:id/alertas`. */
+export type CrearAlerta = z.infer<typeof crearAlertaSchema>;
+
 /** Página de la lista de pacientes (`GET /pacientes`). */
 export type PaginaPacientes = z.infer<typeof paginaPacientesSchema>;
 
-/** 409 con `existente` (contrato/pacientes.ts, `ciDuplicadaSchema`) → `ErrorCiDuplicada` tipado. */
+/**
+ * 409 por CI duplicada (contrato/pacientes.ts) → `ErrorCiDuplicada` tipado. Se reconoce por
+ * `existente` (`ciDuplicadaSchema`) o, cuando quien pide no tiene `pacientes:ver` y la API no lo
+ * manda, por `detalles: [{ campo: 'ci' }]`. Cualquier otro 409 es un conflicto común.
+ */
 function errorCiDuplicada(estado: number, cuerpo: unknown): ErrorConecta | undefined {
   if (estado !== 409) return undefined;
-  const r = ciDuplicadaSchema.safeParse(cuerpo);
-  if (!r.success) return undefined;
-  const detalles = errorApiSchema.safeParse(cuerpo);
-  return new ErrorCiDuplicada(
-    r.data.mensaje,
-    r.data.existente,
-    detalles.success ? (detalles.data.detalles ?? []) : [],
-  );
+  const base = errorApiSchema.safeParse(cuerpo);
+  if (!base.success || base.data.codigo !== 'conflicto') return undefined;
+  const detalles = base.data.detalles ?? [];
+  const conExistente = ciDuplicadaSchema.safeParse(cuerpo);
+  if (conExistente.success) {
+    return new ErrorCiDuplicada(base.data.mensaje, conExistente.data.existente, detalles);
+  }
+  if (!detalles.some((d) => d.campo === 'ci')) return undefined;
+  return new ErrorCiDuplicada(base.data.mensaje, null, detalles);
 }
 
 /** Parámetros de una consulta, sin los vacíos. */
@@ -580,22 +590,35 @@ export function crearClienteApi(opciones: OpcionesClienteApi) {
           cuerpo: datos,
           esquema: relacionSchema,
         }),
+      /**
+       * Cambia las marcas de tutor legal y responsable de pago, vistas desde el lado `relacionId`.
+       * Responde la relación vista desde ese lado.
+       */
+      editarRelacion: (relacionId: string, datos: EditarRelacion): Promise<Relacion> =>
+        pedir({
+          metodo: 'PATCH',
+          ruta: `/relaciones/${seg(relacionId)}`,
+          cuerpo: datos,
+          esquema: relacionSchema,
+        }),
       /** Da de baja el vínculo y su espejo (204). */
       quitarRelacion: (relacionId: string): Promise<void> =>
         pedir({ metodo: 'DELETE', ruta: `/relaciones/${seg(relacionId)}`, esquema: null }),
-      crearAlerta: (pid: string, datos: { texto: string }): Promise<AlertaManual> =>
+      crearAlerta: (pid: string, datos: CrearAlerta): Promise<AlertaManual> =>
         pedir({
           metodo: 'POST',
           ruta: `/pacientes/${seg(pid)}/alertas`,
           cuerpo: datos,
           esquema: alertaManualSchema,
         }),
-      /**
-       * Activa o desactiva una alerta. El contrato no dice qué responde: no se lee la respuesta y
-       * quien llama actualiza la ficha que tiene en pantalla.
-       */
-      editarAlerta: (alertaId: string, datos: { activa: boolean }): Promise<void> =>
-        pedir({ metodo: 'PATCH', ruta: `/alertas/${seg(alertaId)}`, cuerpo: datos, esquema: null }),
+      /** Activa o desactiva una alerta. Responde la alerta como quedó. */
+      editarAlerta: (alertaId: string, datos: { activa: boolean }): Promise<AlertaManual> =>
+        pedir({
+          metodo: 'PATCH',
+          ruta: `/alertas/${seg(alertaId)}`,
+          cuerpo: datos,
+          esquema: alertaManualSchema,
+        }),
     },
     /** Buscador global: hasta 6 pacientes activos. Con menos de 2 caracteres no hace falta pedir. */
     buscar: (q: string): Promise<PacienteResumen[]> =>

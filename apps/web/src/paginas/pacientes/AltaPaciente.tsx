@@ -1,13 +1,13 @@
 import type { CrearPaciente } from '@conecta/shared';
 import { Boton, HojaInferior } from '@conecta/ui';
 import { useMutation } from '@tanstack/react-query';
-import { useId, useState } from 'react';
+import { useId, useRef } from 'react';
 import { useNavigate } from 'react-router';
 import { ErrorCiDuplicada } from '../../api/errores.js';
 import { useEnvioUnico } from '../../componentes/useEnvioUnico.js';
 import { useTextos } from '../../i18n/idioma.js';
 import { useSesionLista } from '../../sesion/ProveedorSesion.js';
-import { AvisoCiDuplicada } from './AvisoCiDuplicada.js';
+import { AvisoCiDuplicada, enviarConfirmando } from './AvisoCiDuplicada.js';
 import { useActualizarPacientes } from './consultas.js';
 import { FormularioPaciente } from './FormularioPaciente.js';
 
@@ -19,8 +19,8 @@ export function AltaPaciente({ abierta, onCerrar }: { abierta: boolean; onCerrar
   const actualizar = useActualizarPacientes();
   const unaVez = useEnvioUnico();
   const idForm = useId();
-  /** Último cuerpo enviado: «Guardar igual» lo reenvía confirmando la CI duplicada. */
-  const [ultimo, setUltimo] = useState<CrearPaciente | null>(null);
+  /** El próximo envío del formulario va con `confirmarCiDuplicada` («Guardar igual»). */
+  const confirmar = useRef(false);
 
   const crear = useMutation({
     mutationFn: (datos: CrearPaciente) => api.pacientes.crear(datos),
@@ -32,14 +32,12 @@ export function AltaPaciente({ abierta, onCerrar }: { abierta: boolean; onCerrar
   });
 
   const enviar = (datos: CrearPaciente) => {
-    setUltimo(datos);
     void unaVez(() => crear.mutateAsync(datos).catch(() => undefined));
   };
 
   const duplicada = crear.error instanceof ErrorCiDuplicada ? crear.error : null;
   const cerrar = () => {
     crear.reset();
-    setUltimo(null);
     onCerrar();
   };
 
@@ -64,20 +62,25 @@ export function AltaPaciente({ abierta, onCerrar }: { abierta: boolean; onCerrar
           <FormularioPaciente
             id={idForm}
             onEnviar={(d) => {
+              const datos = d as CrearPaciente;
               crear.reset();
-              enviar(d as CrearPaciente);
+              enviar(confirmar.current ? { ...datos, confirmarCiDuplicada: true } : datos);
+            }}
+            // Lo que se cambie después del 409 deja viejo el aviso: se oculta.
+            onCambio={() => {
+              if (crear.error instanceof ErrorCiDuplicada) crear.reset();
             }}
             error={duplicada ? undefined : (crear.error ?? undefined)}
           />
-          {duplicada && ultimo ? (
+          {duplicada ? (
             <AvisoCiDuplicada
-              existente={duplicada.existente}
+              error={duplicada}
               guardando={crear.isPending}
-              onAbrir={() => {
+              onAbrir={(id) => {
                 cerrar();
-                void navegar(`/pacientes/${duplicada.existente.id}`);
+                void navegar(`/pacientes/${id}`);
               }}
-              onGuardarIgual={() => enviar({ ...ultimo, confirmarCiDuplicada: true })}
+              onGuardarIgual={() => enviarConfirmando(idForm, confirmar)}
             />
           ) : null}
         </>

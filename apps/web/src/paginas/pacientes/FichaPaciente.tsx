@@ -52,13 +52,12 @@ function CabeceraFicha({ paciente }: { paciente: Paciente }) {
       </header>
       {/*
        * Alertas activas arriba de todo (README «Datos de salud»): ícono + texto + color, sin rojo
-       * clínico. Las manuales van en coral (tono atención), como el chip «Con alerta» de la lista.
-       * Las ve también recepción.
+       * clínico. Alergias en coral, condiciones en sol. Las ve también recepción.
        */}
       {activas.length ? (
         <AlertaClinica
           className="w-ficha-alertas"
-          alertas={activas.map((a) => ({ tipo: 'alergia' as const, texto: a.texto }))}
+          alertas={activas.map((a) => ({ tipo: a.tipo, texto: a.texto }))}
         />
       ) : null}
       {!paciente.activo ? (
@@ -105,7 +104,10 @@ export function FichaPaciente() {
       </>
     );
   }
-  if (consulta.isError) {
+  // Sin ficha cargada, el error ocupa la pantalla. Si ya había una ficha y falló una recarga, se
+  // sigue mostrando la ficha con un aviso (como la lista).
+  const paciente = consulta.data;
+  if (!paciente) {
     const noEsta =
       consulta.error instanceof ErrorConecta && consulta.error.codigo === 'no_encontrado';
     return (
@@ -123,11 +125,13 @@ export function FichaPaciente() {
     );
   }
 
-  const paciente = consulta.data;
   const { Componente } = actual;
   return (
     <div className="w-ficha">
       {volver}
+      {consulta.isError ? (
+        <MensajeError texto={t.ficha.errorRecarga} onReintentar={() => void consulta.refetch()} />
+      ) : null}
       <CabeceraFicha paciente={paciente} />
       <nav className="w-pestanas" aria-label={t.ficha.secciones}>
         {visibles.map((p) => (

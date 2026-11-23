@@ -1,4 +1,9 @@
-import type { CrearRelacion, Paciente } from '@conecta/shared';
+import {
+  crearRelacionSchema,
+  editarPacienteSchema,
+  pacienteSchema,
+  type Paciente,
+} from '@conecta/shared';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import {
@@ -25,6 +30,7 @@ const RUTA_ANA = `/pacientes/${IDS_PACIENTES.ana}`;
 
 const ALERTA_ACTIVA = {
   id: IDS_PACIENTES.alerta,
+  tipo: 'alergia' as const,
   texto: 'Alergia a la penicilina',
   activa: true,
   creadaEn: '2026-11-10T12:30:00Z',
@@ -32,6 +38,7 @@ const ALERTA_ACTIVA = {
 };
 const ALERTA_INACTIVA = {
   id: IDS_PACIENTES.alertaVieja,
+  tipo: 'condicion' as const,
   texto: 'Embarazo',
   activa: false,
   creadaEn: '2025-03-01T12:30:00Z',
@@ -41,6 +48,18 @@ const ALERTA_INACTIVA = {
 /** Ana con alertas: lo que ve quien tiene ficha clínica (con nota) o recepción (sin nota). */
 function ana(parcial: Partial<Paciente> = {}): Paciente {
   return pacienteDe({ conAlerta: true, alertas: [ALERTA_ACTIVA, ALERTA_INACTIVA], ...parcial });
+}
+
+/**
+ * Lo que haría la API con un `PATCH /pacientes/:id`: valida con el esquema del contrato, aplica
+ * solo los campos conocidos y responde la ficha completa (no el cuerpo mandado).
+ */
+function editadoPorLaApi(p: Paciente, cuerpo: unknown): Paciente {
+  const datos = editarPacienteSchema.parse(cuerpo);
+  const limpio = Object.fromEntries(
+    Object.entries(datos).filter(([k, v]) => v !== undefined && k !== 'confirmarCiDuplicada'),
+  );
+  return pacienteSchema.parse({ ...p, ...limpio });
 }
 
 const de = (pedidos: PedidoRegistrado[], metodo: string, ruta: string) =>
@@ -128,13 +147,14 @@ describe('Pacientes: ficha', () => {
       {
         'GET /pacientes/:id': () => ({ cuerpo: paciente }),
         'PATCH /pacientes/:id': ({ cuerpo }) => {
-          paciente = { ...paciente, ...(cuerpo as Partial<Paciente>) };
+          paciente = editadoPorLaApi(paciente, cuerpo);
           return { cuerpo: paciente };
         },
         'POST /pacientes/:id/alertas': ({ cuerpo }) => ({
           estado: 201,
           cuerpo: {
             id: uuid(713),
+            tipo: (cuerpo as { tipo: 'alergia' | 'condicion' }).tipo,
             texto: (cuerpo as { texto: string }).texto,
             activa: true,
             creadaEn: '2026-11-20T15:00:00Z',
@@ -174,17 +194,33 @@ describe('Pacientes: ficha', () => {
 
     fireEvent.click(alertas.getByRole('button', { name: 'Agregar alerta' }));
     expect(await alertas.findByText('Escribí la alerta.')).toBeInTheDocument();
+    expect(alertas.getByText('Elegí si es una alergia o una condición.')).toBeInTheDocument();
+    fireEvent.click(alertas.getByRole('button', { name: 'Condición' }));
     fireEvent.change(alertas.getByLabelText(/Nueva alerta/), {
       target: { value: 'Toma anticoagulantes' },
     });
     fireEvent.click(alertas.getByRole('button', { name: 'Agregar alerta' }));
     expect(await alertas.findByText('Toma anticoagulantes')).toBeInTheDocument();
     expect(de(f.pedidos, 'POST', `${RUTA_ANA}/alertas`)[0]?.cuerpo).toEqual({
+      tipo: 'condicion',
       texto: 'Toma anticoagulantes',
     });
-    // La nueva también aparece arriba.
+    // La nueva también aparece arriba, en sol (condición); la alergia sigue en coral.
     const cabecera = within(screen.getByRole('region', { name: 'Alertas clínicas' }));
-    expect(cabecera.getByText('Toma anticoagulantes')).toBeInTheDocument();
+    expect(cabecera.getByText('Toma anticoagulantes').closest('li')).toHaveClass(
+      'cn-alerta--condicion',
+    );
+    expect(cabecera.getByText('Alergia a la penicilina').closest('li')).toHaveClass(
+      'cn-alerta--alergia',
+    );
+    // En la lista, el tipo con su tono: alergia coral (atención), condición sol (progreso).
+    const fila = (texto: string) => alertas.getByText(texto).closest('li') as HTMLElement;
+    expect(
+      within(fila('Alergia a la penicilina')).getByText('Alergia').closest('.cn-chip'),
+    ).toHaveClass('cn-chip--atencion');
+    expect(
+      within(fila('Toma anticoagulantes')).getByText('Condición').closest('.cn-chip'),
+    ).toHaveClass('cn-chip--progreso');
 
     fireEvent.click(
       alertas.getByRole('button', { name: 'Desactivar la alerta «Alergia a la penicilina»' }),
@@ -230,7 +266,7 @@ describe('Pacientes: ficha', () => {
       {
         'GET /pacientes/:id': () => ({ cuerpo: paciente }),
         'PATCH /pacientes/:id': ({ cuerpo }) => {
-          paciente = { ...paciente, ...(cuerpo as Partial<Paciente>) };
+          paciente = editadoPorLaApi(paciente, cuerpo);
           return { cuerpo: paciente };
         },
       },
@@ -277,6 +313,7 @@ describe('Pacientes: ficha', () => {
               cuerpo: {
                 codigo: 'conflicto',
                 mensaje: 'Esa cédula ya está cargada en otro paciente.',
+                detalles: [{ campo: 'ci', mensaje: 'Ya la tiene Rosa Duarte.' }],
                 existente: resumenDe({
                   id: IDS_PACIENTES.rosa,
                   nombres: 'Rosa',
@@ -286,7 +323,7 @@ describe('Pacientes: ficha', () => {
               },
             };
           }
-          paciente = { ...paciente, ci: c.ci ?? paciente.ci };
+          paciente = editadoPorLaApi(paciente, c);
           return { cuerpo: paciente };
         },
       },
@@ -306,33 +343,39 @@ describe('Pacientes: ficha', () => {
     ]);
   });
 
-  it('grupo familiar: busca al familiar, marca tutor y responsable, y quita el vínculo', async () => {
+  it('grupo familiar: busca al familiar, marca las dos puntas, edita las marcas y quita el vínculo', async () => {
     let paciente = ana();
-    const relacion = {
+    /** Lo que guarda la API, visto desde la ficha de Ana. */
+    let relacion = {
       id: IDS_PACIENTES.relacion,
       familiar: { id: MATEO.id, nombre: 'Mateo Giménez', edad: 7 },
       tipo: 'hijo' as const,
-      esTutorLegal: true,
-      esResponsablePago: true,
+      esTutorLegal: false,
+      esResponsablePago: false,
       familiarEsTutorLegal: false,
       familiarEsResponsablePago: false,
     };
     const f = montar(
       {
         'GET /pacientes/:id': () => ({ cuerpo: paciente }),
-        'GET /buscar': { cuerpo: { pacientes: [resumenDe(), MATEO] } },
+        'GET /pacientes': { cuerpo: { items: [resumenDe(), MATEO], siguienteCursor: null } },
         'POST /pacientes/:id/relaciones': ({ cuerpo }) => {
-          const c = cuerpo as CrearRelacion;
-          paciente = { ...paciente, relaciones: [relacion] };
-          return {
-            estado: 201,
-            cuerpo: {
-              ...relacion,
-              tipo: c.tipo,
-              esTutorLegal: c.esTutorLegal,
-              esResponsablePago: c.esResponsablePago,
-            },
+          const c = crearRelacionSchema.parse(cuerpo);
+          relacion = {
+            ...relacion,
+            tipo: c.tipo as 'hijo',
+            esTutorLegal: c.esTutorLegal,
+            esResponsablePago: c.esResponsablePago,
+            familiarEsTutorLegal: c.familiarEsTutorLegal,
+            familiarEsResponsablePago: c.familiarEsResponsablePago,
           };
+          paciente = { ...paciente, relaciones: [relacion] };
+          return { estado: 201, cuerpo: relacion };
+        },
+        'PATCH /relaciones/:id': ({ cuerpo }) => {
+          relacion = { ...relacion, ...(cuerpo as Partial<typeof relacion>) };
+          paciente = { ...paciente, relaciones: [relacion] };
+          return { cuerpo: relacion };
         },
         'DELETE /relaciones/:id': { estado: 204 },
       },
@@ -349,21 +392,24 @@ describe('Pacientes: ficha', () => {
     expect(await hoja.findByText('Elegí al familiar.')).toBeInTheDocument();
     expect(hoja.getByText('Elegí el vínculo.')).toBeInTheDocument();
 
-    fireEvent.change(hoja.getByRole('combobox', { name: 'Buscá al familiar' }), {
-      target: { value: 'Giménez' },
-    });
-    const opcion = await hoja.findByRole('option', { name: /Mateo Giménez/ });
+    fireEvent.change(hoja.getByLabelText(/^Buscá al familiar/), { target: { value: 'Giménez' } });
+    const opcion = await hoja.findByRole('button', { name: 'Elegir a Mateo Giménez' });
     // Ana no aparece: es la ficha abierta.
-    expect(hoja.queryByRole('option', { name: /Ana Giménez/ })).toBeNull();
-    expect(de(f.pedidos, 'GET', '/buscar')[0]?.url.searchParams.get('q')).toBe('Giménez');
+    expect(hoja.queryByRole('button', { name: 'Elegir a Ana Giménez' })).toBeNull();
+    const busqueda = de(f.pedidos, 'GET', '/pacientes')[0]?.url.searchParams;
+    expect(busqueda?.get('q')).toBe('Giménez');
+    expect(busqueda?.get('limite')).toBe('20');
     fireEvent.click(opcion);
 
     // `tipo` dice qué es el familiar de quien está en la ficha: Mateo es hijo de Ana.
     fireEvent.change(hoja.getByLabelText('¿Qué es Mateo Giménez de Ana Giménez?'), {
       target: { value: 'hijo' },
     });
-    fireEvent.click(hoja.getByLabelText('Ana Giménez es tutor/a legal de Mateo Giménez'));
-    fireEvent.click(hoja.getByLabelText('Ana Giménez paga los tratamientos de Mateo Giménez'));
+    // Las marcas de los dos lados, con los nombres y el género de cada uno.
+    expect(hoja.getByLabelText('Mateo es tutor legal de Ana')).not.toBeChecked();
+    expect(hoja.getByLabelText('Mateo paga los tratamientos de Ana')).not.toBeChecked();
+    fireEvent.click(hoja.getByLabelText('Ana es tutora legal de Mateo'));
+    fireEvent.click(hoja.getByLabelText('Ana paga los tratamientos de Mateo'));
     fireEvent.click(hoja.getByRole('button', { name: 'Guardar vínculo' }));
 
     expect(await screen.findByText('Agregamos el vínculo en las dos fichas.')).toBeInTheDocument();
@@ -372,6 +418,8 @@ describe('Pacientes: ficha', () => {
       tipo: 'hijo',
       esTutorLegal: true,
       esResponsablePago: true,
+      familiarEsTutorLegal: false,
+      familiarEsResponsablePago: false,
     });
     const filas = within(screen.getByRole('region', { name: 'Grupo familiar' }));
     expect(filas.getByRole('link', { name: 'Mateo Giménez' })).toHaveAttribute(
@@ -383,8 +431,30 @@ describe('Pacientes: ficha', () => {
       .closest('.cn-chip');
     expect(chipVinculo).toHaveClass('cn-chip--familia');
     expect(chipVinculo?.querySelector('svg')).not.toBeNull();
-    expect(filas.getByText('Ana es tutor/a legal')).toBeInTheDocument();
+    expect(filas.getByText('Ana es tutora legal')).toBeInTheDocument();
     expect(filas.getByText('Ana paga sus tratamientos')).toBeInTheDocument();
+
+    // Editar las marcas: manda solo lo que cambió y muestra lo que respondió la API.
+    fireEvent.click(
+      filas.getByRole('button', {
+        name: 'Editar tutor legal y pago del vínculo con Mateo Giménez',
+      }),
+    );
+    const marcas = within(await screen.findByRole('dialog', { name: 'Vínculo con Mateo Giménez' }));
+    expect(marcas.getByLabelText('Ana es tutora legal de Mateo Giménez')).toBeChecked();
+    fireEvent.click(marcas.getByRole('button', { name: 'Guardar cambios' }));
+    expect(await marcas.findByText('No hay cambios para guardar.')).toBeInTheDocument();
+    fireEvent.click(marcas.getByLabelText('Ana paga los tratamientos de Mateo Giménez'));
+    fireEvent.click(marcas.getByLabelText('Mateo Giménez paga los tratamientos de Ana'));
+    fireEvent.click(marcas.getByRole('button', { name: 'Guardar cambios' }));
+    expect(await screen.findByText('Guardamos los cambios del vínculo.')).toBeInTheDocument();
+    expect(de(f.pedidos, 'PATCH', `/relaciones/${IDS_PACIENTES.relacion}`)[0]?.cuerpo).toEqual({
+      esResponsablePago: false,
+      familiarEsResponsablePago: true,
+    });
+    expect(filas.queryByText('Ana paga sus tratamientos')).toBeNull();
+    expect(filas.getByText('Mateo Giménez paga sus tratamientos')).toBeInTheDocument();
+    expect(filas.getByText('Ana es tutora legal')).toBeInTheDocument();
 
     fireEvent.click(filas.getByRole('button', { name: 'Quitar el vínculo con Mateo Giménez' }));
     const confirmar = within(

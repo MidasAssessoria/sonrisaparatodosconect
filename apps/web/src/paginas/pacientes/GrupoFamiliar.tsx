@@ -2,12 +2,13 @@ import {
   crearRelacionSchema,
   TIPOS_RELACION,
   type CrearRelacion,
+  type EditarRelacion,
   type Paciente,
   type PacienteResumen,
   type Relacion,
   type TipoRelacion,
 } from '@conecta/shared';
-import { Avatar, Boton, Buscador, Campo, Chip, HojaInferior } from '@conecta/ui';
+import { Avatar, Boton, Campo, Chip, HojaInferior } from '@conecta/ui';
 import { useMutation } from '@tanstack/react-query';
 import { useId, useState, type FormEvent } from 'react';
 import { Link } from 'react-router';
@@ -17,15 +18,141 @@ import { useEnvioUnico } from '../../componentes/useEnvioUnico.js';
 import { useTextos } from '../../i18n/idioma.js';
 import { useSesionLista } from '../../sesion/ProveedorSesion.js';
 import { CasillaVerificacion, HojaConfirmar } from '../personal/componentes.js';
-import { useActualizarPacientes, useBuscarPacientes } from './consultas.js';
-import { metaPaciente, nombreCompleto, resultadoBuscador } from './formato.js';
+import { MINIMO_BUSCADOR, useActualizarPacientes, useBuscarFamiliar } from './consultas.js';
+import { metaPaciente, nombreCompleto } from './formato.js';
 
 /*
  * Vínculos del grupo familiar, vistos desde la ficha abierta (P). `tipo` dice qué es el familiar
- * (F) de P: en la ficha de Ana, Mateo figura como «Hijo/a». Tutor legal y responsable de pago van
- * al revés: «P es tutor legal de F», «P paga por F» (contrato/pacientes.ts y la migración de
- * `paciente_relacion`). La API crea el vínculo inverso en la ficha de F, sin esas marcas.
+ * (F) de P: en la ficha de Ana, Mateo figura como «Hijo/a». Las marcas se ven desde los dos lados
+ * (contrato/pacientes.ts): `esTutorLegal`/`esResponsablePago` = «P es tutor legal de F», «P paga
+ * por F»; `familiarEsTutorLegal`/`familiarEsResponsablePago` = lo mismo al revés. Se marcan al
+ * crear el vínculo y se editan después desde cualquiera de las dos fichas.
  */
+
+type Marcas = Record<
+  'esTutorLegal' | 'esResponsablePago' | 'familiarEsTutorLegal' | 'familiarEsResponsablePago',
+  boolean
+>;
+
+const SIN_MARCAS: Marcas = {
+  esTutorLegal: false,
+  esResponsablePago: false,
+  familiarEsTutorLegal: false,
+  familiarEsResponsablePago: false,
+};
+
+/** Las cuatro casillas con los nombres de los dos lados: «Ana es tutora legal de Mateo». */
+function CasillasMarcas({
+  paciente,
+  familiar,
+  marcas,
+  onCambio,
+}: {
+  paciente: Pick<Paciente, 'nombres' | 'sexo'>;
+  familiar: { nombre: string; sexo: 'F' | 'M' | null };
+  marcas: Marcas;
+  onCambio: (m: Marcas) => void;
+}) {
+  const t = useTextos().pacientes;
+  const p = paciente.nombres;
+  const f = familiar.nombre;
+  const casilla = (clave: keyof Marcas, etiqueta: string) => (
+    <CasillaVerificacion
+      etiqueta={etiqueta}
+      marcada={marcas[clave]}
+      onCambio={(v) => onCambio({ ...marcas, [clave]: v })}
+    />
+  );
+  return (
+    <fieldset className="w-marcas">
+      <legend className="cn-campo__etiqueta">{t.familia.marcas}</legend>
+      <p className="w-secundario">{t.familia.marcasAyuda}</p>
+      {casilla('esTutorLegal', t.familia.tutor(p, f, paciente.sexo))}
+      {casilla('esResponsablePago', t.familia.responsable(p, f))}
+      {casilla('familiarEsTutorLegal', t.familia.tutor(f, p, familiar.sexo))}
+      {casilla('familiarEsResponsablePago', t.familia.responsable(f, p))}
+    </fieldset>
+  );
+}
+
+/**
+ * Selector de familiar: `GET /pacientes?q=…` con «Cargar más». Sin la propia ficha ni los ya
+ * vinculados; «Sin resultados» solo cuando no queda nada más por traer.
+ */
+function SelectorFamiliar({
+  paciente,
+  onElegir,
+  error,
+}: {
+  paciente: Paciente;
+  onElegir: (p: PacienteResumen) => void;
+  error: string | undefined;
+}) {
+  const t = useTextos().pacientes;
+  const [texto, setTexto] = useState('');
+  const busqueda = useBuscarFamiliar(texto);
+  const idResultados = useId();
+
+  // Ni el mismo paciente, ni quien ya está vinculado, ni pacientes inactivos.
+  const vinculados = new Set([paciente.id, ...paciente.relaciones.map((r) => r.familiar.id)]);
+  const candidatos = busqueda.resultados?.filter((p) => p.activo && !vinculados.has(p.id));
+
+  let estado: string;
+  if (busqueda.error) estado = mensajeDeError(busqueda.error);
+  else if (busqueda.buscando) estado = t.buscando;
+  else if (!candidatos) estado = t.familia.buscarAyuda;
+  else if (candidatos.length > 0) estado = '';
+  else if (busqueda.hayMas) estado = t.familia.yaVinculados;
+  else estado = t.familia.sinResultados(busqueda.q);
+
+  return (
+    <div className="w-campo-buscador">
+      <Campo
+        etiqueta={t.familia.buscar}
+        value={texto}
+        autoComplete="off"
+        onChange={(e) => setTexto(e.target.value)}
+        error={error}
+        aria-controls={candidatos?.length ? idResultados : undefined}
+      />
+      {estado ? (
+        <p className="w-secundario" role="status">
+          {estado}
+        </p>
+      ) : null}
+      {candidatos?.length ? (
+        <ul id={idResultados} className="w-familiar-resultados" aria-label={t.familia.resultados}>
+          {candidatos.map((p) => {
+            const nombre = nombreCompleto(p);
+            return (
+              <li key={p.id}>
+                <button
+                  type="button"
+                  className="w-familiar-opcion"
+                  aria-label={t.familia.elegir(nombre)}
+                  onClick={() => onElegir(p)}
+                >
+                  <Avatar nombre={nombre} tamano="sm" decorativo />
+                  <span className="w-familiar-elegido__texto">
+                    <strong>{nombre}</strong>
+                    <span className="w-secundario">{metaPaciente(t, p)}</span>
+                  </span>
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      ) : null}
+      {busqueda.hayMas && texto.trim().length >= MINIMO_BUSCADOR ? (
+        <div>
+          <Boton variante="secundario" cargando={busqueda.cargandoMas} onClick={busqueda.cargarMas}>
+            {t.familia.cargarMas}
+          </Boton>
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 function HojaAgregarFamiliar({
   paciente,
@@ -45,20 +172,13 @@ function HojaAgregarFamiliar({
   const idForm = useId();
   const nombre = nombreCompleto(paciente);
 
-  const [texto, setTexto] = useState('');
   const [familiar, setFamiliar] = useState<PacienteResumen | null>(null);
   const [tipo, setTipo] = useState<TipoRelacion | ''>('');
-  const [tutor, setTutor] = useState(false);
-  const [responsable, setResponsable] = useState(false);
+  const [marcas, setMarcas] = useState<Marcas>(SIN_MARCAS);
   const [errores, setErrores] = useState<{
     familiar?: string | undefined;
     tipo?: string | undefined;
   }>({});
-  const busqueda = useBuscarPacientes(texto, abierta && !familiar);
-
-  // Ni el mismo paciente ni quien ya está vinculado.
-  const vinculados = new Set([paciente.id, ...paciente.relaciones.map((r) => r.familiar.id)]);
-  const candidatos = busqueda.resultados?.filter((p) => !vinculados.has(p.id));
 
   const crear = useMutation({
     mutationFn: (datos: CrearRelacion) => api.pacientes.crearRelacion(paciente.id, datos),
@@ -80,12 +200,7 @@ function HojaAgregarFamiliar({
     if (!tipo) faltan.tipo = t.familia.faltaVinculo;
     setErrores(faltan);
     if (!familiar || !tipo) return;
-    const r = crearRelacionSchema.safeParse({
-      familiarId: familiar.id,
-      tipo,
-      esTutorLegal: tutor,
-      esResponsablePago: responsable,
-    });
+    const r = crearRelacionSchema.safeParse({ familiarId: familiar.id, tipo, ...marcas });
     if (!r.success) return;
     void unaVez(() => crear.mutateAsync(r.data).catch(() => undefined));
   }
@@ -118,45 +233,20 @@ function HojaAgregarFamiliar({
                 <strong>{nombreFamiliar}</strong>
                 <span className="w-secundario">{metaPaciente(t, familiar)}</span>
               </span>
-              <Boton
-                variante="fantasma"
-                onClick={() => {
-                  setFamiliar(null);
-                  setTexto('');
-                }}
-              >
+              <Boton variante="fantasma" onClick={() => setFamiliar(null)}>
                 {t.familia.cambiar}
               </Boton>
             </div>
           </div>
         ) : (
-          <div className="w-campo-buscador">
-            <span className="cn-campo__etiqueta" aria-hidden="true">
-              {t.familia.buscar}
-            </span>
-            <Buscador
-              valor={texto}
-              onCambio={setTexto}
-              etiqueta={t.familia.buscar}
-              resultados={candidatos?.map((p) => resultadoBuscador(t, p))}
-              onElegir={(r) => {
-                const elegido = candidatos?.find((p) => p.id === r.id);
-                if (elegido) {
-                  setFamiliar(elegido);
-                  setErrores((e) => ({ ...e, familiar: undefined }));
-                }
-              }}
-            />
-            {errores.familiar ? (
-              <p className="w-error-campo" role="alert">
-                {errores.familiar}
-              </p>
-            ) : (
-              <p className="w-secundario">
-                {busqueda.buscando ? t.buscando : t.familia.buscarAyuda}
-              </p>
-            )}
-          </div>
+          <SelectorFamiliar
+            paciente={paciente}
+            error={errores.familiar}
+            onElegir={(p) => {
+              setFamiliar(p);
+              setErrores((e) => ({ ...e, familiar: undefined }));
+            }}
+          />
         )}
         <Campo
           etiqueta={
@@ -175,20 +265,107 @@ function HojaAgregarFamiliar({
           error={errores.tipo}
           {...(familiar ? { ayuda: t.familia.espejo(nombreFamiliar) } : {})}
         />
-        <CasillaVerificacion
-          etiqueta={t.familia.tutor(nombre, nombreFamiliar || t.familia.elegido.toLowerCase())}
-          marcada={tutor}
-          onCambio={setTutor}
-        />
-        <CasillaVerificacion
-          etiqueta={t.familia.responsable(
-            nombre,
-            nombreFamiliar || t.familia.elegido.toLowerCase(),
-          )}
-          marcada={responsable}
-          onCambio={setResponsable}
-        />
+        {familiar ? (
+          <CasillasMarcas
+            paciente={paciente}
+            familiar={{ nombre: familiar.nombres, sexo: familiar.sexo }}
+            marcas={marcas}
+            onCambio={setMarcas}
+          />
+        ) : null}
         {crear.isError ? <MensajeError texto={mensajeDeError(crear.error)} /> : null}
+      </form>
+    </HojaInferior>
+  );
+}
+
+/** Editar las marcas de un vínculo (`PATCH /relaciones/:id`): manda solo lo que cambió. */
+function HojaMarcas({
+  paciente,
+  relacion,
+  onCerrar,
+  onGuardado,
+}: {
+  paciente: Paciente;
+  relacion: Relacion;
+  onCerrar: () => void;
+  onGuardado: () => void;
+}) {
+  const t = useTextos().pacientes;
+  const { api } = useSesionLista();
+  const actualizar = useActualizarPacientes();
+  const unaVez = useEnvioUnico();
+  const idForm = useId();
+  const original: Marcas = {
+    esTutorLegal: relacion.esTutorLegal,
+    esResponsablePago: relacion.esResponsablePago,
+    familiarEsTutorLegal: relacion.familiarEsTutorLegal,
+    familiarEsResponsablePago: relacion.familiarEsResponsablePago,
+  };
+  const [marcas, setMarcas] = useState<Marcas>(original);
+  const [sinCambios, setSinCambios] = useState(false);
+
+  const guardar = useMutation({
+    mutationFn: (datos: EditarRelacion) => api.pacientes.editarRelacion(relacion.id, datos),
+    onSuccess: (r) => {
+      actualizar.cambiarFicha(paciente.id, (p) => ({
+        ...p,
+        relaciones: p.relaciones.map((x) => (x.id === relacion.id ? r : x)),
+      }));
+      // El espejo cambió en la ficha del familiar: se vuelve a pedir al abrirla.
+      actualizar.olvidarFicha(r.familiar.id);
+      onGuardado();
+    },
+  });
+
+  function enviar(e: FormEvent) {
+    e.preventDefault();
+    const cambios: EditarRelacion = {};
+    for (const clave of Object.keys(original) as (keyof Marcas)[]) {
+      if (marcas[clave] !== original[clave]) cambios[clave] = marcas[clave];
+    }
+    if (Object.keys(cambios).length === 0) {
+      setSinCambios(true);
+      return;
+    }
+    setSinCambios(false);
+    void unaVez(() => guardar.mutateAsync(cambios).catch(() => undefined));
+  }
+
+  // El nombre de la relación es el completo; en las casillas alcanza con el primero.
+  const nombreFamiliar = relacion.familiar.nombre;
+  return (
+    <HojaInferior
+      abierta
+      titulo={t.familia.tituloMarcas(nombreFamiliar)}
+      onCerrar={onCerrar}
+      acciones={
+        <>
+          <Boton variante="secundario" onClick={onCerrar}>
+            {t.alta.cancelar}
+          </Boton>
+          <Boton type="submit" form={idForm} variante="primario" cargando={guardar.isPending}>
+            {t.familia.guardarMarcas}
+          </Boton>
+        </>
+      }
+    >
+      <form id={idForm} className="w-formulario" onSubmit={enviar} noValidate>
+        <CasillasMarcas
+          paciente={paciente}
+          familiar={{ nombre: nombreFamiliar, sexo: null }}
+          marcas={marcas}
+          onCambio={(m) => {
+            setMarcas(m);
+            setSinCambios(false);
+          }}
+        />
+        {sinCambios ? (
+          <p className="w-secundario" role="status">
+            {t.familia.sinCambios}
+          </p>
+        ) : null}
+        {guardar.isError ? <MensajeError texto={mensajeDeError(guardar.error)} /> : null}
       </form>
     </HojaInferior>
   );
@@ -197,10 +374,12 @@ function HojaAgregarFamiliar({
 function FilaVinculo({
   paciente,
   relacion,
+  onEditar,
   onQuitar,
 }: {
   paciente: Paciente;
   relacion: Relacion;
+  onEditar: (() => void) | null;
   onQuitar: (() => void) | null;
 }) {
   const t = useTextos().pacientes;
@@ -223,7 +402,7 @@ function FilaVinculo({
           </Chip>
           {relacion.esTutorLegal ? (
             <Chip tono="familia" icono="check">
-              {t.familia.tutorChip(paciente.nombres)}
+              {t.familia.tutorChip(paciente.nombres, paciente.sexo)}
             </Chip>
           ) : null}
           {relacion.esResponsablePago ? (
@@ -243,14 +422,27 @@ function FilaVinculo({
           ) : null}
         </span>
       </div>
-      {onQuitar ? (
-        <Boton
-          variante="fantasma"
-          aria-label={t.familia.quitarDe(nombreFamiliar)}
-          onClick={onQuitar}
-        >
-          {t.familia.quitar}
-        </Boton>
+      {onEditar || onQuitar ? (
+        <span className="w-botonera">
+          {onEditar ? (
+            <Boton
+              variante="fantasma"
+              aria-label={t.familia.editarMarcasDe(nombreFamiliar)}
+              onClick={onEditar}
+            >
+              {t.familia.editarMarcas}
+            </Boton>
+          ) : null}
+          {onQuitar ? (
+            <Boton
+              variante="fantasma"
+              aria-label={t.familia.quitarDe(nombreFamiliar)}
+              onClick={onQuitar}
+            >
+              {t.familia.quitar}
+            </Boton>
+          ) : null}
+        </span>
       ) : null}
     </li>
   );
@@ -269,6 +461,7 @@ export function GrupoFamiliar({
   const unaVez = useEnvioUnico();
   const idTitulo = useId();
   const [agregando, setAgregando] = useState(false);
+  const [editando, setEditando] = useState<Relacion | null>(null);
   const [quitando, setQuitando] = useState<Relacion | null>(null);
   const puedeEditar = puede('pacientes', 'editar') && paciente.activo;
 
@@ -306,6 +499,7 @@ export function GrupoFamiliar({
               key={r.id}
               paciente={paciente}
               relacion={r}
+              onEditar={puedeEditar ? () => setEditando(r) : null}
               onQuitar={
                 puedeEditar
                   ? () => {
@@ -326,6 +520,17 @@ export function GrupoFamiliar({
           onAgregado={() => {
             setAgregando(false);
             avisar(t.familia.agregado);
+          }}
+        />
+      ) : null}
+      {puedeEditar && editando ? (
+        <HojaMarcas
+          paciente={paciente}
+          relacion={editando}
+          onCerrar={() => setEditando(null)}
+          onGuardado={() => {
+            setEditando(null);
+            avisar(t.familia.marcasGuardadas);
           }}
         />
       ) : null}

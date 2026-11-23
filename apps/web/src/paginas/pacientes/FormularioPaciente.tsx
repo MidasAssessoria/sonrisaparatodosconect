@@ -13,6 +13,8 @@ import { z } from 'zod';
 import { ErrorConecta, mensajeDeError } from '../../api/errores.js';
 import { MensajeError } from '../../componentes/estados.js';
 import { useTextos } from '../../i18n/idioma.js';
+import { useSesionLista } from '../../sesion/ProveedorSesion.js';
+import { diaEnZona } from '../../utilidades/fechas.js';
 import { CasillaVerificacion } from '../personal/componentes.js';
 
 /** Campos de texto del formulario, en el orden en que se muestran. */
@@ -164,6 +166,7 @@ export function FormularioPaciente({
   paciente,
   onEnviar,
   onSinCambios,
+  onCambio,
   error,
 }: {
   id: string;
@@ -171,11 +174,18 @@ export function FormularioPaciente({
   paciente?: Paciente;
   onEnviar: (datos: CrearPaciente | EditarPaciente) => void;
   onSinCambios?: () => void;
+  /** Cualquier cambio en los datos (p. ej. para ocultar el aviso de CI duplicada, ya viejo). */
+  onCambio?: () => void;
   /** Error del último envío (que no sea la CI duplicada, que se muestra aparte). */
   error?: unknown;
 }) {
   const t = useTextos().pacientes;
-  const [valores, setValores] = useState<ValoresPaciente>(() => valoresDe(paciente));
+  const { sesion } = useSesionLista();
+  const [valores, setValoresInterno] = useState<ValoresPaciente>(() => valoresDe(paciente));
+  const setValores = (cambio: (v: ValoresPaciente) => ValoresPaciente) => {
+    setValoresInterno(cambio);
+    onCambio?.();
+  };
   const [tocados, setTocados] = useState<Partial<Record<CampoTexto, boolean>>>({});
   const [errores, setErrores] = useState<Errores>({});
   const api = erroresDeApi(error);
@@ -245,7 +255,8 @@ export function FormularioPaciente({
         {texto('ci', t.campos.ci, { ayuda: t.campos.ciAyuda, inputMode: 'numeric' })}
         {texto('fechaNac', t.campos.fechaNac, {
           tipo: 'date',
-          max: new Date().toISOString().slice(0, 10),
+          // Hoy en la zona de la clínica (no en UTC: a la noche ya sería mañana).
+          max: diaEnZona(sesion.clinica.zonaHoraria),
         })}
       </div>
       <div className="w-form-paciente__fila">

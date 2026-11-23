@@ -1,16 +1,24 @@
-import { crearAlertaSchema, type EditarPaciente, type Paciente } from '@conecta/shared';
-import { AvisoExito, Boton, Campo, Chip, HojaInferior } from '@conecta/ui';
+import {
+  crearAlertaSchema,
+  TIPOS_ALERTA,
+  type AlertaManual,
+  type EditarPaciente,
+  type Paciente,
+  type TipoAlerta,
+} from '@conecta/shared';
+import { AvisoExito, Boton, Campo, Chip, HojaInferior, type Tono } from '@conecta/ui';
 import { useMutation } from '@tanstack/react-query';
-import { useId, useState, type FormEvent, type ReactNode } from 'react';
+import { useId, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { useNavigate } from 'react-router';
+import type { CrearAlerta } from '../../api/cliente.js';
 import { ErrorCiDuplicada, mensajeDeError } from '../../api/errores.js';
 import { MensajeError } from '../../componentes/estados.js';
 import { useEnvioUnico } from '../../componentes/useEnvioUnico.js';
 import { useTextos } from '../../i18n/idioma.js';
 import { useSesionLista } from '../../sesion/ProveedorSesion.js';
 import { formatoFecha, formatoFechaHora } from '../../utilidades/fechas.js';
-import { HojaConMotivo } from '../personal/componentes.js';
-import { AvisoCiDuplicada } from './AvisoCiDuplicada.js';
+import { HojaConMotivo, Segmento } from '../personal/componentes.js';
+import { AvisoCiDuplicada, enviarConfirmando } from './AvisoCiDuplicada.js';
 import { useActualizarPacientes } from './consultas.js';
 import { formatoDia, nombreCompleto, textoCi, textoTelefono } from './formato.js';
 import { FormularioPaciente } from './FormularioPaciente.js';
@@ -63,7 +71,8 @@ function HojaEditar({
   const actualizar = useActualizarPacientes();
   const unaVez = useEnvioUnico();
   const idForm = useId();
-  const [ultimo, setUltimo] = useState<EditarPaciente | null>(null);
+  /** El próximo envío del formulario va con `confirmarCiDuplicada` («Guardar igual»). */
+  const confirmar = useRef(false);
   const [sinCambios, setSinCambios] = useState(false);
 
   const editar = useMutation({
@@ -74,7 +83,6 @@ function HojaEditar({
     },
   });
   const enviar = (d: EditarPaciente) => {
-    setUltimo(d);
     setSinCambios(false);
     void unaVez(() => editar.mutateAsync(d).catch(() => undefined));
   };
@@ -108,9 +116,13 @@ function HojaEditar({
             paciente={paciente}
             onEnviar={(d) => {
               editar.reset();
-              enviar(d);
+              enviar(confirmar.current ? { ...d, confirmarCiDuplicada: true } : d);
             }}
             onSinCambios={() => setSinCambios(true)}
+            // Lo que se cambie después del 409 deja viejo el aviso: se oculta.
+            onCambio={() => {
+              if (editar.error instanceof ErrorCiDuplicada) editar.reset();
+            }}
             error={duplicada ? undefined : (editar.error ?? undefined)}
           />
           {sinCambios ? (
@@ -118,15 +130,15 @@ function HojaEditar({
               {t.datos.sinCambios}
             </p>
           ) : null}
-          {duplicada && ultimo ? (
+          {duplicada ? (
             <AvisoCiDuplicada
-              existente={duplicada.existente}
+              error={duplicada}
               guardando={editar.isPending}
-              onAbrir={() => {
+              onAbrir={(id) => {
                 cerrar();
-                void navegar(`/pacientes/${duplicada.existente.id}`);
+                void navegar(`/pacientes/${id}`);
               }}
-              onGuardarIgual={() => enviar({ ...ultimo, confirmarCiDuplicada: true })}
+              onGuardarIgual={() => enviarConfirmando(idForm, confirmar)}
             />
           ) : null}
         </>
@@ -285,21 +297,96 @@ function NotaInterna({ paciente, avisar }: { paciente: Paciente; avisar: Avisar 
 
 /* ---------- Alertas manuales ---------- */
 
-function Alertas({ paciente, avisar }: { paciente: Paciente; avisar: Avisar }) {
+/** Tono de una alerta según su tipo (README: alergias en coral, condiciones en sol). */
+function chipTipoAlerta(tipo: TipoAlerta): { tono: Tono; icono: 'alerta' | 'info' } {
+  return tipo === 'alergia'
+    ? { tono: 'atencion', icono: 'alerta' }
+    : { tono: 'progreso', icono: 'info' };
+}
+
+/** Una alerta con su propio candado de doble envío: tocar otra fila no se pierde. */
+function FilaAlerta({
+  paciente,
+  alerta: a,
+  puedeEditar,
+}: {
+  paciente: Paciente;
+  alerta: AlertaManual;
+  puedeEditar: boolean;
+}) {
   const t = useTextos().pacientes;
-  const { api, puede, sesion } = useSesionLista();
+  const { api, sesion } = useSesionLista();
   const actualizar = useActualizarPacientes();
   const unaVez = useEnvioUnico();
+  const cambiar = useMutation({
+    mutationFn: (activa: boolean) => api.pacientes.editarAlerta(a.id, { activa }),
+    onSuccess: (alerta) => {
+      actualizar.cambiarFicha(paciente.id, (p) => {
+        const alertas = p.alertas.map((x) => (x.id === alerta.id ? alerta : x));
+        return { ...p, alertas, conAlerta: alertas.some((x) => x.activa) };
+      });
+    },
+  });
+  const tipo = chipTipoAlerta(a.tipo);
+  return (
+    <li className="w-lista-ficha__item w-alerta-fila">
+      <div className="w-lista-ficha__cuerpo">
+        <p className="w-lista-ficha__texto">{a.texto}</p>
+        <p className="w-secundario">
+          {t.alertas.cargadaPor(
+            formatoFechaHora(a.creadaEn, sesion.clinica.zonaHoraria),
+            a.creadaPor,
+          )}
+        </p>
+        {cambiar.isError ? <MensajeError texto={mensajeDeError(cambiar.error)} /> : null}
+      </div>
+      <span className="w-chips">
+        {a.activa ? (
+          <Chip tono={tipo.tono} icono={tipo.icono}>
+            {t.alertas.tipos[a.tipo]}
+          </Chip>
+        ) : (
+          <>
+            <Chip tono="neutro" icono={tipo.icono}>
+              {t.alertas.tipos[a.tipo]}
+            </Chip>
+            <Chip tono="neutro" icono="cerrar">
+              {t.alertas.inactiva}
+            </Chip>
+          </>
+        )}
+      </span>
+      {puedeEditar ? (
+        <Boton
+          variante="fantasma"
+          aria-label={a.activa ? t.alertas.desactivarDe(a.texto) : t.alertas.activarDe(a.texto)}
+          cargando={cambiar.isPending}
+          onClick={() => void unaVez(() => cambiar.mutateAsync(!a.activa).catch(() => undefined))}
+        >
+          {a.activa ? t.alertas.desactivar : t.alertas.activar}
+        </Boton>
+      ) : null}
+    </li>
+  );
+}
+
+function Alertas({ paciente, avisar }: { paciente: Paciente; avisar: Avisar }) {
+  const t = useTextos().pacientes;
+  const { api, puede } = useSesionLista();
+  const actualizar = useActualizarPacientes();
+  const unaVez = useEnvioUnico();
+  const [tipo, setTipo] = useState<TipoAlerta | ''>('');
   const [texto, setTexto] = useState('');
-  const [errorTexto, setErrorTexto] = useState<string | null>(null);
+  const [errores, setErrores] = useState<{ tipo?: string | undefined; texto?: string | undefined }>(
+    {},
+  );
   const veClinica = puede('ficha_clinica', 'ver');
   const puedeEditar = puede('ficha_clinica', 'editar') && paciente.activo;
   // Sin acceso clínico (recepción) se ven solo las activas: son las que importan en el mostrador.
   const visibles = veClinica ? paciente.alertas : paciente.alertas.filter((a) => a.activa);
 
   const crear = useMutation({
-    mutationFn: (textoAlerta: string) =>
-      api.pacientes.crearAlerta(paciente.id, { texto: textoAlerta }),
+    mutationFn: (datos: CrearAlerta) => api.pacientes.crearAlerta(paciente.id, datos),
     onSuccess: (alerta) => {
       actualizar.cambiarFicha(paciente.id, (p) => ({
         ...p,
@@ -307,29 +394,26 @@ function Alertas({ paciente, avisar }: { paciente: Paciente; avisar: Avisar }) {
         conAlerta: p.conAlerta || alerta.activa,
       }));
       setTexto('');
+      setTipo('');
       avisar(t.alertas.agregada);
-    },
-  });
-  const cambiar = useMutation({
-    mutationFn: ({ id, activa }: { id: string; activa: boolean }) =>
-      api.pacientes.editarAlerta(id, { activa }),
-    onSuccess: (_, { id, activa }) => {
-      actualizar.cambiarFicha(paciente.id, (p) => {
-        const alertas = p.alertas.map((a) => (a.id === id ? { ...a, activa } : a));
-        return { ...p, alertas, conAlerta: alertas.some((a) => a.activa) };
-      });
     },
   });
 
   function agregar(e: FormEvent) {
     e.preventDefault();
-    const r = crearAlertaSchema.safeParse({ texto });
+    const r = crearAlertaSchema.safeParse({ tipo, texto });
     if (!r.success) {
-      setErrorTexto(r.error.issues[0]?.message ?? t.errores.revisar);
+      const faltan: typeof errores = {};
+      for (const issue of r.error.issues) {
+        const campo = issue.path[0];
+        if (campo === 'tipo') faltan.tipo ??= t.alertas.faltaTipo;
+        if (campo === 'texto') faltan.texto ??= issue.message;
+      }
+      setErrores(faltan);
       return;
     }
-    setErrorTexto(null);
-    void unaVez(() => crear.mutateAsync(r.data.texto).catch(() => undefined));
+    setErrores({});
+    void unaVez(() => crear.mutateAsync(r.data).catch(() => undefined));
   }
 
   return (
@@ -339,48 +423,31 @@ function Alertas({ paciente, avisar }: { paciente: Paciente; avisar: Avisar }) {
       ) : (
         <ul className="w-lista-ficha">
           {visibles.map((a) => (
-            <li key={a.id} className="w-lista-ficha__item">
-              <div className="w-lista-ficha__cuerpo">
-                <p className="w-lista-ficha__texto">{a.texto}</p>
-                <p className="w-secundario">
-                  {t.alertas.cargadaPor(
-                    formatoFechaHora(a.creadaEn, sesion.clinica.zonaHoraria),
-                    a.creadaPor,
-                  )}
-                </p>
-              </div>
-              {a.activa ? (
-                <Chip tono="atencion" icono="alerta">
-                  {t.alertas.activa}
-                </Chip>
-              ) : (
-                <Chip tono="neutro" icono="cerrar">
-                  {t.alertas.inactiva}
-                </Chip>
-              )}
-              {puedeEditar ? (
-                <Boton
-                  variante="fantasma"
-                  aria-label={
-                    a.activa ? t.alertas.desactivarDe(a.texto) : t.alertas.activarDe(a.texto)
-                  }
-                  cargando={cambiar.isPending && cambiar.variables?.id === a.id}
-                  onClick={() =>
-                    void unaVez(() =>
-                      cambiar.mutateAsync({ id: a.id, activa: !a.activa }).catch(() => undefined),
-                    )
-                  }
-                >
-                  {a.activa ? t.alertas.desactivar : t.alertas.activar}
-                </Boton>
-              ) : null}
-            </li>
+            <FilaAlerta key={a.id} paciente={paciente} alerta={a} puedeEditar={puedeEditar} />
           ))}
         </ul>
       )}
-      {cambiar.isError ? <MensajeError texto={mensajeDeError(cambiar.error)} /> : null}
       {puedeEditar ? (
         <form className="w-formulario w-alta-alerta" onSubmit={agregar} noValidate>
+          <div className="w-campo-segmento">
+            <span className="cn-campo__etiqueta" aria-hidden="true">
+              {t.alertas.tipo}
+            </span>
+            <Segmento<TipoAlerta | ''>
+              etiqueta={t.alertas.tipo}
+              valor={tipo}
+              opciones={TIPOS_ALERTA.map((v) => ({ valor: v, texto: t.alertas.tipos[v] }))}
+              onCambio={(v) => {
+                setTipo(v);
+                setErrores((er) => ({ ...er, tipo: undefined }));
+              }}
+            />
+            {errores.tipo ? (
+              <p className="w-error-campo" role="alert">
+                {errores.tipo}
+              </p>
+            ) : null}
+          </div>
           <Campo
             etiqueta={t.alertas.nueva}
             ayuda={t.alertas.nuevaAyuda}
@@ -388,9 +455,9 @@ function Alertas({ paciente, avisar }: { paciente: Paciente; avisar: Avisar }) {
             value={texto}
             onChange={(e) => {
               setTexto(e.target.value);
-              if (errorTexto) setErrorTexto(null);
+              if (errores.texto) setErrores((er) => ({ ...er, texto: undefined }));
             }}
-            error={errorTexto}
+            error={errores.texto}
           />
           {crear.isError ? <MensajeError texto={mensajeDeError(crear.error)} /> : null}
           <div>

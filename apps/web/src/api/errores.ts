@@ -39,13 +39,14 @@ export class ErrorConecta extends Error {
 }
 
 /**
- * 409 por CI duplicada al guardar un paciente (contrato/pacientes.ts): trae el paciente que ya
- * tiene esa cédula. No bloquea: para guardar igual se reenvía con `confirmarCiDuplicada: true`.
+ * 409 por CI duplicada al guardar un paciente (contrato/pacientes.ts). No bloquea: para guardar
+ * igual se reenvía con `confirmarCiDuplicada: true`. `existente` es el paciente que ya tiene esa
+ * cédula, o `null` si quien pide no tiene `pacientes:ver` (la API entonces manda solo el mensaje).
  */
 export class ErrorCiDuplicada extends ErrorConecta {
-  readonly existente: PacienteResumen;
+  readonly existente: PacienteResumen | null;
 
-  constructor(mensaje: string, existente: PacienteResumen, detalles: DetalleCampo[] = []) {
+  constructor(mensaje: string, existente: PacienteResumen | null, detalles: DetalleCampo[] = []) {
     super('conflicto', mensaje, { estado: 409, detalles });
     this.name = 'ErrorCiDuplicada';
     this.existente = existente;

@@ -420,6 +420,50 @@ describe('cliente de API: pacientes', () => {
     expect(error).not.toBeInstanceOf(ErrorCiDuplicada);
   });
 
+  it('el 409 por CI duplicada sin `existente` (sin pacientes:ver) llega tipado, solo con el mensaje', async () => {
+    const f = crearFetchFalso({
+      'POST /pacientes': {
+        estado: 409,
+        cuerpo: {
+          codigo: 'conflicto',
+          mensaje: 'Esa cédula ya está cargada en otro paciente.',
+          detalles: [{ campo: 'ci', mensaje: 'Esa cédula ya la tiene otro paciente.' }],
+        },
+      },
+    });
+    const { api } = cliente(f.fetch);
+    const error = await api.pacientes
+      .crear({ nombres: 'Rosa', ci: '4123456' })
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ErrorCiDuplicada);
+    expect((error as ErrorCiDuplicada).existente).toBeNull();
+    expect((error as ErrorCiDuplicada).message).toBe(
+      'Esa cédula ya está cargada en otro paciente.',
+    );
+  });
+
+  it('editar las marcas de un vínculo: PATCH /relaciones/:id y responde la relación', async () => {
+    const relacion = {
+      id: IDS_PACIENTES.relacion,
+      familiar: { id: IDS_PACIENTES.mateo, nombre: 'Mateo Giménez', edad: 7 },
+      tipo: 'hijo',
+      esTutorLegal: true,
+      esResponsablePago: false,
+      familiarEsTutorLegal: false,
+      familiarEsResponsablePago: true,
+    };
+    const f = crearFetchFalso({ 'PATCH /relaciones/:id': { cuerpo: relacion } });
+    const { api } = cliente(f.fetch);
+    expect(
+      await api.pacientes.editarRelacion(IDS_PACIENTES.relacion, {
+        familiarEsResponsablePago: true,
+      }),
+    ).toEqual(relacion);
+    expect(f.pedidos[0]?.metodo).toBe('PATCH');
+    expect(f.pedidos[0]?.url.pathname).toBe(`/api/v1/relaciones/${IDS_PACIENTES.relacion}`);
+    expect(f.pedidos[0]?.cuerpo).toEqual({ familiarEsResponsablePago: true });
+  });
+
   it('la búsqueda viaja tal como se escribió y el buscador devuelve la lista', async () => {
     const f = crearFetchFalso({
       'GET /pacientes': { cuerpo: { items: [resumenDe()], siguienteCursor: null } },

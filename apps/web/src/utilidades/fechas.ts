@@ -123,6 +123,15 @@ export function formatoFechaHora(
   return `${formatoFecha(iso, zona, ahora)} · ${formatoHora(iso, zona)}`;
 }
 
+/**
+ * Día del calendario de la zona («2026-11-23») en un instante. No es `toISOString()`, que da el día
+ * en UTC: entre las 21:00 y las 24:00 de Asunción ya sería mañana.
+ */
+export function diaEnZona(zona: string = ZONA_PREDETERMINADA, ahora: Date = new Date()): string {
+  const p = partes(ahora, zona, { year: 'numeric', month: '2-digit', day: '2-digit' });
+  return `${p['year']}-${p['month']}-${p['day']}`;
+}
+
 function componentes(dia: string): [number, number, number] {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dia);
   if (!m) throw new RangeError(`Día inválido: ${dia}`);
