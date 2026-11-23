@@ -1,6 +1,6 @@
 /**
  * Cada regla de `RESTRICCIONES_PACIENTES` y cada restricción real de las tablas de pacientes
- * (0019–0022) tiene su respuesta del contrato, con un mensaje en voseo que dice qué hacer y sin
+ * (0019–0027) tiene su respuesta del contrato, con un mensaje en voseo que dice qué hacer y sin
  * detalles internos.
  */
 import { RESTRICCIONES_PACIENTES } from '@conecta/db';
@@ -69,6 +69,7 @@ describe('errores de pacientes', () => {
       ['23514', 'paciente_relacion_consigo_mismo', 400],
       ['23514', 'paciente_relacion_motivo_baja_check', 400],
       ['23514', 'paciente_alerta_texto_check', 400],
+      ['23514', 'paciente_alerta_tipo_check', 400],
       ['23514', 'paciente_nota_texto_check', 400],
       ['23505', 'paciente_relacion_par_activo', 409],
       ['23503', 'paciente_relacion_paciente_fkey', 404],
@@ -119,5 +120,48 @@ describe('errores de pacientes', () => {
     expect(otro.cuerpo.mensaje).toBe(
       'El vínculo no coincide con el sexo cargado del familiar. Revisá el vínculo o el sexo cargado.',
     );
+  });
+
+  it('cambio de sexo que choca con un vínculo cargado a mano: campo sexo, repite solo el vínculo', () => {
+    const madre = traducirError(
+      errorPg(
+        '23514',
+        'relacion_tipo_sexo',
+        'Este paciente figura como madre en su grupo familiar y no coincide con el sexo nuevo: quitá ese vínculo y cargalo de nuevo, o revisá el sexo.',
+      ),
+    );
+    expect(madre.estado).toBe(400);
+    expect(madre.cuerpo).toEqual({
+      codigo: 'datos_invalidos',
+      mensaje:
+        'Este paciente figura como madre en su grupo familiar y el sexo nuevo no coincide. Quitá ese vínculo y cargalo de nuevo, o revisá el sexo.',
+      detalles: [{ campo: 'sexo', mensaje: 'No coincide con su grupo familiar.' }],
+    });
+    const padre = traducirError(
+      errorPg('23514', 'relacion_tipo_sexo', 'Este paciente figura como padre en su grupo'),
+    );
+    expect(padre.cuerpo.mensaje).toMatch(/^Este paciente figura como padre /);
+    expect(padre.cuerpo.detalles).toEqual([
+      { campo: 'sexo', mensaje: 'No coincide con su grupo familiar.' },
+    ]);
+  });
+
+  it('los mensajes nuevos de 0023–0027 dicen qué hacer, en voseo', () => {
+    const casos: [string, string, RegExp][] = [
+      ['42501', 'ficha_clinica_sin_permiso', /verla y editarla.*Pedíselo/],
+      ['23514', 'relacion_marca_un_sentido', /marcá quién es tutor/],
+      ['22023', 'cursor_invalido', /Volvé a cargarla desde el principio/],
+      ['23514', 'paciente_alerta_tipo_check', /Elegí el tipo de alerta: alergia o condición/],
+    ];
+    for (const [codigoPg, restriccion, mensaje] of casos) {
+      const t = traducirError(errorPg(codigoPg, restriccion));
+      expect(t.cuerpo.mensaje, restriccion).toMatch(mensaje);
+    }
+    expect(traducirError(errorPg('22023', 'cursor_invalido')).cuerpo.detalles).toEqual([
+      { campo: 'cursor', mensaje: 'Volvé a cargar la lista desde el principio.' },
+    ]);
+    expect(traducirError(errorPg('23514', 'paciente_alerta_tipo_check')).cuerpo.detalles).toEqual([
+      { campo: 'tipo', mensaje: 'Alergia o condición.' },
+    ]);
   });
 });

@@ -3,7 +3,7 @@ import { errores, type ErrorApi } from '../error-api.js';
 
 /**
  * Mensajes para las restricciones de la base del Sprint 3 (pacientes, grupo familiar, alertas
- * manuales y nota interna; migraciones 0019–0022). Cada una con el código del contrato y un mensaje
+ * manuales y nota interna; migraciones 0019–0027). Cada una con el código del contrato y un mensaje
  * en voseo que dice qué hacer, sin detalles internos.
  *
  * La API valida antes casi todo (formato de CI, RUC, teléfono, largos, ids de otra clínica): estas
@@ -17,10 +17,24 @@ const campo = (nombre: string, mensaje: string, detalle = mensaje): ErrorApi =>
   errores.datosInvalidos(mensaje, [{ campo: nombre, mensaje: detalle }]);
 
 /**
- * `relacion_tipo_sexo`: la base dice qué vínculo chocó («El vínculo madre no coincide…»). La API
- * lo repite solo si es `madre` o `padre`; nada más del mensaje de la base llega al cliente.
+ * `relacion_tipo_sexo` sale por dos caminos y la base dice cuál (y qué vínculo chocó) en su mensaje.
+ * La API toma de ahí solo `madre` o `padre` y arma su propio texto; nada más del mensaje de la base
+ * llega al cliente:
+ *   - al cargar el vínculo («El vínculo madre no coincide…»): el tipo elegido no va con el sexo del
+ *     familiar → campo `tipo`;
+ *   - al cambiar el sexo de un paciente (0026: «Este paciente figura como madre…»): alguien lo cargó
+ *     a mano como madre o padre en un vínculo y el sexo nuevo no coincide → campo `sexo`. La base no
+ *     cambia sola un tipo que eligió una persona: hay que quitar el vínculo y cargarlo de nuevo.
  */
 function tipoSexo(pg: { message: string }): ErrorApi {
+  const porSexo = /figura como (madre|padre) /.exec(pg.message)?.[1];
+  if (porSexo) {
+    const mensaje =
+      porSexo === 'madre'
+        ? 'Este paciente figura como madre en su grupo familiar y el sexo nuevo no coincide. Quitá ese vínculo y cargalo de nuevo, o revisá el sexo.'
+        : 'Este paciente figura como padre en su grupo familiar y el sexo nuevo no coincide. Quitá ese vínculo y cargalo de nuevo, o revisá el sexo.';
+    return campo('sexo', mensaje, 'No coincide con su grupo familiar.');
+  }
   const tipo = /El vínculo (madre|padre) /.exec(pg.message)?.[1];
   const mensaje =
     tipo === 'madre'
@@ -40,9 +54,11 @@ export const MENSAJES_PACIENTES: Record<
     errores.sinPermiso(
       'Tu rol no tiene el permiso de Pacientes que hace falta para este cambio. Pedile acceso a quien administra la clínica.',
     ),
+  // Desde 0023 también falta `ficha_clinica:ver` (para escribir la nota, cargar o desactivar una
+  // alerta, o tocar una inactiva): el mensaje pide los dos.
   ficha_clinica_sin_permiso: () =>
     errores.sinPermiso(
-      'Las alertas y la nota interna son de la ficha clínica y tu rol no puede cambiarlas. Pedíselo a un odontólogo o pedile acceso a quien administra la clínica.',
+      'Las alertas y la nota interna son de la ficha clínica: para cambiarlas tu rol tiene que poder verla y editarla. Pedíselo a un odontólogo o pedile acceso a quien administra la clínica.',
     ),
   paciente_nace_activo: () =>
     errores.datosInvalidos('Un paciente nuevo se carga activo. Guardalo y desactivalo después.'),
@@ -64,7 +80,7 @@ export const MENSAJES_PACIENTES: Record<
     ),
   relacion_marca_un_sentido: () =>
     errores.datosInvalidos(
-      'Tutor legal y responsable de pago van en un solo sentido: si el familiar ya lo es de este paciente, quitáselo antes.',
+      'Tutor legal y responsable de pago van en un solo sentido: marcá quién es tutor (o quién paga) de quién, no los dos. Si querés pasar la marca al otro lado, quitala de este en el mismo cambio.',
     ),
   relacion_dada_de_baja: () =>
     errores.conflicto(
@@ -76,10 +92,11 @@ export const MENSAJES_PACIENTES: Record<
     ),
   alerta_no_encontrada: () =>
     errores.noEncontrado('No encontramos esa alerta. Recargá la ficha del paciente.'),
+  // Desde 0025 el cursor es opaco: uno que no se puede leer vino adulterado o cortado.
   cursor_invalido: () =>
     campo(
       'cursor',
-      'La lista de pacientes cambió mientras la recorrías. Volvé a cargarla desde el principio.',
+      'No pudimos seguir la lista de pacientes desde ese punto. Volvé a cargarla desde el principio.',
       'Volvé a cargar la lista desde el principio.',
     ),
   pacientes_limite: () =>
@@ -172,6 +189,12 @@ export const MENSAJES_PACIENTES_COLUMNAS: Record<string, () => ErrorApi> = {
     ),
 
   // paciente_alerta y paciente_nota
+  paciente_alerta_tipo_check: () =>
+    campo(
+      'tipo',
+      'Elegí el tipo de alerta: alergia o condición (embarazo, anticoagulantes, diabetes…).',
+      'Alergia o condición.',
+    ),
   paciente_alerta_texto_check: () =>
     campo(
       'texto',

@@ -472,12 +472,16 @@ describe('pacientes', () => {
           await prueba
             .pedir('post', `/pacientes/${id}/alertas`, {
               token: tOdontologo,
-              cuerpo: { texto: '  Alergia a la penicilina ' },
+              cuerpo: { tipo: 'alergia', texto: '  Alergia a la penicilina ' },
             })
             .expect(201)
         ).body,
       );
-      expect(creada).toMatchObject({ texto: 'Alergia a la penicilina', activa: true });
+      expect(creada).toMatchObject({
+        tipo: 'alergia',
+        texto: 'Alergia a la penicilina',
+        activa: true,
+      });
       expect(typeof creada.creadaPor).toBe('string');
       const segunda = segun(
         alertaManualSchema,
@@ -485,7 +489,7 @@ describe('pacientes', () => {
           await prueba
             .pedir('post', `/pacientes/${id}/alertas`, {
               token: tOdontologo,
-              cuerpo: { texto: 'Embarazo' },
+              cuerpo: { tipo: 'condicion', texto: 'Embarazo' },
             })
             .expect(201)
         ).body,
@@ -502,12 +506,17 @@ describe('pacientes', () => {
             .expect(200)
         ).body,
       );
-      expect(desactivada).toMatchObject({ id: segunda.id, activa: false, texto: 'Embarazo' });
+      expect(desactivada).toMatchObject({
+        id: segunda.id,
+        tipo: 'condicion',
+        activa: false,
+        texto: 'Embarazo',
+      });
 
       const clinica = await fichaApi(prueba, tOdontologo, id);
-      expect(clinica.alertas.map((x) => [x.texto, x.activa])).toEqual([
-        ['Alergia a la penicilina', true],
-        ['Embarazo', false],
+      expect(clinica.alertas.map((x) => [x.tipo, x.texto, x.activa])).toEqual([
+        ['alergia', 'Alergia a la penicilina', true],
+        ['condicion', 'Embarazo', false],
       ]);
       expect(clinica.conAlerta).toBe(true);
       expect((await fichaApi(prueba, tAsistente, id)).alertas).toHaveLength(2);
@@ -539,12 +548,25 @@ describe('pacientes', () => {
       expect(ficha).toMatchObject({ conAlerta: false, alertas: [] });
     });
 
+    it('sin tipo o con un tipo que no existe → 400 en el campo tipo', async () => {
+      const id = await paciente(prueba, a.clinicaId, { nombres: 'Sin tipo' });
+      for (const cuerpo of [{ texto: 'Alergia al látex' }, { tipo: 'medica', texto: 'Diabetes' }]) {
+        const r = await esperarError(
+          prueba.pedir('post', `/pacientes/${id}/alertas`, { token: tOdontologo, cuerpo }),
+          400,
+          'datos_invalidos',
+        );
+        expect((r.body as Detalles).detalles?.map((d) => d.campo)).toEqual(['tipo']);
+      }
+      expect((await fichaApi(prueba, tOdontologo, id)).alertas).toEqual([]);
+    });
+
     it('texto muy corto → 400; alerta o paciente que no existe → 404', async () => {
       const id = await paciente(prueba, a.clinicaId, { nombres: 'Corto' });
       await esperarError(
         prueba.pedir('post', `/pacientes/${id}/alertas`, {
           token: tOdontologo,
-          cuerpo: { texto: ' ab ' },
+          cuerpo: { tipo: 'alergia', texto: ' ab ' },
         }),
         400,
         'datos_invalidos',
@@ -552,7 +574,7 @@ describe('pacientes', () => {
       await esperarError(
         prueba.pedir('post', '/pacientes/00000000-0000-4000-8000-000000000002/alertas', {
           token: tOdontologo,
-          cuerpo: { texto: 'Alergia' },
+          cuerpo: { tipo: 'alergia', texto: 'Alergia' },
         }),
         404,
         'no_encontrado',
@@ -762,7 +784,8 @@ describe('pacientes', () => {
         'conflicto',
       );
       const eventos = (await eventosDe(prueba, a.clinicaId, id)).map((e) => e.accion);
-      expect(eventos).toEqual(['crear', 'anular', 'editar']);
+      // Cada respuesta con la ficha deja «ver»; los 409 no dejan nada.
+      expect(eventos).toEqual(['crear', 'anular', 'ver', 'editar', 'ver']);
     });
 
     it('sin motivo (o muy corto) → 400 y el paciente sigue activo', async () => {

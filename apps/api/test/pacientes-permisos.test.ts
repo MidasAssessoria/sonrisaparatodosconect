@@ -1,5 +1,5 @@
 /**
- * Pacientes (Sprint 3): matriz de permisos de las 11 rutas con los roles de sistema tal como los
+ * Pacientes (Sprint 3): matriz de permisos de las 12 rutas con los roles de sistema tal como los
  * crea la base (`app.crear_clinica`, 0015), y aislamiento entre clínicas (ids de otra clínica → 404
  * en todo; `clinica_id` del cuerpo ignorado).
  */
@@ -143,6 +143,17 @@ describe('pacientes: permisos y aislamiento', () => {
       pueden: ['dueno', 'odontologo', 'recepcion'],
     },
     {
+      ruta: 'PATCH /relaciones/:id',
+      metodo: 'patch',
+      preparar: async (c) => ({
+        ruta: `/relaciones/${await vinculo(prueba, c, await nuevo(c), await nuevo(c), 'hermano')}`,
+        cuerpo: { esResponsablePago: true },
+      }),
+      estadoOk: 200,
+      esquema: relacionSchema,
+      pueden: ['dueno', 'odontologo', 'recepcion'],
+    },
+    {
       ruta: 'DELETE /relaciones/:id',
       metodo: 'delete',
       preparar: async (c) => ({
@@ -157,7 +168,7 @@ describe('pacientes: permisos y aislamiento', () => {
       metodo: 'post',
       preparar: async (c) => ({
         ruta: `/pacientes/${await nuevo(c)}/alertas`,
-        cuerpo: { texto: 'Alergia al látex' },
+        cuerpo: { tipo: 'alergia', texto: 'Alergia al látex' },
       }),
       estadoOk: 201,
       esquema: alertaManualSchema,
@@ -176,12 +187,12 @@ describe('pacientes: permisos y aislamiento', () => {
     },
   ];
 
-  it('los casos cubren las 11 rutas de pacientes del contrato, con el permiso declarado', () => {
+  it('los casos cubren las 12 rutas de pacientes del contrato, con el permiso declarado', () => {
     const delContrato = RUTAS_API.filter((r) =>
       /^(GET|POST|PATCH|DELETE) \/(pacientes|buscar|relaciones|alertas)\b/.test(r),
     ).map((r) => r.split(' ').slice(0, 2).join(' '));
     expect(CASOS.map((c) => c.ruta).sort()).toEqual([...delContrato].sort());
-    expect(delContrato).toHaveLength(11);
+    expect(delContrato).toHaveLength(12);
   });
 
   for (const caso of CASOS) {
@@ -217,7 +228,7 @@ describe('pacientes: permisos y aislamiento', () => {
     await esperarError(
       prueba.pedir('post', `/pacientes/${id}/alertas`, {
         token: tokens.recepcion,
-        cuerpo: { texto: 'No debería' },
+        cuerpo: { tipo: 'condicion', texto: 'No debería' },
       }),
       403,
       'sin_permiso',
@@ -248,8 +259,9 @@ describe('pacientes: permisos y aislamiento', () => {
         ['post', `/pacientes/${deB}/reactivar`, undefined],
         ['post', `/pacientes/${deB}/relaciones`, { familiarId: propio, tipo: 'hermano' }],
         ['post', `/pacientes/${propio}/relaciones`, { familiarId: deB, tipo: 'hermano' }],
+        ['patch', `/relaciones/${relacionB}`, { esTutorLegal: true }],
         ['delete', `/relaciones/${relacionB}`, undefined],
-        ['post', `/pacientes/${deB}/alertas`, { texto: 'Desde otra clínica' }],
+        ['post', `/pacientes/${deB}/alertas`, { tipo: 'alergia', texto: 'Desde otra clínica' }],
         ['patch', `/alertas/${alertaB}`, { activa: false }],
       ];
       for (const [metodo, ruta, cuerpo] of pedidos) {
@@ -272,6 +284,7 @@ describe('pacientes: permisos y aislamiento', () => {
       });
       expect(await filaDe(prueba, b.clinicaId, 'paciente_relacion', relacionB)).toMatchObject({
         deleted_at: null,
+        es_tutor_legal: false,
       });
       expect(await filaDe(prueba, b.clinicaId, 'paciente_alerta', alertaB)).toMatchObject({
         activa: true,

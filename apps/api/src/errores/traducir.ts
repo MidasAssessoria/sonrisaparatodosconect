@@ -162,7 +162,7 @@ const MENSAJES_RESTRICCION: Record<string, (error: ErrorPostgres) => ErrorApi> =
   ...MENSAJES_PROFESIONALES,
   ...MENSAJES_CATALOGOS,
   ...MENSAJES_ARCHIVOS,
-  // Sprint 3: pacientes, grupo familiar, alertas manuales y nota interna (0019–0022).
+  // Sprint 3: pacientes, grupo familiar, alertas manuales y nota interna (0019–0027).
   ...MENSAJES_PACIENTES,
   ...MENSAJES_PACIENTES_COLUMNAS,
   sede_nombre_unico: () => errores.conflicto('Ya hay una sede con ese nombre. Elegí otro nombre.'),

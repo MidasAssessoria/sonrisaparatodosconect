@@ -8,12 +8,14 @@ import {
   crearRelacionSchema,
   editarAlertaSchema,
   editarPacienteSchema,
+  editarRelacionSchema,
   type AlertaManual,
   type Baja,
   type ConsultaPacientes,
   type CrearPaciente,
   type CrearRelacion,
   type EditarPaciente,
+  type EditarRelacion,
   type Paciente,
   type Relacion,
   type paginaPacientesSchema,
@@ -23,7 +25,7 @@ import type { z } from 'zod';
 import { Permiso } from '../contexto/acceso.js';
 import { Ctx, type ContextoPedido } from '../contexto/contexto-pedido.js';
 import { IdDeRuta, ValidarCon } from '../errores/validacion.js';
-import { PacientesService } from './pacientes.service.js';
+import { PacientesService, type CrearAlerta } from './pacientes.service.js';
 
 /** Datos opcionales donde la web puede mandar cadena vacía para «sin dato». */
 const CAMPOS_BORRABLES = [
@@ -84,13 +86,17 @@ export class PacientesController {
     return this.pacientes.crear(ctx, datos);
   }
 
+  /** Toda respuesta con la ficha completa queda en auditoría como `ver` (lo hace el servicio). */
   @Get(':id')
   @Permiso('pacientes', 'ver')
   obtener(@Ctx() ctx: ContextoPedido, @Param('id', IdDeRuta) id: string): Promise<Paciente> {
     return this.pacientes.obtener(ctx, id);
   }
 
-  /** `notaInterna` exige además `ficha_clinica:editar` (lo controla el servicio). */
+  /**
+   * Responde la ficha completa: exige además `pacientes:ver` (y `ficha_clinica:editar` y `ver` si
+   * trae `notaInterna`); lo controla el servicio.
+   */
   @Patch(':id')
   @Permiso('pacientes', 'editar')
   editar(
@@ -101,6 +107,7 @@ export class PacientesController {
     return this.pacientes.editar(ctx, id, datos);
   }
 
+  /** Responde la ficha completa: exige además `pacientes:ver` (lo controla el servicio). */
   @Post(':id/desactivar')
   @HttpCode(200)
   @Permiso('pacientes', 'anular')
@@ -112,6 +119,7 @@ export class PacientesController {
     return this.pacientes.desactivar(ctx, id, baja.motivo);
   }
 
+  /** Responde la ficha completa: exige además `pacientes:ver` (lo controla el servicio). */
   @Post(':id/reactivar')
   @HttpCode(200)
   @Permiso('pacientes', 'anular')
@@ -119,6 +127,7 @@ export class PacientesController {
     return this.pacientes.reactivar(ctx, id);
   }
 
+  /** Responde los datos del familiar: exige además `pacientes:ver` (lo controla el servicio). */
   @Post(':id/relaciones')
   @Permiso('pacientes', 'editar')
   crearRelacion(
@@ -134,9 +143,9 @@ export class PacientesController {
   crearAlerta(
     @Ctx() ctx: ContextoPedido,
     @Param('id', IdDeRuta) id: string,
-    @Body(new ValidarCon(crearAlertaSchema)) datos: { texto: string },
+    @Body(new ValidarCon(crearAlertaSchema)) datos: CrearAlerta,
   ): Promise<AlertaManual> {
-    return this.pacientes.crearAlerta(ctx, id, datos.texto);
+    return this.pacientes.crearAlerta(ctx, id, datos);
   }
 }
 
@@ -159,6 +168,20 @@ export class BuscarController {
 export class RelacionesController {
   constructor(private readonly pacientes: PacientesService) {}
 
+  /**
+   * Cambia las marcas del vínculo vistas desde el lado `:id`. Responde los datos del familiar:
+   * exige además `pacientes:ver` (lo controla el servicio).
+   */
+  @Patch(':id')
+  @Permiso('pacientes', 'editar')
+  editar(
+    @Ctx() ctx: ContextoPedido,
+    @Param('id', IdDeRuta) id: string,
+    @Body(new ValidarCon(editarRelacionSchema)) datos: EditarRelacion,
+  ): Promise<Relacion> {
+    return this.pacientes.editarRelacion(ctx, id, datos);
+  }
+
   /** Sin cuerpo: da de baja el vínculo y su espejo. */
   @Delete(':id')
   @HttpCode(204)
@@ -172,6 +195,7 @@ export class RelacionesController {
 export class AlertasController {
   constructor(private readonly pacientes: PacientesService) {}
 
+  /** Responde la alerta: exige poder verla (lo controla el servicio). */
   @Patch(':id')
   @Permiso('ficha_clinica', 'editar')
   cambiar(
