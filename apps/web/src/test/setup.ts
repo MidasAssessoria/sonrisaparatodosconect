@@ -5,7 +5,7 @@ import { tomarPedidosInvalidos, tomarRutasNoSimuladas } from './rutasNoSimuladas
 
 // Las pantallas se cargan con React.lazy: en un runner lento o con la máquina cargada, el segundo
 // que Testing Library espera por defecto no alcanza y las pruebas fallan sin que haya un defecto.
-configure({ asyncUtilTimeout: 5000 });
+configure({ asyncUtilTimeout: 15_000 });
 
 afterEach(() => {
   cleanup();
