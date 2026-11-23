@@ -69,6 +69,7 @@ export const RUTAS_API = [
   'POST /pacientes/:id/reactivar pacientes:anular',
   'GET /buscar pacientes:ver',
   'POST /pacientes/:id/relaciones pacientes:editar',
+  'PATCH /relaciones/:id pacientes:editar',
   'DELETE /relaciones/:id pacientes:editar',
   'POST /pacientes/:id/alertas ficha_clinica:editar',
   'PATCH /alertas/:id ficha_clinica:editar',

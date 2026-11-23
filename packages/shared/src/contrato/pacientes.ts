@@ -12,7 +12,13 @@ import { fechaHoraSchema, idSchema } from './comun.js';
  *   - `ficha_clinica:ver` → además ve la nota interna. `ficha_clinica:editar` → carga alertas
  *     manuales y la nota interna. Recepción no ve la nota interna pero sí las alertas activas
  *     (las necesita en el mostrador: alergias, embarazo…).
- *   - Abrir la ficha de un paciente (`GET /pacientes/:id`) queda en auditoría como `ver`.
+ *   - Toda respuesta que trae la ficha completa (`GET`, `PATCH`, desactivar y reactivar de
+ *     `/pacientes/:id`) queda en auditoría como `ver`, aunque el pedido no haya cambiado nada, y
+ *     exige además `pacientes:ver` (revisión de seguridad del Sprint 3: un `PATCH {}` devolvía la
+ *     ficha sin rastro).
+ *   - El 409 de CI duplicada trae `existente` solo si quien pide tiene `pacientes:ver`; si no,
+ *     solo el mensaje.
+ *   - Una alerta inactiva nunca se devuelve (ni su texto) a quien no tiene `ficha_clinica:ver`.
  *
  * Datos (decisiones por defecto mientras el cliente no responda P4 y P6, ver docs/plan.md §7):
  *   - CI: solo dígitos; puede faltar (niños). Una CI que ya existe en la clínica NO bloquea: la API
@@ -79,8 +85,17 @@ const telefonoSchema = z.string().transform((v, ctx) => {
 });
 const fechaSchema = z.iso.date();
 
+/**
+ * Tipo de alerta manual: decide cómo se muestra (README del design system: alergias en coral,
+ * condiciones —embarazo, anticoagulantes, diabetes…— en sol) y alimenta el cruce de alergias de las
+ * recetas (Sprint 11).
+ */
+export const TIPOS_ALERTA = ['alergia', 'condicion'] as const;
+export type TipoAlerta = (typeof TIPOS_ALERTA)[number];
+
 export const alertaManualSchema = z.object({
   id: idSchema,
+  tipo: z.enum(TIPOS_ALERTA),
   texto: z.string(),
   activa: z.boolean(),
   creadaEn: fechaHoraSchema,
@@ -238,8 +253,24 @@ export const crearRelacionSchema = z.object({
   tipo: z.enum(TIPOS_RELACION),
   esTutorLegal: z.boolean().default(false),
   esResponsablePago: z.boolean().default(false),
+  /** Marcas del otro lado: desde la ficha de Mateo se puede marcar que Ana es su tutora. */
+  familiarEsTutorLegal: z.boolean().default(false),
+  familiarEsResponsablePago: z.boolean().default(false),
 });
 export type CrearRelacion = z.infer<typeof crearRelacionSchema>;
+
+/**
+ * `PATCH /api/v1/relaciones/:id` — `pacientes:editar`. Cambia las marcas de un vínculo activo, vistas
+ * desde el lado `:id` (el id de cualquiera de los dos lados). El tipo no se edita: se quita el
+ * vínculo y se carga otro. Responde 200 con la `Relacion` vista desde ese lado.
+ */
+export const editarRelacionSchema = z.object({
+  esTutorLegal: z.boolean().optional(),
+  esResponsablePago: z.boolean().optional(),
+  familiarEsTutorLegal: z.boolean().optional(),
+  familiarEsResponsablePago: z.boolean().optional(),
+});
+export type EditarRelacion = z.infer<typeof editarRelacionSchema>;
 
 /**
  * `POST /api/v1/pacientes/:id/alertas` — `ficha_clinica:editar`. Responde 201 con la alerta.
@@ -247,6 +278,7 @@ export type CrearRelacion = z.infer<typeof crearRelacionSchema>;
  * Responde 200 con la `AlertaManual`. Quien no tiene `ficha_clinica:ver` recibe solo las activas.
  */
 export const crearAlertaSchema = z.object({
+  tipo: z.enum(TIPOS_ALERTA),
   texto: z.string().trim().min(3, 'Escribí la alerta.').max(200),
 });
 export const editarAlertaSchema = z.object({ activa: z.boolean() });
