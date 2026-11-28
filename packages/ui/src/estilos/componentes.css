@@ -1744,3 +1744,99 @@ span.cn-superior__perfil {
 span.cn-superior__perfil:hover {
   background: transparent;
 }
+
+/* ---------- Firma manuscrita ---------- */
+.cn-firma {
+  display: flex;
+  flex-direction: column;
+  gap: var(--espacio-2);
+  min-width: 0;
+}
+.cn-firma__etiqueta {
+  font: 600 14px/20px var(--font-sans);
+  color: var(--tinta);
+}
+.cn-firma__ayuda {
+  margin: 0;
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--tinta-suave);
+}
+.cn-firma__caja {
+  position: relative;
+  width: 100%;
+  border: 2px dashed var(--borde-control);
+  border-radius: var(--radio-control);
+  background: var(--blanco);
+  overflow: hidden;
+}
+.cn-firma.is-error .cn-firma__caja {
+  border-color: var(--coral-texto);
+  border-style: solid;
+}
+.cn-firma.is-deshabilitada .cn-firma__caja {
+  background: var(--fondo-suave);
+}
+/* Al firmar en la tablet la página no se mueve ni se selecciona texto. */
+.cn-firma__lienzo {
+  display: block;
+  width: 100%;
+  height: 100%;
+  color: var(--tinta);
+  touch-action: none;
+  overscroll-behavior: contain;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  cursor: crosshair;
+}
+.cn-firma__linea {
+  position: absolute;
+  left: 5%;
+  right: 5%;
+  top: 72%;
+  border-bottom: 1.5px solid var(--borde);
+  pointer-events: none;
+}
+.cn-firma__pie {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--espacio-2);
+}
+.cn-firma__estado {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font: 600 14px/20px var(--font-sans);
+  color: var(--tinta-suave);
+}
+.cn-firma__estado--lista {
+  color: var(--turquesa-texto);
+}
+.cn-firma__acciones {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--espacio-2);
+}
+.cn-firma__teclado {
+  display: flex;
+  flex-direction: column;
+  gap: var(--espacio-2);
+  padding: var(--espacio-3);
+  border-radius: var(--radio-control);
+  background: var(--fondo-suave);
+}
+.cn-firma__error {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font: 600 14px/20px var(--font-sans);
+  color: var(--coral-texto);
+}
+.cn-alerta__origen {
+  font-weight: 500;
+}

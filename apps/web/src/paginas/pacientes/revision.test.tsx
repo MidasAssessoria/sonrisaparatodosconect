@@ -232,7 +232,7 @@ describe('ficha ya cargada con una recarga que falla (defecto 5)', () => {
     let fallar = false;
     const relacionAna: Relacion = {
       id: IDS_PACIENTES.relacion,
-      familiar: { id: MATEO.id, nombre: 'Mateo Giménez', edad: 7 },
+      familiar: { id: MATEO.id, nombre: 'Mateo Giménez', edad: 7, ci: null },
       tipo: 'hijo',
       esTutorLegal: true,
       esResponsablePago: false,
@@ -245,7 +245,7 @@ describe('ficha ya cargada con una recarga que falla (defecto 5)', () => {
         {
           ...relacionAna,
           id: uuid(722),
-          familiar: { id: IDS_PACIENTES.ana, nombre: 'Ana Giménez', edad: 34 },
+          familiar: { id: IDS_PACIENTES.ana, nombre: 'Ana Giménez', edad: 34, ci: '4123456' },
           tipo: 'madre',
         },
       ],
@@ -345,7 +345,7 @@ describe('caché después de cambiar una ficha (defecto 6)', () => {
       relaciones: [
         {
           id: IDS_PACIENTES.relacion,
-          familiar: { id: MATEO.id, nombre: 'Mateo Giménez', edad: 7 },
+          familiar: { id: MATEO.id, nombre: 'Mateo Giménez', edad: 7, ci: null },
           tipo: 'hijo',
           esTutorLegal: true,
           esResponsablePago: false,
@@ -364,6 +364,7 @@ describe('caché después de cambiar una ficha (defecto 6)', () => {
               id: ana.id,
               nombre: `${ana.nombres} ${ana.apellidos ?? ''}`.trim(),
               edad: 34,
+              ci: ana.ci,
             },
             tipo: 'madre',
             esTutorLegal: false,
@@ -450,7 +451,7 @@ describe('selector de familiar con GET /pacientes (defecto 8)', () => {
       relaciones: [
         {
           id: IDS_PACIENTES.relacion,
-          familiar: { id: LUCIA.id, nombre: 'Lucía Benítez', edad: 38 },
+          familiar: { id: LUCIA.id, nombre: 'Lucía Benítez', edad: 38, ci: '3456789' },
           tipo: 'hermano',
           esTutorLegal: false,
           esResponsablePago: false,

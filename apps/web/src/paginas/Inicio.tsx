@@ -2,7 +2,7 @@ import { Boton, Chip, EncabezadoPagina, EstadoVacio } from '@conecta/ui';
 import { useNavigate } from 'react-router';
 import { RUTA_SEGURIDAD } from '../armazon/Armazon.js';
 import { useTextos } from '../i18n/idioma.js';
-import { MODULOS_WEB } from '../modulos.js';
+import { MODULOS_WEB, moduloVisible } from '../modulos.js';
 import { useSesionLista } from '../sesion/ProveedorSesion.js';
 import { infoEstadoSede } from './sedes/estadoSede.js';
 
@@ -16,7 +16,7 @@ export function Inicio() {
   const estadoSede = sede ? infoEstadoSede(sede.estado) : null;
   const primerNombre = sesion.usuario.nombre.split(/\s+/)[0] ?? sesion.usuario.nombre;
 
-  const accesos = MODULOS_WEB.filter((m) => m.id !== 'inicio' && puede(m.modulo, 'ver'));
+  const accesos = MODULOS_WEB.filter((m) => m.id !== 'inicio' && moduloVisible(m, puede));
   const textoAcceso: Record<string, string> = {
     sedes: t.inicio.accesoSedes,
     auditoria: t.inicio.accesoAuditoria,

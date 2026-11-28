@@ -1,0 +1,270 @@
+/*
+ * Anamnesis e historial. Mobile-first: el formulario se completa en la tablet, con controles de
+ * 48 px y zonas táctiles de 44 px como mínimo.
+ */
+
+/* ---------- Vista de una versión ---------- */
+.w-anam {
+  display: flex;
+  flex-direction: column;
+  gap: var(--espacio-4);
+}
+.w-anam__cabecera {
+  flex-wrap: wrap;
+  gap: var(--espacio-3);
+}
+.w-anam__titulo {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--espacio-2);
+}
+.w-anam__selector {
+  max-width: 420px;
+  margin-bottom: var(--espacio-4);
+}
+.w-anam-vista {
+  display: flex;
+  flex-direction: column;
+  gap: var(--espacio-6);
+  margin-top: var(--espacio-4);
+}
+.w-anam-bloque {
+  display: flex;
+  flex-direction: column;
+  gap: var(--espacio-3);
+}
+.w-anam-bloque__titulo {
+  margin: 0;
+  font: var(--tipo-cuerpo-fuerte);
+}
+.w-anam-respuestas {
+  display: flex;
+  flex-direction: column;
+  gap: var(--espacio-3);
+  margin: 0;
+}
+.w-anam-respuesta {
+  display: flex;
+  flex-direction: column;
+  gap: var(--espacio-1);
+  padding: var(--espacio-3);
+  border-radius: var(--radio-control);
+  background: var(--fondo-suave);
+}
+.w-anam-respuesta__pregunta {
+  color: var(--tinta-suave);
+}
+.w-anam-respuesta__valor,
+.w-anam-respuesta__detalle {
+  margin: 0;
+}
+.w-anam-respuesta__texto {
+  font: var(--tipo-cuerpo-fuerte);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.w-anam-firma__imagen {
+  display: block;
+  width: 100%;
+  max-width: 360px;
+  border: 1px solid var(--borde);
+  border-radius: var(--radio-control);
+  background: var(--blanco);
+}
+.w-anam-firma__fallo {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--espacio-2);
+}
+
+/* ---------- Formulario ---------- */
+.w-anam-formulario {
+  display: flex;
+  flex-direction: column;
+  gap: var(--espacio-6);
+}
+.w-anam-formulario__cabecera {
+  display: flex;
+  flex-direction: column;
+  gap: var(--espacio-2);
+}
+.w-anam-formulario__cabecera p {
+  margin: 0;
+}
+.w-anam-formulario__titulo {
+  margin: 0;
+  font: var(--tipo-titulo-seccion);
+}
+.w-anam-seccion {
+  display: flex;
+  flex-direction: column;
+  gap: var(--espacio-5);
+}
+.w-anam-pregunta {
+  display: flex;
+  flex-direction: column;
+  gap: var(--espacio-3);
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.w-anam-pregunta:focus {
+  outline: none;
+}
+.w-anam-pregunta:focus-visible {
+  outline: 3px solid var(--foco);
+  outline-offset: 4px;
+  border-radius: var(--radio-sm);
+}
+.w-anam-pregunta__texto {
+  padding: 0;
+  margin-bottom: var(--espacio-2);
+  font: var(--tipo-cuerpo-fuerte);
+}
+.w-anam-pregunta[aria-invalid='true'] .w-segmento,
+.w-anam-pregunta[aria-invalid='true'] .w-anam-opciones {
+  outline: 2px solid var(--coral-texto);
+  outline-offset: 4px;
+  border-radius: var(--radio-control);
+}
+.w-anam-opciones {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--espacio-2);
+}
+@media (min-width: 640px) {
+  .w-anam-opciones {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+.w-anam-pregunta .w-segmento,
+.w-anam-firmante .w-segmento {
+  margin-bottom: 0;
+}
+/* Sí / No grandes para el dedo. */
+.w-anam-pregunta .w-segmento__opcion {
+  min-width: 96px;
+  min-height: var(--control);
+  justify-content: center;
+}
+.w-anam-error {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+}
+.w-anam-firmante {
+  display: flex;
+  flex-direction: column;
+  gap: var(--espacio-3);
+}
+.w-anam-firmante p {
+  margin: 0;
+}
+.w-anam-declaracion {
+  min-height: var(--control);
+  font: var(--tipo-cuerpo-fuerte);
+}
+.w-anam-resumen:focus {
+  outline: none;
+}
+.w-anam-resumen__lista {
+  margin: var(--espacio-2) 0 0;
+  padding-left: var(--espacio-5);
+}
+.w-anam-resumen__lista a,
+.w-anam-enlace {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--toque-minimo);
+  color: var(--coral-texto);
+  font-weight: 600;
+}
+.w-anam-enlace {
+  color: var(--turquesa-texto);
+}
+.w-anam-formulario__acciones {
+  justify-content: flex-end;
+}
+@media (max-width: 767.98px) {
+  .w-anam-formulario__acciones {
+    flex-direction: column-reverse;
+    align-items: stretch;
+  }
+  .w-anam-formulario__acciones .cn-boton {
+    justify-content: center;
+  }
+}
+
+/* ---------- Historial ---------- */
+.w-historial {
+  list-style: none;
+  margin: var(--espacio-4) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.w-historial__evento {
+  position: relative;
+  display: flex;
+  gap: var(--espacio-3);
+  padding-bottom: var(--espacio-5);
+}
+/* Línea que une los eventos. */
+.w-historial__evento::before {
+  content: '';
+  position: absolute;
+  left: 7px;
+  top: 18px;
+  bottom: 0;
+  border-left: 2px solid var(--borde);
+}
+.w-historial__evento:last-child::before {
+  display: none;
+}
+.w-historial__punto {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin-top: 4px;
+  border-radius: 50%;
+  background: var(--turquesa);
+  border: 3px solid var(--blanco);
+  box-shadow: 0 0 0 1px var(--borde-control);
+}
+.w-historial__cuerpo {
+  display: flex;
+  flex-direction: column;
+  gap: var(--espacio-1);
+  min-width: 0;
+}
+.w-historial__cuerpo p {
+  margin: 0;
+}
+.w-historial__cabecera {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--espacio-2);
+}
+.w-historial__fecha {
+  font: var(--tipo-cuerpo-fuerte);
+}
+.w-historial__texto {
+  overflow-wrap: anywhere;
+}
+.w-historial__enlace {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--toque-minimo);
+  color: var(--turquesa-texto);
+  font: var(--tipo-cuerpo-fuerte);
+}
+.w-historial__enlace:focus-visible {
+  outline: 3px solid var(--foco);
+  outline-offset: 2px;
+  border-radius: var(--radio-sm);
+}

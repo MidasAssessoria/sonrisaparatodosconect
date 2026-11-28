@@ -57,6 +57,9 @@ const ListaPacientes = lazy(() =>
 const FichaPaciente = lazy(() =>
   import('./paginas/pacientes/FichaPaciente.js').then((m) => ({ default: m.FichaPaciente })),
 );
+const Cuestionario = lazy(() =>
+  import('./paginas/cuestionario/Cuestionario.js').then((m) => ({ default: m.Cuestionario })),
+);
 const Tratamientos = lazy(() =>
   import('./paginas/catalogos/Tratamientos.js').then((m) => ({ default: m.Tratamientos })),
 );
@@ -274,6 +277,14 @@ export function Rutas() {
                 element={
                   <RutaModulo modulo="configuracion">
                     <Tratamientos />
+                  </RutaModulo>
+                }
+              />
+              <Route
+                path="/cuestionario"
+                element={
+                  <RutaModulo modulo="configuracion" accion="editar">
+                    <Cuestionario />
                   </RutaModulo>
                 }
               />

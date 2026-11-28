@@ -1,12 +1,16 @@
 import {
   ACCIONES,
+  anamnesisSchema,
   MODULOS,
+  preguntaSchema,
   sesionSchema,
   type Accion,
+  type Anamnesis,
   type Modulo,
   type Paciente,
   type PacienteResumen,
   type Permiso,
+  type Pregunta,
   type Persona,
   type Profesional,
   type Rol,
@@ -599,9 +603,186 @@ export function pacienteDe(parcial: Partial<Paciente> = {}): Paciente {
     origen: 'recepcion',
     notaInterna: null,
     alertas: [],
+    alertasMedicas: [],
     relaciones: [],
     motivoBaja: null,
     creadoEn: '2026-11-02T13:00:00Z',
     ...parcial,
+  };
+}
+
+/* ── Anamnesis ────────────────────────────────────────────────────────────────────────────── */
+
+export { PNG_FIRMA } from './lienzo.js';
+export const URL_FIRMA = 'https://archivos.ejemplo.test/firma.png?firma=abc';
+
+/** Pregunta del catálogo con los valores por defecto del contrato. */
+export function preguntaDe(parcial: Partial<Pregunta> & Pick<Pregunta, 'codigo'>): Pregunta {
+  return preguntaSchema.parse({
+    seccion: 1,
+    orden: 0,
+    texto: 'Pregunta',
+    tipo: 'si_no',
+    ...parcial,
+  });
+}
+
+/** Catálogo chico con un ejemplo de cada tipo (sí/no, múltiple, texto, número, embarazo). */
+export const CATALOGO_PRUEBA: Pregunta[] = [
+  preguntaDe({
+    codigo: 'motivo',
+    seccion: 1,
+    orden: 0,
+    texto: '¿Cuál es el motivo de tu consulta?',
+    tipo: 'texto',
+    obligatoria: true,
+  }),
+  preguntaDe({
+    codigo: 'encias',
+    seccion: 1,
+    orden: 5,
+    texto: '¿Notás sangrado o inflamación de encías?',
+    tipo: 'multiple',
+    opciones: [
+      { valor: 'sangrado', etiqueta: 'Sangrado de encías', alerta: null },
+      { valor: 'inflamacion', etiqueta: 'Inflamación', alerta: null },
+    ],
+  }),
+  preguntaDe({ codigo: 'protesis', seccion: 2, orden: 0, texto: '¿Usás prótesis removible?' }),
+  preguntaDe({
+    codigo: 'cepillado',
+    seccion: 3,
+    orden: 0,
+    texto: '¿Cuántas veces por día te cepillás?',
+    tipo: 'numero',
+    unidad: 'veces',
+    minimo: 0,
+    maximo: 10,
+  }),
+  preguntaDe({
+    codigo: 'alergias',
+    seccion: 4,
+    orden: 0,
+    texto: '¿Tenés alergia a algún medicamento o material?',
+    tipo: 'multiple',
+    conDetalle: true,
+    opciones: [
+      {
+        valor: 'penicilina',
+        etiqueta: 'Penicilina',
+        alerta: {
+          tipo: 'alergia',
+          texto: 'Alergia a la penicilina',
+          gravedad: 'alta',
+          grupoAlergia: 'penicilinas',
+        },
+      },
+      {
+        valor: 'latex',
+        etiqueta: 'Látex',
+        alerta: {
+          tipo: 'alergia',
+          texto: 'Alergia al látex',
+          gravedad: 'alta',
+          grupoAlergia: null,
+        },
+      },
+    ],
+  }),
+  preguntaDe({
+    codigo: 'anticoagulantes',
+    seccion: 4,
+    orden: 5,
+    texto: '¿Tomás anticoagulantes?',
+    conDetalle: true,
+    alertaSiSi: {
+      tipo: 'condicion',
+      texto: 'Toma anticoagulantes',
+      gravedad: 'alta',
+      grupoAlergia: null,
+    },
+  }),
+  preguntaDe({
+    codigo: 'embarazo',
+    seccion: 4,
+    orden: 10,
+    texto: '¿Estás embarazada o en período de lactancia?',
+    soloSexo: 'F',
+    alertaSiSi: {
+      tipo: 'condicion',
+      texto: 'Embarazo o lactancia',
+      gravedad: 'alta',
+      grupoAlergia: null,
+    },
+  }),
+];
+
+export const ALERTA_MEDICA_PENICILINA = {
+  tipo: 'alergia' as const,
+  texto: 'Alergia a la penicilina (urticaria con amoxicilina)',
+  gravedad: 'alta' as const,
+  grupoAlergia: 'penicilinas',
+  codigo: 'alergias',
+};
+
+/** Versión completa de la anamnesis de Ana (la 2, vigente, con alergia a la penicilina). */
+export function anamnesisDe(parcial: Partial<Anamnesis> = {}): Anamnesis {
+  return anamnesisSchema.parse({
+    id: uuid(801),
+    pacienteId: IDS_PACIENTES.ana,
+    version: 2,
+    fecha: '2026-11-20T13:15:00Z',
+    registradaPor: 'Lorena Fretes',
+    firmante: { nombre: 'Ana Giménez', ci: '4123456', esTutor: false },
+    alertas: 1,
+    respuestas: [
+      {
+        codigo: 'motivo',
+        pregunta: '¿Cuál es el motivo de tu consulta?',
+        seccion: 1,
+        tipo: 'texto',
+        texto: 'Control y limpieza',
+      },
+      {
+        codigo: 'protesis',
+        pregunta: '¿Usás prótesis removible?',
+        seccion: 2,
+        tipo: 'si_no',
+        si: false,
+      },
+      {
+        codigo: 'cepillado',
+        pregunta: '¿Cuántas veces por día te cepillás?',
+        seccion: 3,
+        tipo: 'numero',
+        numero: 2,
+        unidad: 'veces',
+      },
+      {
+        codigo: 'alergias',
+        pregunta: '¿Tenés alergia a algún medicamento o material?',
+        seccion: 4,
+        tipo: 'multiple',
+        opciones: ['penicilina'],
+        etiquetas: ['Penicilina'],
+        detalle: 'urticaria con amoxicilina',
+      },
+    ],
+    signosVitales: { presionSistolica: 120, presionDiastolica: 80, pulso: 72, pesoKg: 61.5 },
+    alertasMedicas: [ALERTA_MEDICA_PENICILINA],
+    firmaUrl: URL_FIRMA,
+    esVigente: true,
+    ...parcial,
+  });
+}
+
+/** Resumen de una versión para `GET /pacientes/:id/anamnesis`. */
+export function resumenAnamnesisDe(a: Anamnesis) {
+  return {
+    version: a.version,
+    fecha: a.fecha,
+    registradaPor: a.registradaPor,
+    firmante: { nombre: a.firmante.nombre, esTutor: a.firmante.esTutor },
+    alertas: a.alertasMedicas.length,
   };
 }

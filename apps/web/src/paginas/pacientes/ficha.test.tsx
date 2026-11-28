@@ -83,8 +83,12 @@ describe('Pacientes: pestañas de la ficha', () => {
     expect(
       pestanasVisibles(pestanas, (m, a) => odontologo.has(`${m}:${a}`)).map((p) => p.id),
     ).toEqual(['datos', 'anamnesis']);
-    // Hoy la ficha tiene solo «Datos», que no es clínica.
-    expect(PESTANAS_FICHA.map((p) => [p.id, p.clinica])).toEqual([['datos', false]]);
+    // «Anamnesis» es clínica; «Historial» la ve quien ve la ficha (la API filtra lo clínico).
+    expect(PESTANAS_FICHA.map((p) => [p.id, p.clinica])).toEqual([
+      ['datos', false],
+      ['anamnesis', true],
+      ['historial', false],
+    ]);
   });
 });
 
@@ -118,7 +122,7 @@ describe('Pacientes: ficha', () => {
     montar({ 'GET /pacientes/:id': { cuerpo: ana() } }, RUTA_ANA, RECEPCION);
     await screen.findByRole('heading', { name: 'Ana Giménez', level: 1 });
     const pestanas = within(screen.getByRole('navigation', { name: 'Secciones de la ficha' }));
-    expect(pestanas.getAllByRole('link').map((l) => l.textContent)).toEqual(['Datos']);
+    expect(pestanas.getAllByRole('link').map((l) => l.textContent)).toEqual(['Datos', 'Historial']);
     expect(screen.queryByRole('region', { name: 'Nota interna' })).toBeNull();
     expect(screen.queryByText(/nota interna/i)).toBeNull();
 
@@ -348,7 +352,7 @@ describe('Pacientes: ficha', () => {
     /** Lo que guarda la API, visto desde la ficha de Ana. */
     let relacion = {
       id: IDS_PACIENTES.relacion,
-      familiar: { id: MATEO.id, nombre: 'Mateo Giménez', edad: 7 },
+      familiar: { id: MATEO.id, nombre: 'Mateo Giménez', edad: 7, ci: null },
       tipo: 'hijo' as const,
       esTutorLegal: false,
       esResponsablePago: false,

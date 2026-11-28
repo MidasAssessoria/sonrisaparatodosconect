@@ -1,6 +1,14 @@
 import {
   agendaConfigSchema,
   alertaManualSchema,
+  anamnesisSchema,
+  catalogoPreguntasSchema,
+  crearAnamnesisSchema,
+  consultaHistorialSchema,
+  paginaHistorialSchema,
+  reemplazarPreguntasSchema,
+  versionesAnamnesisSchema,
+  type Anamnesis,
   archivoSchema,
   bloqueoSchema,
   CABECERA_CLINICA,
@@ -135,6 +143,16 @@ interface Pedido<T> {
    */
   errorPropio?: (estado: number, cuerpo: unknown) => ErrorConecta | undefined;
 }
+
+/** Cuerpo de `POST /pacientes/:id/anamnesis` (lo que se manda, antes de normalizar). */
+export type NuevaAnamnesis = z.input<typeof crearAnamnesisSchema>;
+/** Cuerpo de `PUT /anamnesis/preguntas`. */
+export type ReemplazarPreguntas = z.input<typeof reemplazarPreguntasSchema>;
+export type CatalogoPreguntas = z.infer<typeof catalogoPreguntasSchema>;
+export type VersionesAnamnesis = z.infer<typeof versionesAnamnesisSchema>;
+export type PaginaHistorial = z.infer<typeof paginaHistorialSchema>;
+/** Parámetros de `GET /pacientes/:id/historial` (`consultaHistorialSchema`). */
+export type ConsultaHistorial = Partial<z.output<typeof consultaHistorialSchema>>;
 
 /** Cuerpo de `POST /pacientes/:id/alertas`. */
 export type CrearAlerta = z.infer<typeof crearAlertaSchema>;
@@ -620,6 +638,62 @@ export function crearClienteApi(opciones: OpcionesClienteApi) {
           esquema: alertaManualSchema,
         }),
     },
+    /**
+     * Anamnesis versionada (contrato/anamnesis.ts). Cada versión es inmutable: guardar crea la
+     * siguiente. Ver una versión completa queda en auditoría como `ver`.
+     */
+    anamnesis: {
+      /** Catálogo activo, ordenado (`ficha_clinica:ver`). */
+      preguntas: (): Promise<CatalogoPreguntas> =>
+        pedir({ metodo: 'GET', ruta: '/anamnesis/preguntas', esquema: catalogoPreguntasSchema }),
+      /** Catálogo completo, incluidas las inactivas, para el editor (`configuracion:editar`). */
+      catalogo: (): Promise<CatalogoPreguntas> =>
+        pedir({
+          metodo: 'GET',
+          ruta: '/anamnesis/preguntas/catalogo',
+          esquema: catalogoPreguntasSchema,
+        }),
+      /** Reemplaza el catálogo (`configuracion:editar`); responde todo, incluidas las inactivas. */
+      reemplazarPreguntas: (datos: ReemplazarPreguntas): Promise<CatalogoPreguntas> =>
+        pedir({
+          metodo: 'PUT',
+          ruta: '/anamnesis/preguntas',
+          cuerpo: datos,
+          esquema: catalogoPreguntasSchema,
+        }),
+      /** Versiones de la más nueva a la más vieja, y si firma un tutor. */
+      versiones: (pid: string): Promise<VersionesAnamnesis> =>
+        pedir({
+          metodo: 'GET',
+          ruta: `/pacientes/${seg(pid)}/anamnesis`,
+          esquema: versionesAnamnesisSchema,
+        }),
+      /** Una versión completa (`'vigente'` = la última). */
+      obtener: (pid: string, version: number | 'vigente'): Promise<Anamnesis> =>
+        pedir({
+          metodo: 'GET',
+          ruta: `/pacientes/${seg(pid)}/anamnesis/${seg(String(version))}`,
+          esquema: anamnesisSchema,
+        }),
+      /**
+       * Guarda la versión siguiente (201). Si otra persona guardó una versión después de
+       * `versionBase`, 409 `conflicto`.
+       */
+      crear: (pid: string, datos: NuevaAnamnesis): Promise<Anamnesis> =>
+        pedir({
+          metodo: 'POST',
+          ruta: `/pacientes/${seg(pid)}/anamnesis`,
+          cuerpo: datos,
+          esquema: anamnesisSchema,
+        }),
+    },
+    /** Línea de tiempo del paciente, del más nuevo al más viejo, con cursor (`pacientes:ver`). */
+    historial: (pid: string, consulta: ConsultaHistorial = {}): Promise<PaginaHistorial> =>
+      pedir({
+        metodo: 'GET',
+        ruta: `/pacientes/${seg(pid)}/historial${consultaComoTexto({ ...consulta })}`,
+        esquema: paginaHistorialSchema,
+      }),
     /** Buscador global: hasta 6 pacientes activos. Con menos de 2 caracteres no hace falta pedir. */
     buscar: (q: string): Promise<PacienteResumen[]> =>
       pedir({

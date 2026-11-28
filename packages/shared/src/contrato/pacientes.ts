@@ -119,7 +119,13 @@ export type AlertaMedica = z.infer<typeof alertaMedicaSchema>;
 
 export const relacionSchema = z.object({
   id: idSchema,
-  familiar: z.object({ id: idSchema, nombre: z.string(), edad: z.number().int().nullable() }),
+  /** `ci` del familiar: la usa la anamnesis para completar al tutor que firma. */
+  familiar: z.object({
+    id: idSchema,
+    nombre: z.string(),
+    edad: z.number().int().nullable(),
+    ci: z.string().nullable(),
+  }),
   tipo: z.enum(TIPOS_RELACION),
   /** Quien está en esta ficha es tutor legal del familiar. */
   esTutorLegal: z.boolean(),

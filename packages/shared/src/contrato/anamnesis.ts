@@ -94,7 +94,10 @@ export const preguntaSchema = z.object({
 export type Pregunta = z.infer<typeof preguntaSchema>;
 
 /**
- * `GET /api/v1/anamnesis/preguntas` — `ficha_clinica:ver`: el catálogo activo, ordenado.
+ * `GET /api/v1/anamnesis/preguntas` — `ficha_clinica:ver`: el catálogo activo, ordenado (para el
+ * formulario). `GET /api/v1/anamnesis/preguntas/catalogo` — `configuracion:editar`: el catálogo
+ * completo, incluidas las inactivas, para el editor (Administración edita el cuestionario sin ver
+ * fichas clínicas: el texto de las preguntas no es dato de ningún paciente).
  * `PUT /api/v1/anamnesis/preguntas` — `configuracion:editar`: reemplaza el catálogo. Los
  * códigos son estables: una pregunta que falta queda inactiva (no se borra) y se puede reactivar
  * mandándola de nuevo. Responde el catálogo completo, incluidas las inactivas.
@@ -176,6 +179,8 @@ export const respuestaGuardadaSchema = respuestaSchema.extend({
   tipo: z.enum(TIPOS_PREGUNTA),
   /** Etiquetas de las opciones marcadas, también copiadas. */
   etiquetas: z.array(z.string()).default([]),
+  /** Unidad de una pregunta `numero`, copiada al guardar. */
+  unidad: z.string().nullable().default(null),
 });
 
 export const anamnesisResumenSchema = z.object({
@@ -207,7 +212,7 @@ export type Anamnesis = z.infer<typeof anamnesisSchema>;
  */
 export const versionesAnamnesisSchema = z.object({
   versiones: z.array(anamnesisResumenSchema),
-  /** Datos para armar el formulario: el paciente es menor (firma un tutor) y su sexo. */
+  /** Datos para armar el formulario: el paciente es menor (firma un tutor). El sexo sale de la ficha. */
   requiereTutor: z.boolean(),
 });
 

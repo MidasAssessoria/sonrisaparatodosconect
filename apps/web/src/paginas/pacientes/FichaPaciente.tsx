@@ -1,5 +1,5 @@
 import type { Paciente } from '@conecta/shared';
-import { AlertaClinica, Avatar, Boton, Icono } from '@conecta/ui';
+import { AlertaClinica, Avatar, Boton, Icono, type AlertaClinicaProps } from '@conecta/ui';
 import { Link, Navigate, useNavigate, useParams } from 'react-router';
 import { ErrorConecta } from '../../api/errores.js';
 import { Esqueleto, MensajeError } from '../../componentes/estados.js';
@@ -11,11 +11,31 @@ import { ChipsPaciente } from './ListaPacientes.js';
 import { PESTANAS_FICHA, pestanasVisibles } from './pestanas.js';
 import './pacientes.css';
 
+/**
+ * Alertas de la cabecera: las manuales activas y las que salen de la anamnesis vigente, juntas.
+ * Las derivadas llevan «De la anamnesis»; primero las de gravedad alta. Si una manual dice lo
+ * mismo que una derivada, se muestra una sola vez (la manual).
+ */
+export function alertasCabecera(
+  paciente: Pick<Paciente, 'alertas' | 'alertasMedicas'>,
+  origen: string,
+): AlertaClinicaProps['alertas'] {
+  const manuales = paciente.alertas
+    .filter((a) => a.activa)
+    .map((a) => ({ tipo: a.tipo, texto: a.texto }));
+  const vistas = new Set(manuales.map((a) => `${a.tipo}|${a.texto.trim().toLowerCase()}`));
+  const derivadas = [...paciente.alertasMedicas]
+    .sort((a, b) => (a.gravedad === b.gravedad ? 0 : a.gravedad === 'alta' ? -1 : 1))
+    .filter((a) => !vistas.has(`${a.tipo}|${a.texto.trim().toLowerCase()}`))
+    .map((a) => ({ tipo: a.tipo, texto: a.texto, origen }));
+  return [...manuales, ...derivadas];
+}
+
 /** Cabecera: avatar, nombre, edad, CI, teléfono, estado y accesos. */
 function CabeceraFicha({ paciente }: { paciente: Paciente }) {
   const t = useTextos().pacientes;
   const nombre = nombreCompleto(paciente);
-  const activas = paciente.alertas.filter((a) => a.activa);
+  const alertas = alertasCabecera(paciente, t.ficha.origenAnamnesis);
   return (
     <>
       <header className="w-ficha-cabecera">
@@ -52,14 +72,10 @@ function CabeceraFicha({ paciente }: { paciente: Paciente }) {
       </header>
       {/*
        * Alertas activas arriba de todo (README «Datos de salud»): ícono + texto + color, sin rojo
-       * clínico. Alergias en coral, condiciones en sol. Las ve también recepción.
+       * clínico ni parpadeo. Alergias en coral, condiciones en sol. Las ve también recepción, con
+       * las de la anamnesis (la alerta médica llega en la ficha con `pacientes:ver`).
        */}
-      {activas.length ? (
-        <AlertaClinica
-          className="w-ficha-alertas"
-          alertas={activas.map((a) => ({ tipo: a.tipo, texto: a.texto }))}
-        />
-      ) : null}
+      {alertas.length ? <AlertaClinica className="w-ficha-alertas" alertas={alertas} /> : null}
       {!paciente.activo ? (
         <div className="w-aviso-atencion w-aviso-neutro" role="status">
           <Icono nombre="info" tamano={22} />

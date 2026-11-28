@@ -76,6 +76,7 @@ export const RUTAS_API = [
 
   // Sprint 4 · anamnesis (contrato/anamnesis.ts)
   'GET /anamnesis/preguntas ficha_clinica:ver',
+  'GET /anamnesis/preguntas/catalogo configuracion:editar',
   'PUT /anamnesis/preguntas configuracion:editar',
   'GET /pacientes/:id/anamnesis ficha_clinica:ver',
   'POST /pacientes/:id/anamnesis ficha_clinica:crear',

@@ -111,3 +111,27 @@ describe('fetch falso: parámetros de consulta', () => {
     expect(tomarPedidosInvalidos()).toEqual([]);
   });
 });
+
+describe('fetch falso: rutas del Sprint 4', () => {
+  it('el historial valida cursor y límite; la anamnesis no acepta campos de más', async () => {
+    const f = crearFetchFalso({
+      'GET /pacientes/:id/historial': { cuerpo: { eventos: [], siguienteCursor: null } },
+      'POST /pacientes/:id/anamnesis': { estado: 201, cuerpo: {} },
+    });
+    await f.fetch(`/api/v1/pacientes/${IDS.usuario}/historial?limite=500`);
+    expect(tomarPedidosInvalidos().some((i) => i.includes('limite'))).toBe(true);
+    await f.fetch(`/api/v1/pacientes/${IDS.usuario}/historial?limite=30&cursor=abc`);
+    expect(tomarPedidosInvalidos()).toEqual([]);
+    await pedir(f.fetch, 'POST', `/pacientes/${IDS.usuario}/anamnesis`, {
+      versionBase: null,
+      respuestas: [],
+      firmante: { nombre: 'Ana Giménez', esTutor: false },
+      firmaPng: 'data:image/png;base64,iVBORw0KGgo=',
+      declaracionVeracidad: true,
+      version: 3,
+    });
+    expect(tomarPedidosInvalidos()).toEqual([
+      'POST /pacientes/:id/anamnesis: campos que el contrato no tiene: version',
+    ]);
+  });
+});
