@@ -105,6 +105,18 @@ export const alertaManualSchema = z.object({
 });
 export type AlertaManual = z.infer<typeof alertaManualSchema>;
 
+/** Alerta médica derivada de la anamnesis vigente (Sprint 4, contrato/anamnesis.ts). */
+export const alertaMedicaSchema = z.object({
+  tipo: z.enum(TIPOS_ALERTA),
+  /** Texto listo para mostrar, con el detalle entre paréntesis si lo hay. */
+  texto: z.string(),
+  gravedad: z.enum(['alta', 'media']),
+  grupoAlergia: z.string().nullable(),
+  /** Pregunta que la generó. */
+  codigo: z.string(),
+});
+export type AlertaMedica = z.infer<typeof alertaMedicaSchema>;
+
 export const relacionSchema = z.object({
   id: idSchema,
   familiar: z.object({ id: idSchema, nombre: z.string(), edad: z.number().int().nullable() }),
@@ -149,6 +161,8 @@ export const pacienteSchema = pacienteResumenSchema.extend({
   /** Solo si quien pide tiene `ficha_clinica:ver`; si no, null. */
   notaInterna: z.string().nullable(),
   alertas: z.array(alertaManualSchema),
+  /** Derivadas de la anamnesis vigente; vacías si no hay anamnesis. */
+  alertasMedicas: z.array(alertaMedicaSchema),
   relaciones: z.array(relacionSchema),
   motivoBaja: z.string().nullable(),
   creadoEn: fechaHoraSchema,

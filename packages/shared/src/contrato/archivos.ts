@@ -20,6 +20,12 @@ export const CATEGORIAS_ARCHIVO = {
     tipos: ['image/png', 'image/jpeg', 'image/webp'],
     maxBytes: 2 * 1024 * 1024,
   },
+  /** Trazo de la firma de un paciente o su tutor (anamnesis, consentimientos). La guarda la API. */
+  firma_paciente: {
+    modulo: 'ficha_clinica',
+    tipos: ['image/png'],
+    maxBytes: 300 * 1024,
+  },
   /** Logo de la clínica para documentos impresos. */
   logo_clinica: {
     modulo: 'configuracion',

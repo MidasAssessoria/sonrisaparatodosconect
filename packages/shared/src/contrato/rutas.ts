@@ -73,6 +73,14 @@ export const RUTAS_API = [
   'DELETE /relaciones/:id pacientes:editar',
   'POST /pacientes/:id/alertas ficha_clinica:editar',
   'PATCH /alertas/:id ficha_clinica:editar',
+
+  // Sprint 4 · anamnesis (contrato/anamnesis.ts)
+  'GET /anamnesis/preguntas ficha_clinica:ver',
+  'PUT /anamnesis/preguntas configuracion:editar',
+  'GET /pacientes/:id/anamnesis ficha_clinica:ver',
+  'POST /pacientes/:id/anamnesis ficha_clinica:crear',
+  'GET /pacientes/:id/anamnesis/:version ficha_clinica:ver',
+  'GET /pacientes/:id/historial pacientes:ver',
 ] as const;
 export type RutaApi = (typeof RUTAS_API)[number];
 

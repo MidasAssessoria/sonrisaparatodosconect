@@ -73,3 +73,47 @@ describe('contrato del Sprint 2', () => {
     expect(new Set(claves).size).toBe(claves.length);
   });
 });
+
+describe('contrato del Sprint 4', () => {
+  const firma = 'data:image/png;base64,iVBORw0KGgo=';
+  const base = {
+    versionBase: null,
+    respuestas: [{ codigo: 'alergias', si: true, opciones: ['penicilina'], detalle: 'urticaria' }],
+    firmante: { nombre: 'Ana Giménez', esTutor: false },
+    firmaPng: firma,
+    declaracionVeracidad: true,
+  };
+
+  it('una anamnesis exige firma y la declaración de veracidad', async () => {
+    const { crearAnamnesisSchema } = await import('../index.js');
+    expect(crearAnamnesisSchema.safeParse(base).success).toBe(true);
+    expect(crearAnamnesisSchema.safeParse({ ...base, firmaPng: '' }).success).toBe(false);
+    expect(crearAnamnesisSchema.safeParse({ ...base, declaracionVeracidad: false }).success).toBe(
+      false,
+    );
+  });
+
+  it('si firma un tutor, su cédula es obligatoria y se normaliza', async () => {
+    const { crearAnamnesisSchema } = await import('../index.js');
+    const tutor = { nombre: 'Ana Giménez', esTutor: true };
+    expect(crearAnamnesisSchema.safeParse({ ...base, firmante: tutor }).success).toBe(false);
+    const ok = crearAnamnesisSchema.parse({ ...base, firmante: { ...tutor, ci: '4.123.456' } });
+    expect(ok.firmante.ci).toBe('4123456');
+  });
+
+  it('el catálogo pone valores por defecto a cada pregunta', async () => {
+    const { preguntaSchema } = await import('../index.js');
+    const p = preguntaSchema.parse({
+      codigo: 'embarazo',
+      seccion: 4,
+      orden: 50,
+      texto: '¿Estás embarazada o en período de lactancia?',
+      tipo: 'si_no',
+      soloSexo: 'F',
+      alertaSiSi: { tipo: 'condicion', texto: 'Embarazo o lactancia' },
+    });
+    expect(p.activa).toBe(true);
+    expect(p.alertaSiSi?.gravedad).toBe('alta');
+    expect(p.opciones).toEqual([]);
+  });
+});
