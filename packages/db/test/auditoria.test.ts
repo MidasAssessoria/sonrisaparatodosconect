@@ -554,8 +554,9 @@ describe('app.registrar_evento()', () => {
       }
       for (const entidad of [
         'Sede; drop table x',
-        // Hoy cualquiera de estos pasaba: «exportar paciente» falso con cualquier texto.
-        'paciente',
+        // Antes de 0007 cualquiera de estos pasaba con cualquier texto. (paciente es tabla auditada
+        // desde 0019: turno todavía no existe.)
+        'turno',
         'cualquier_cosa',
         // Tablas que no se auditan fila por fila.
         'numerador',

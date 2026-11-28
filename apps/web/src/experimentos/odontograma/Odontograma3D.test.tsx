@@ -140,13 +140,17 @@ const props = {
   estadoNuevo: 'por_realizar' as const,
 };
 
+// Cada montaje arma 64 dientes: con la máquina cargada (suites de db y api en paralelo) 20 montajes
+// pasaban de 150 s. Cinco alcanzan para probar que no queda nada vivo después de desmontar.
+const MONTAJES = 5;
+
 describe('Odontograma3D (render simulado)', () => {
-  it('montar y desmontar 20 veces no deja bucles de dibujo, contextos, manejadores ni observadores vivos', () => {
+  it(`montar y desmontar ${MONTAJES} veces no deja bucles de dibujo, contextos, manejadores ni observadores vivos`, () => {
     // React registra una vez por documento sus propios manejadores (p. ej. selectionchange): se toma la base después
     render(<Odontograma3D {...props} />).unmount();
     renderers.length = 0;
     const base = vivos.length;
-    for (let i = 0; i < 20; i++) {
+    for (let i = 0; i < MONTAJES; i++) {
       const v = render(<Odontograma3D {...props} denticion={i % 2 ? 'pediatrico' : 'adulto'} />);
       expect(v.container.querySelector('canvas')).not.toBeNull();
       // los rótulos entran al DOM con el primer cuadro (CSS2DRenderer)
@@ -154,7 +158,7 @@ describe('Odontograma3D (render simulado)', () => {
       expect(v.container.querySelectorAll('.od3d-num').length).toBe(i % 2 ? 20 : 32);
       v.unmount();
     }
-    expect(renderers).toHaveLength(20);
+    expect(renderers).toHaveLength(MONTAJES);
     for (const r of renderers) {
       expect(r.bucle).toBeNull();
       expect(r.liberado).toBe(true);
@@ -163,7 +167,7 @@ describe('Odontograma3D (render simulado)', () => {
     }
     expect(vivos.slice(base).map((r) => r.tipo)).toEqual([]);
     expect(ResizeObserverFalso.vivos).toBe(0);
-  }, 120_000);
+  }, 300_000);
 
   it('dos instancias en la misma página no se pisan', () => {
     const a = render(<Odontograma3D {...props} />);

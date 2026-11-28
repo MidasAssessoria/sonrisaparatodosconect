@@ -1,16 +1,24 @@
 import {
   aceptarInvitacionSchema,
   bajaSchema,
+  consultaBuscarSchema,
+  consultaPacientesSchema,
   consultarInvitacionSchema,
+  crearAlertaSchema,
   crearBloqueoSchema,
   crearInvitacionSchema,
+  crearPacienteSchema,
   crearProfesionalSchema,
+  crearRelacionSchema,
   crearRolSchema,
   crearSedeSchema,
   crearSillonSchema,
   crearTratamientoSchema,
+  editarAlertaSchema,
+  editarPacienteSchema,
   editarPersonaSchema,
   editarProfesionalSchema,
+  editarRelacionSchema,
   editarRolSchema,
   editarSedeSchema,
   editarSillonSchema,
@@ -80,6 +88,29 @@ export const ENTRADA_POR_RUTA: Record<string, EntradaRuta> = {
   'POST /archivos': 'multipart',
   'GET /archivos/:id/url': null,
   'GET /archivos/descarga': null,
+
+  'GET /pacientes': null,
+  'POST /pacientes': crearPacienteSchema,
+  'GET /pacientes/:id': null,
+  'PATCH /pacientes/:id': editarPacienteSchema,
+  'POST /pacientes/:id/desactivar': bajaSchema,
+  'POST /pacientes/:id/reactivar': null,
+  'GET /buscar': null,
+  'POST /pacientes/:id/relaciones': crearRelacionSchema,
+  'PATCH /relaciones/:id': editarRelacionSchema,
+  'DELETE /relaciones/:id': null,
+  'POST /pacientes/:id/alertas': crearAlertaSchema,
+  'PATCH /alertas/:id': editarAlertaSchema,
+};
+
+/**
+ * Parámetros de consulta (`?…`) que acepta cada ruta, para las que el contrato los define. Se
+ * validan como el cuerpo: valores que la API rechazaría o parámetros que no conoce hacen fallar la
+ * prueba. Las rutas que no están acá no se miran.
+ */
+export const CONSULTA_POR_RUTA: Record<string, z.ZodObject> = {
+  'GET /pacientes': consultaPacientesSchema,
+  'GET /buscar': consultaBuscarSchema,
 };
 
 /** Rutas públicas que igual exigen `Authorization` (contrato/personal.ts). */
@@ -132,11 +163,26 @@ export function problemasDelPedido(pedido: {
   cuerpo: unknown;
   cabeceras: Headers;
   sesion: Sesion | null;
+  /** Parámetros de la URL; se validan en las rutas de `CONSULTA_POR_RUTA`. */
+  consulta?: URLSearchParams;
 }): string[] {
   const ruta = rutaDelContrato(pedido.clave);
   if (!ruta) return [`${pedido.clave} no está en el contrato (RUTAS_API)`];
   const entrada = ENTRADA_POR_RUTA[ruta] ?? null;
   const problemas: string[] = [];
+
+  const esquemaConsulta = CONSULTA_POR_RUTA[ruta];
+  if (esquemaConsulta && pedido.consulta) {
+    const claves = [...pedido.consulta.keys()];
+    const repetidas = claves.filter((c, i) => claves.indexOf(c) !== i);
+    if (repetidas.length) problemas.push(`${ruta}: parámetros repetidos: ${repetidas.join(', ')}`);
+    const valores = Object.fromEntries(pedido.consulta.entries());
+    const r = esquemaConsulta.safeParse(valores);
+    if (!r.success) problemas.push(`${ruta}: ${textoIssues(r.error)}`);
+    const sobran = clavesDesconocidas(esquemaConsulta, valores);
+    if (sobran.length)
+      problemas.push(`${ruta}: parámetros que el contrato no tiene: ${sobran.join(', ')}`);
+  }
 
   if (EXIGEN_TOKEN.has(ruta) && !pedido.cabeceras.get('authorization')) {
     problemas.push(`${ruta} exige Authorization`);

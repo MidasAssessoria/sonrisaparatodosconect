@@ -15,7 +15,9 @@ export default defineConfig({
     include: ['src/**/*.test.ts', 'test/**/*.test.ts'],
     environment: 'node',
     globalSetup: ['./test/global-setup.ts'],
-    testTimeout: 30_000,
+    // Las pruebas con base aparte aplican todas las migraciones; con la suite entera en paralelo
+    // (incluida la siembra de 20.000 pacientes de test/pacientes-busqueda.test.ts) 30 s no alcanzaban.
+    testTimeout: 90_000,
     hookTimeout: 60_000,
     // Cada prueba crea sus propias clínicas con ids nuevos: los archivos pueden correr en paralelo.
   },

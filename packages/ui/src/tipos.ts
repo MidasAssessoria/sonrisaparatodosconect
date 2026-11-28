@@ -49,6 +49,8 @@ export interface PropsEnlace<I extends string = string> {
 export type RenderEnlace<I extends string = string> = (props: PropsEnlace<I>) => ReactNode;
 
 export interface PacienteResultado {
+  /** Identificador del paciente (la app lo usa para abrir la ficha; también es la clave de la fila). */
+  id?: string | undefined;
   nombre: string;
   documento?: string | undefined;
   telefono?: string | undefined;

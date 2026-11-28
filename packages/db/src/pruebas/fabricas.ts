@@ -12,6 +12,8 @@ import {
   type CategoriaArchivo,
   type RolSistema,
   type TasaIva,
+  type TipoAlerta,
+  type TipoRelacion,
 } from '@conecta/shared';
 import type pg from 'pg';
 import { conContextoCliente } from '../contexto.js';
@@ -440,6 +442,149 @@ export async function crearArchivoDePrueba(
       const archivoId = rows[0]?.id;
       if (!archivoId) throw new Error('No se pudo crear el archivo de prueba.');
       return { archivoId, ruta };
+    },
+    SIN_VERIFICAR,
+  );
+}
+
+/**
+ * Crea un paciente activo (como alta del sistema: created_by NULL, sin las defensas de permisos).
+ * Por defecto «Paciente <marca>» sin apellidos ni documentos. La base normaliza CI y teléfono. Con
+ * `activo: false` queda dado de baja con motivo.
+ */
+export async function crearPacienteDePrueba(
+  admin: pg.Pool,
+  opciones: {
+    clinicaId: string;
+    nombres?: string;
+    apellidos?: string | null;
+    ci?: string | null;
+    telefono?: string | null;
+    /** `YYYY-MM-DD`. */
+    fechaNac?: string | null;
+    sexo?: 'F' | 'M' | null;
+    activo?: boolean;
+  },
+): Promise<{ pacienteId: string }> {
+  return conContextoCliente(
+    admin,
+    { clinicaId: opciones.clinicaId, usuarioId: randomUUID() },
+    async (cliente) => {
+      await cliente.query("select set_config('app.usuario_id', '', true)");
+      const { rows } = await cliente.query<{ id: string }>(
+        `insert into app.paciente (clinica_id, nombres, apellidos, ci, telefono, fecha_nac, sexo)
+         values ($1, $2, $3, $4, $5, $6, $7) returning id`,
+        [
+          opciones.clinicaId,
+          opciones.nombres ?? `Paciente ${sufijo()}`,
+          opciones.apellidos ?? null,
+          opciones.ci ?? null,
+          opciones.telefono ?? null,
+          opciones.fechaNac ?? null,
+          opciones.sexo ?? null,
+        ],
+      );
+      const pacienteId = rows[0]?.id;
+      if (!pacienteId) throw new Error('No se pudo crear el paciente de prueba.');
+      if (opciones.activo === false) {
+        await cliente.query(
+          "update app.paciente set activo = false, motivo_baja = 'Baja de prueba' where id = $1",
+          [pacienteId],
+        );
+      }
+      return { pacienteId };
+    },
+    SIN_VERIFICAR,
+  );
+}
+
+/**
+ * Crea un vínculo «familiar es `tipo` de paciente» (la base crea el espejo). `familiarEs*` son las
+ * marcas del otro lado (se guardan en el espejo).
+ */
+export async function crearRelacionDePrueba(
+  admin: pg.Pool,
+  opciones: {
+    clinicaId: string;
+    pacienteId: string;
+    familiarId: string;
+    tipo: TipoRelacion;
+    esTutorLegal?: boolean;
+    esResponsablePago?: boolean;
+    familiarEsTutorLegal?: boolean;
+    familiarEsResponsablePago?: boolean;
+  },
+): Promise<{ relacionId: string }> {
+  return conContextoCliente(
+    admin,
+    { clinicaId: opciones.clinicaId, usuarioId: randomUUID() },
+    async (cliente) => {
+      await cliente.query("select set_config('app.usuario_id', '', true)");
+      const { rows } = await cliente.query<{ id: string }>(
+        `insert into app.paciente_relacion
+           (clinica_id, paciente_id, familiar_id, tipo, es_tutor_legal, es_responsable_pago)
+         values ($1, $2, $3, $4, $5, $6) returning id`,
+        [
+          opciones.clinicaId,
+          opciones.pacienteId,
+          opciones.familiarId,
+          opciones.tipo,
+          opciones.esTutorLegal ?? false,
+          opciones.esResponsablePago ?? false,
+        ],
+      );
+      const relacionId = rows[0]?.id;
+      if (!relacionId) throw new Error('No se pudo crear el vínculo de prueba.');
+      if (opciones.familiarEsTutorLegal || opciones.familiarEsResponsablePago) {
+        await cliente.query(
+          `update app.paciente_relacion set es_tutor_legal = $3, es_responsable_pago = $4
+           where paciente_id = $1 and familiar_id = $2 and deleted_at is null`,
+          [
+            opciones.familiarId,
+            opciones.pacienteId,
+            opciones.familiarEsTutorLegal ?? false,
+            opciones.familiarEsResponsablePago ?? false,
+          ],
+        );
+      }
+      return { relacionId };
+    },
+    SIN_VERIFICAR,
+  );
+}
+
+/**
+ * Crea una alerta manual (activa y de tipo alergia por defecto), como alta del sistema.
+ */
+export async function crearAlertaDePrueba(
+  admin: pg.Pool,
+  opciones: {
+    clinicaId: string;
+    pacienteId: string;
+    tipo?: TipoAlerta;
+    texto?: string;
+    activa?: boolean;
+  },
+): Promise<{ alertaId: string }> {
+  return conContextoCliente(
+    admin,
+    { clinicaId: opciones.clinicaId, usuarioId: randomUUID() },
+    async (cliente) => {
+      await cliente.query("select set_config('app.usuario_id', '', true)");
+      const alertaId = randomUUID();
+      await cliente.query(
+        `insert into app.paciente_alerta (id, clinica_id, paciente_id, tipo, texto, activa)
+         values ($1, $2, $3, $4, $5, $6)`,
+        [
+          alertaId,
+          opciones.clinicaId,
+          opciones.pacienteId,
+          opciones.tipo ?? 'alergia',
+          opciones.texto ?? 'Alergia a la penicilina',
+          opciones.activa ?? true,
+        ],
+      );
+      return { alertaId };
     },
     SIN_VERIFICAR,
   );

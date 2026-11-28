@@ -124,7 +124,7 @@ export function Buscador({
             <ul id={idLista} role="listbox" aria-label="Pacientes encontrados">
               {res.map((r, i) => (
                 <li
-                  key={`${r.nombre}-${r.documento ?? i}`}
+                  key={r.id ?? `${r.nombre}-${r.documento ?? i}`}
                   id={`${idLista}-${i}`}
                   role="option"
                   aria-selected={i === indice}

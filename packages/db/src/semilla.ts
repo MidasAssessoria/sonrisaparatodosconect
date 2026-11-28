@@ -2,7 +2,10 @@
  * Clínica de demostración para desarrollo (`pnpm --filter @conecta/db sembrar-dev`).
  * Datos ficticios, los mismos de la maqueta y del design system: dos sedes («Asunción · Centro» y
  * «San Lorenzo») con dos sillones cada una, la Dra. Marta Acosta como dueña, tres profesionales con
- * sus tramos en las dos sedes y un catálogo de 12 tratamientos.
+ * sus tramos en las dos sedes, un catálogo de 12 tratamientos y seis pacientes (los personajes del
+ * README del design system): Ana Giménez (34) y su hijo Mateo (7), vinculados como madre e hijo
+ * con Ana como tutora legal y responsable de pago, Lucía Benítez, Carlos Ayala, Rosa Duarte y Tomás
+ * Villalba.
  *
  * Es idempotente y completa: si la clínica no existe, la crea entera; si existe (también una creada
  * por una versión anterior de esta semilla, sin profesionales ni catálogo), agrega solo lo que falta,
@@ -26,6 +29,16 @@ export const DEMO = {
     rojas: '00000000-0000-4000-8000-0000000f0002',
     duarte: '00000000-0000-4000-8000-0000000f0003',
   },
+  pacientes: {
+    ana: '00000000-0000-4000-8000-0000000a0001',
+    mateo: '00000000-0000-4000-8000-0000000a0002',
+    lucia: '00000000-0000-4000-8000-0000000a0003',
+    carlos: '00000000-0000-4000-8000-0000000a0004',
+    rosa: '00000000-0000-4000-8000-0000000a0005',
+    tomas: '00000000-0000-4000-8000-0000000a0006',
+  },
+  /** Ana es la madre de Mateo (fila vista desde Ana: Mateo es su hijo). */
+  relacionAnaMateo: '00000000-0000-4000-8000-0000000b0001',
 } as const;
 
 export interface OpcionesSemilla {
@@ -40,7 +53,14 @@ export interface ResultadoSemilla {
   /** true si la clínica no existía y se creó ahora. */
   creada: boolean;
   /** Lo que se agregó en esta corrida (0 en una corrida que no tenía nada que completar). */
-  agregados: { profesionales: number; tramos: number; tratamientos: number };
+  agregados: {
+    profesionales: number;
+    tramos: number;
+    tratamientos: number;
+    pacientes: number;
+    /** Vínculos creados en esta corrida (cada uno con su espejo, que no se cuenta). */
+    relaciones: number;
+  };
 }
 
 interface SedeDemo {
@@ -152,6 +172,95 @@ const TRATAMIENTOS: [string, number, 10 | 5 | 0, number][] = [
   ['Atención social de jornada (exenta)', 80_000, 0, 30],
 ];
 
+interface PacienteDemo {
+  id: string;
+  nombres: string;
+  apellidos: string;
+  ci: string | null;
+  telefono: string | null;
+  fechaNac: string;
+  sexo: 'F' | 'M';
+  ciudad: string;
+  idioma: 'es' | 'gn';
+  aceptaWhatsapp: boolean;
+}
+
+/** Datos ficticios. Edades a noviembre de 2026: Ana 34, Mateo 7, Tomás 11 (pediátrico). */
+const PACIENTES: PacienteDemo[] = [
+  {
+    id: DEMO.pacientes.ana,
+    nombres: 'Ana',
+    apellidos: 'Giménez',
+    ci: '4123456',
+    telefono: '0981 123 456',
+    fechaNac: '1992-05-14',
+    sexo: 'F',
+    ciudad: 'Asunción',
+    idioma: 'es',
+    aceptaWhatsapp: true,
+  },
+  {
+    id: DEMO.pacientes.mateo,
+    nombres: 'Mateo',
+    apellidos: 'Giménez',
+    ci: null,
+    telefono: null,
+    fechaNac: '2019-03-08',
+    sexo: 'M',
+    ciudad: 'Asunción',
+    idioma: 'es',
+    aceptaWhatsapp: false,
+  },
+  {
+    id: DEMO.pacientes.lucia,
+    nombres: 'Lucía',
+    apellidos: 'Benítez',
+    ci: '3456789',
+    telefono: '0971 234 567',
+    fechaNac: '1988-09-21',
+    sexo: 'F',
+    ciudad: 'San Lorenzo',
+    idioma: 'es',
+    aceptaWhatsapp: true,
+  },
+  {
+    id: DEMO.pacientes.carlos,
+    nombres: 'Carlos',
+    apellidos: 'Ayala',
+    ci: '2345678',
+    telefono: '0961 345 678',
+    fechaNac: '1975-02-03',
+    sexo: 'M',
+    ciudad: 'Luque',
+    idioma: 'gn',
+    aceptaWhatsapp: true,
+  },
+  {
+    id: DEMO.pacientes.rosa,
+    nombres: 'Rosa',
+    apellidos: 'Duarte',
+    ci: '1234567',
+    telefono: '0991 456 789',
+    fechaNac: '1960-12-01',
+    sexo: 'F',
+    ciudad: 'Fernando de la Mora',
+    idioma: 'gn',
+    aceptaWhatsapp: false,
+  },
+  {
+    id: DEMO.pacientes.tomas,
+    nombres: 'Tomás',
+    apellidos: 'Villalba',
+    ci: null,
+    telefono: '0982 567 890',
+    fechaNac: '2015-07-19',
+    sexo: 'M',
+    ciudad: 'San Lorenzo',
+    idioma: 'es',
+    aceptaWhatsapp: true,
+  },
+];
+
 /** Id fijo de un registro de la demostración: prefijo de 4 hex + número de orden. */
 function idDemo(prefijo: string, numero: number): string {
   return `00000000-0000-4000-8000-${prefijo}${numero.toString(16).padStart(8, '0')}`;
@@ -219,7 +328,7 @@ async function completar(
   duenoId: string,
 ): Promise<ResultadoSemilla['agregados']> {
   await cliente.query("select set_config('app.usuario_id', '', true)");
-  const agregados = { profesionales: 0, tramos: 0, tratamientos: 0 };
+  const agregados = { profesionales: 0, tramos: 0, tratamientos: 0, pacientes: 0, relaciones: 0 };
 
   // Membresía de la dueña: la del usuario dado; si no, la del primer dueño activo.
   const duena = await cliente.query<{ id: string }>(
@@ -278,6 +387,44 @@ async function completar(
     );
     agregados.tratamientos += alta.rowCount ?? 0;
   }
+
+  for (const p of PACIENTES) {
+    const alta = await cliente.query(
+      `insert into app.paciente (id, clinica_id, nombres, apellidos, ci, telefono, fecha_nac, sexo,
+                                 ciudad, idioma, acepta_whatsapp)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) on conflict do nothing`,
+      [
+        p.id,
+        DEMO.clinicaId,
+        p.nombres,
+        p.apellidos,
+        p.ci,
+        p.telefono,
+        p.fechaNac,
+        p.sexo,
+        p.ciudad,
+        p.idioma,
+        p.aceptaWhatsapp,
+      ],
+    );
+    agregados.pacientes += alta.rowCount ?? 0;
+  }
+  // Mateo es hijo de Ana; la base crea el espejo (Ana es madre de Mateo). Sin conflicto por id ni
+  // por par activo (si alguien ya los vinculó, queda lo suyo).
+  const vinculo = await cliente.query(
+    `insert into app.paciente_relacion
+       (id, clinica_id, paciente_id, familiar_id, tipo, es_tutor_legal, es_responsable_pago)
+     select $1, $2, $3, $4, 'hijo', true, true
+     where exists (select 1 from app.paciente where id = $3 and activo)
+       and exists (select 1 from app.paciente where id = $4 and activo)
+       and not exists (select 1 from app.paciente_relacion r
+                       where r.deleted_at is null
+                         and ((r.paciente_id = $3 and r.familiar_id = $4)
+                              or (r.paciente_id = $4 and r.familiar_id = $3)))
+     on conflict do nothing`,
+    [DEMO.relacionAnaMateo, DEMO.clinicaId, DEMO.pacientes.ana, DEMO.pacientes.mateo],
+  );
+  agregados.relaciones += vinculo.rowCount ?? 0;
   return agregados;
 }
 

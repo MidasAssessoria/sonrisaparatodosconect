@@ -82,8 +82,8 @@ describe('app_api no puede escalar privilegios', () => {
     'grant pg_read_all_data to app_api',
     'grant pg_signal_backend to app_api',
     'create extension dblink',
-    // btree_gist ya la instala 0011 (crearla de nuevo da 42710): se prueba con otra «trusted».
-    'create extension pg_trgm',
+    // btree_gist (0011) y pg_trgm (0019) ya están instaladas (crearlas de nuevo da 42710): se prueba con otras «trusted».
+    'create extension btree_gin',
     'create extension unaccent',
   ])('rechaza: %s', async (texto) => {
     await rechazada(texto);

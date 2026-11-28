@@ -6,14 +6,36 @@
  * (`sinContexto`) y resuelven la clínica por el token.
  */
 import { createHash } from 'node:crypto';
-import type { Accion, EstadoMembresia, Modulo, Persona } from '@conecta/shared';
+import type {
+  Accion,
+  AlertaManual,
+  CrearPaciente,
+  EditarPaciente,
+  EditarRelacion,
+  EstadoMembresia,
+  FILTROS_PACIENTES,
+  Modulo,
+  Paciente,
+  PacienteResumen,
+  Persona,
+  Relacion,
+  TipoAlerta,
+  TipoRelacion,
+} from '@conecta/shared';
 import { sql } from 'drizzle-orm';
 import type { TransaccionConecta } from './contexto.js';
 import {
+  paciente,
   RESULTADOS_TOCAR_SESION,
   type AccionEvento,
+  type IdiomaPaciente,
+  type OrigenPaciente,
   type ResultadoTocarSesion,
+  type SexoPaciente,
 } from './esquema.js';
+
+/** Filtro de la lista de pacientes (FILTROS_PACIENTES del contrato). */
+export type FiltroPacientes = (typeof FILTROS_PACIENTES)[number];
 
 function primera<T>(filas: T[], funcion: string): T {
   const fila = filas[0];
@@ -490,4 +512,583 @@ export async function listarPersonal(
     invitacionVenceEn: isoONulo(f.invitacion_vence_en),
     profesionalId: f.profesional_id,
   }));
+}
+
+// ---------------------------------------------------------------------------------------------
+// Pacientes (Sprint 3, migraciones 0019–0027)
+// ---------------------------------------------------------------------------------------------
+//
+// Todo corre como app_api con el contexto de la clínica: RLS y `app.proteger_pacientes` deciden.
+// Permisos que exige la base (además de los de la API): alta pacientes:crear; edición
+// pacientes:editar; desactivar/reactivar pacientes:anular; vínculos pacientes:editar; alertas
+// ficha_clinica:editar (y ver para cargar, desactivar o tocar una inactiva); nota interna
+// ficha_clinica:editar y ver. La nota interna y las alertas inactivas solo se LEEN con
+// ficha_clinica:ver (si no, no existen: estas funciones devuelven null o no las incluyen), y lo
+// mismo su historial en audit_log. Edad, pediátrico y con alerta salen de un solo lugar de la base
+// (`app.resumen_pacientes`). Nombres de regla de los errores: `RESTRICCIONES_PACIENTES`
+// (src/esquema.ts).
+
+/** Fila que devuelven `app.buscar_pacientes`, `app.listar_pacientes` y `app.pacientes_con_ci`. */
+type FilaResumen = {
+  id: string;
+  nombres: string;
+  apellidos: string | null;
+  ci: string | null;
+  sexo: SexoPaciente | null;
+  telefono: string | null;
+  fecha_nac: string | null;
+  edad: number | null;
+  pediatrico: boolean;
+  con_alerta: boolean;
+  activo: boolean;
+};
+
+const COLUMNAS_RESUMEN = sql.raw(
+  'id, nombres, apellidos, ci, sexo, telefono, fecha_nac::text as fecha_nac, edad, pediatrico, con_alerta, activo',
+);
+
+function resumen(f: FilaResumen): PacienteResumen {
+  return {
+    id: f.id,
+    nombres: f.nombres,
+    apellidos: f.apellidos,
+    ci: f.ci,
+    sexo: f.sexo,
+    telefono: f.telefono,
+    fechaNac: f.fecha_nac,
+    edad: f.edad,
+    pediatrico: f.pediatrico,
+    conAlerta: f.con_alerta,
+    activo: f.activo,
+  };
+}
+
+const ahoraSql = (ahora: Date | undefined) =>
+  ahora ? sql`${ahora.toISOString()}::timestamptz` : sql`now()`;
+
+export interface OpcionesBuscarPacientes {
+  /** 1..1000; por defecto 6 (el buscador global). */
+  limite?: number | undefined;
+  /** Por defecto solo activos (el contrato del buscador). */
+  incluirInactivos?: boolean | undefined;
+  /** Momento con el que se calculan edad y pediátrico. Por defecto, ahora. */
+  ahora?: Date | undefined;
+}
+
+/**
+ * `app.buscar_pacientes(texto, limite, incluir_inactivos, ahora)`: buscador por nombre (sin tildes,
+ * mayúsculas ni puntuación, la ñ cuenta: igual que `normalizarBusqueda` de @conecta/shared), CI (con
+ * o sin puntos, con o sin ceros a la izquierda) o teléfono (en cualquier formato). Todos los
+ * términos tienen que aparecer. Orden: CI o teléfono exacto, después los que empiezan una palabra,
+ * después el resto; dentro de cada grupo, activos primero y por apellidos, nombres. Un texto sin
+ * letras ni dígitos devuelve `[]` (la regla de «menos de 2 caracteres» la aplica la API).
+ * Errores: `pacientes_limite` (22023).
+ */
+export async function buscarPacientes(
+  tx: TransaccionConecta,
+  texto: string,
+  opciones: OpcionesBuscarPacientes = {},
+): Promise<PacienteResumen[]> {
+  const { rows } = await tx.execute<FilaResumen>(
+    sql`select ${COLUMNAS_RESUMEN} from app.buscar_pacientes(${texto}, ${opciones.limite ?? 6}::integer,
+          ${opciones.incluirInactivos ?? false}::boolean, ${ahoraSql(opciones.ahora)})`,
+  );
+  return rows.map(resumen);
+}
+
+export interface ConsultaListarPacientes {
+  /** Búsqueda opcional (misma regla que `buscarPacientes`). */
+  texto?: string | undefined;
+  /** Por defecto `todos`. `todos`, `pediatricos` y `con_alerta` muestran solo activos. */
+  filtro?: FiltroPacientes | undefined;
+  /** `siguienteCursor` de la página anterior. */
+  cursor?: string | null | undefined;
+  /** 1..1000; por defecto 50. */
+  limite?: number | undefined;
+  ahora?: Date | undefined;
+}
+
+/**
+ * `app.listar_pacientes(...)`: una página de la lista, ordenada por apellidos (o, si no tiene, por
+ * nombres), nombres e id (sin tildes ni puntuación; la ñ entre la n y la o). `siguienteCursor` es
+ * opaco (null si no hay más): lleva la posición de la última fila de la página tal como se vio, y
+ * la página siguiente empieza justo después de esa posición, sin repetidos ni saltos, aunque ese
+ * paciente (u otro) se renombre o se agreguen pacientes entre una página y la otra. Se pasa tal
+ * cual; no se arma ni se interpreta. Errores: `cursor_invalido`, `pacientes_filtro`,
+ * `pacientes_limite` (22023).
+ */
+export async function listarPacientes(
+  tx: TransaccionConecta,
+  consulta: ConsultaListarPacientes = {},
+): Promise<{ items: PacienteResumen[]; siguienteCursor: string | null }> {
+  const limite = consulta.limite ?? 50;
+  const { rows } = await tx.execute<FilaResumen & { cursor: string }>(
+    sql`select ${COLUMNAS_RESUMEN}, cursor from app.listar_pacientes(${consulta.texto ?? null}::text,
+          ${consulta.filtro ?? 'todos'}::text, ${consulta.cursor ?? null}::text,
+          ${limite + 1}::integer, ${ahoraSql(consulta.ahora)})`,
+  );
+  const pagina = rows.slice(0, limite);
+  const ultima = pagina[pagina.length - 1];
+  return {
+    items: pagina.map(resumen),
+    siguienteCursor: rows.length > limite && ultima ? ultima.cursor : null,
+  };
+}
+
+/**
+ * `app.pacientes_con_ci(ci, excluir)`: pacientes de la clínica (activos primero, también inactivos)
+ * con esa CI, normalizada como la guarda la base. Para el 409 de CI repetida (`existente`). Con
+ * `excluirId`, sin ese paciente (al editar).
+ */
+export async function pacientesConCi(
+  tx: TransaccionConecta,
+  ci: string,
+  excluirId?: string | null,
+): Promise<PacienteResumen[]> {
+  const { rows } = await tx.execute<FilaResumen>(
+    sql`select ${COLUMNAS_RESUMEN} from app.pacientes_con_ci(${ci}, ${excluirId ?? null}::uuid)`,
+  );
+  return rows.map(resumen);
+}
+
+/** Datos de alta de un paciente: los de `CrearPaciente` sin `confirmarCiDuplicada`. */
+export type DatosPaciente = Omit<CrearPaciente, 'confirmarCiDuplicada'>;
+/** Cambios de un paciente: los de `EditarPaciente` sin `confirmarCiDuplicada` (null borra). */
+export type CambiosPaciente = Omit<EditarPaciente, 'confirmarCiDuplicada'>;
+
+/**
+ * Alta de un paciente (INSERT como app_api; `pacientes:crear`). No mira la CI repetida: eso lo hace
+ * la API antes con `pacientesConCi`. Devuelve el id. `origen` por defecto `recepcion`.
+ * Errores: `pacientes_sin_permiso` (42501), los CHECK de `RESTRICCIONES_PACIENTES` (23514),
+ * `paciente_fecha_nac_futura` (23514).
+ */
+export async function crearPaciente(
+  tx: TransaccionConecta,
+  datos: DatosPaciente,
+  opciones: { origen?: OrigenPaciente } = {},
+): Promise<string> {
+  const filas = await tx
+    .insert(paciente)
+    .values({
+      clinicaId: sql`app.clinica_actual()`,
+      nombres: datos.nombres,
+      apellidos: datos.apellidos ?? null,
+      ci: datos.ci ?? null,
+      ruc: datos.ruc ?? null,
+      fechaNac: datos.fechaNac ?? null,
+      sexo: datos.sexo ?? null,
+      telefono: datos.telefono ?? null,
+      email: datos.email ?? null,
+      ciudad: datos.ciudad ?? null,
+      direccion: datos.direccion ?? null,
+      idioma: datos.idioma ?? 'es',
+      aceptaWhatsapp: datos.aceptaWhatsapp ?? false,
+      origen: opciones.origen ?? 'recepcion',
+    })
+    .returning({ id: paciente.id });
+  return primera(filas, 'insert paciente').id;
+}
+
+/**
+ * Edición de un paciente (UPDATE como app_api; `pacientes:editar`). Solo cambia lo que viene
+ * (`undefined` no toca, `null` borra). `notaInterna`, si viene, se guarda con
+ * `guardarNotaInterna` (`ficha_clinica:editar`). Devuelve false si el paciente no es de la clínica.
+ */
+export async function editarPaciente(
+  tx: TransaccionConecta,
+  pacienteId: string,
+  cambios: CambiosPaciente,
+): Promise<boolean> {
+  const { notaInterna, ...datos } = cambios;
+  const valores: Partial<typeof paciente.$inferInsert> = {};
+  const campos = [
+    'nombres',
+    'apellidos',
+    'ci',
+    'ruc',
+    'fechaNac',
+    'sexo',
+    'telefono',
+    'email',
+    'ciudad',
+    'direccion',
+    'idioma',
+    'aceptaWhatsapp',
+  ] as const;
+  for (const campo of campos) {
+    if (datos[campo] !== undefined) Object.assign(valores, { [campo]: datos[campo] });
+  }
+  const existe = await tx
+    .select({ id: paciente.id })
+    .from(paciente)
+    .where(sql`${paciente.id} = ${pacienteId}::uuid`);
+  if (existe.length === 0) return false;
+  if (Object.keys(valores).length > 0) {
+    await tx
+      .update(paciente)
+      .set(valores)
+      .where(sql`${paciente.id} = ${pacienteId}::uuid`);
+  }
+  if (notaInterna !== undefined) await guardarNotaInterna(tx, pacienteId, notaInterna);
+  return true;
+}
+
+/**
+ * La ficha completa con la forma de `Paciente` del contrato, o null si no es de la clínica.
+ * `notaInterna` es null si el usuario del contexto no tiene `ficha_clinica:ver` (la base no la
+ * deja ver) o si no hay nota. `alertas`: las activas. `relaciones`: los vínculos activos vistos
+ * desde este paciente. NO registra la lectura: la API llama a
+ * `registrarEvento(tx, { accion: 'ver', entidad: 'paciente', entidadId })`.
+ */
+export async function obtenerPaciente(
+  tx: TransaccionConecta,
+  pacienteId: string,
+  opciones: { ahora?: Date | undefined } = {},
+): Promise<Paciente | null> {
+  const { rows } = await tx.execute<
+    FilaResumen & {
+      ruc: string | null;
+      email: string | null;
+      ciudad: string | null;
+      direccion: string | null;
+      idioma: IdiomaPaciente;
+      acepta_whatsapp: boolean;
+      origen: OrigenPaciente;
+      motivo_baja: string | null;
+      created_at: Date | string;
+      nota_interna: string | null;
+    }
+  >(sql`
+    select r.id, r.nombres, r.apellidos, r.ci, r.telefono, r.fecha_nac::text as fecha_nac, r.edad,
+           r.pediatrico, r.con_alerta, r.activo, r.sexo,
+           p.ruc, p.email, p.ciudad, p.direccion, p.idioma, p.acepta_whatsapp,
+           p.origen, p.motivo_baja, p.created_at,
+           (select n.texto from app.paciente_nota n
+            where n.clinica_id = p.clinica_id and n.paciente_id = p.id) as nota_interna
+    from app.resumen_pacientes(${ahoraSql(opciones.ahora)}) r
+    join app.paciente p on p.clinica_id = r.clinica_id and p.id = r.id
+    where r.id = ${pacienteId}::uuid`);
+  const fila = rows[0];
+  if (!fila) return null;
+  const alertas = await listarAlertas(tx, pacienteId);
+  const relaciones = await listarRelaciones(tx, pacienteId, opciones);
+  return {
+    ...resumen(fila),
+    ruc: fila.ruc,
+    email: fila.email,
+    ciudad: fila.ciudad,
+    direccion: fila.direccion,
+    idioma: fila.idioma,
+    aceptaWhatsapp: fila.acepta_whatsapp,
+    origen: fila.origen,
+    notaInterna: fila.nota_interna,
+    alertas,
+    relaciones,
+    motivoBaja: fila.motivo_baja,
+    creadoEn: fecha(fila.created_at).toISOString(),
+  };
+}
+
+/**
+ * `app.desactivar_paciente(paciente, motivo)`: `pacientes:anular` y motivo obligatorio. `false` si
+ * ya estaba inactivo. Errores: `baja_sin_motivo` (23514), `paciente_no_encontrado` (P0002),
+ * `paciente_motivo_baja_check` (23514, más de 500 caracteres), `pacientes_sin_permiso` (42501).
+ */
+export async function desactivarPaciente(
+  tx: TransaccionConecta,
+  pacienteId: string,
+  motivo: string,
+): Promise<boolean> {
+  const { rows } = await tx.execute<{ cambio: boolean }>(
+    sql`select app.desactivar_paciente(${pacienteId}::uuid, ${motivo}) as cambio`,
+  );
+  return primera(rows, 'app.desactivar_paciente').cambio;
+}
+
+/**
+ * `app.reactivar_paciente(paciente)`: `pacientes:anular`; borra el motivo de baja. `false` si ya
+ * estaba activo. Errores: `paciente_no_encontrado` (P0002), `pacientes_sin_permiso` (42501).
+ */
+export async function reactivarPaciente(
+  tx: TransaccionConecta,
+  pacienteId: string,
+): Promise<boolean> {
+  const { rows } = await tx.execute<{ cambio: boolean }>(
+    sql`select app.reactivar_paciente(${pacienteId}::uuid) as cambio`,
+  );
+  return primera(rows, 'app.reactivar_paciente').cambio;
+}
+
+// Grupo familiar ------------------------------------------------------------------------------
+
+export interface DatosRelacion {
+  /** Paciente de la ficha (el de la ruta). */
+  pacienteId: string;
+  familiarId: string;
+  /** Qué es el familiar para el paciente («hijo»: el familiar es hijo del paciente). */
+  tipo: TipoRelacion;
+  /** El paciente es tutor legal del familiar. */
+  esTutorLegal?: boolean | undefined;
+  /** El paciente paga por el familiar. */
+  esResponsablePago?: boolean | undefined;
+  /** El familiar es tutor legal del paciente (se guarda en el otro sentido). */
+  familiarEsTutorLegal?: boolean | undefined;
+  /** El familiar paga por el paciente (se guarda en el otro sentido). */
+  familiarEsResponsablePago?: boolean | undefined;
+}
+
+type FilaRelacion = {
+  id: string;
+  familiar_id: string;
+  nombre: string;
+  edad: number | null;
+  tipo: TipoRelacion;
+  es_tutor_legal: boolean;
+  es_responsable_pago: boolean;
+  familiar_es_tutor_legal: boolean;
+  familiar_es_responsable_pago: boolean;
+};
+
+function relacionDe(f: FilaRelacion): Relacion {
+  return {
+    id: f.id,
+    familiar: { id: f.familiar_id, nombre: f.nombre, edad: f.edad },
+    tipo: f.tipo,
+    esTutorLegal: f.es_tutor_legal,
+    esResponsablePago: f.es_responsable_pago,
+    familiarEsTutorLegal: f.familiar_es_tutor_legal,
+    familiarEsResponsablePago: f.familiar_es_responsable_pago,
+  };
+}
+
+function consultaRelaciones(filtro: ReturnType<typeof sql>, ahora: Date | undefined) {
+  return sql`
+    select r.id, f.id as familiar_id,
+           f.nombres || coalesce(' ' || f.apellidos, '') as nombre, f.edad,
+           r.tipo, r.es_tutor_legal, r.es_responsable_pago,
+           coalesce(e.es_tutor_legal, false) as familiar_es_tutor_legal,
+           coalesce(e.es_responsable_pago, false) as familiar_es_responsable_pago
+    from app.paciente_relacion r
+    join app.resumen_pacientes(${ahoraSql(ahora)}) f on f.clinica_id = r.clinica_id and f.id = r.familiar_id
+    left join app.paciente_relacion e
+      on e.clinica_id = r.clinica_id and e.paciente_id = r.familiar_id
+     and e.familiar_id = r.paciente_id and e.deleted_at is null
+    where r.clinica_id = app.clinica_actual() and r.deleted_at is null and ${filtro}
+    order by f.orden_apellidos collate "C", f.orden_nombres collate "C", f.id`;
+}
+
+/**
+ * `app.crear_relacion(...)`: crea el vínculo y su espejo (con el tipo inverso: madre/padre ↔ hijo
+ * según el sexo, abuelo ↔ nieto, tutor ↔ tutelado; hermano, pareja y otro iguales) en la misma
+ * transacción, con las marcas de los dos lados (`familiarEs*` van en el espejo). El tipo del espejo
+ * sigue al sexo: si cambia el sexo del paciente, la base lo recalcula. Devuelve la `Relacion` vista
+ * desde `pacienteId`. Permiso de la base: pacientes:editar.
+ * Errores: `paciente_relacion_par_activo` (23505, ya están vinculados), `paciente_relacion_consigo_mismo`
+ * y `relacion_tipo_sexo` / `relacion_marca_un_sentido` / `relacion_espejo_inconsistente` (23514),
+ * `relacion_paciente_inactivo` (22023), `paciente_relacion_paciente_fkey` /
+ * `paciente_relacion_familiar_fkey` (23503, paciente de otra clínica o inexistente),
+ * `paciente_relacion_tipo_check` (23514), `pacientes_sin_permiso` (42501).
+ */
+export async function crearRelacion(
+  tx: TransaccionConecta,
+  datos: DatosRelacion,
+): Promise<Relacion> {
+  const { rows } = await tx.execute<{ id: string }>(
+    sql`select app.crear_relacion(${datos.pacienteId}::uuid, ${datos.familiarId}::uuid, ${datos.tipo},
+          ${datos.esTutorLegal ?? false}::boolean, ${datos.esResponsablePago ?? false}::boolean,
+          ${datos.familiarEsTutorLegal ?? false}::boolean,
+          ${datos.familiarEsResponsablePago ?? false}::boolean) as id`,
+  );
+  const id = primera(rows, 'app.crear_relacion').id;
+  const creada = await tx.execute<FilaRelacion>(
+    consultaRelaciones(sql`r.id = ${id}::uuid`, undefined),
+  );
+  return relacionDe(primera(creada.rows, 'paciente_relacion'));
+}
+
+/**
+ * `app.editar_relacion(relacion, ...)`: cambia las marcas de un vínculo activo vistas desde el lado
+ * `relacionId` (el id de cualquiera de los dos sentidos): `esTutorLegal`/`esResponsablePago` de
+ * este lado y `familiarEsTutorLegal`/`familiarEsResponsablePago` del otro; lo que no viene no
+ * cambia. Las cuatro se aplican juntas (se puede pasar la tutoría de un lado al otro en un pedido).
+ * Devuelve la `Relacion` vista desde `relacionId` (haya cambiado algo o no). Errores:
+ * `relacion_no_encontrada` (P0002), `relacion_dada_de_baja` (22023), `relacion_marca_un_sentido`
+ * y `relacion_espejo_inconsistente` (23514), `pacientes_sin_permiso` (42501).
+ */
+export async function editarRelacion(
+  tx: TransaccionConecta,
+  relacionId: string,
+  cambios: EditarRelacion,
+): Promise<Relacion> {
+  await tx.execute(
+    sql`select app.editar_relacion(${relacionId}::uuid, ${cambios.esTutorLegal ?? null}::boolean,
+          ${cambios.esResponsablePago ?? null}::boolean, ${cambios.familiarEsTutorLegal ?? null}::boolean,
+          ${cambios.familiarEsResponsablePago ?? null}::boolean)`,
+  );
+  const { rows } = await tx.execute<FilaRelacion>(
+    consultaRelaciones(sql`r.id = ${relacionId}::uuid`, undefined),
+  );
+  return relacionDe(primera(rows, 'paciente_relacion'));
+}
+
+/**
+ * `app.baja_relacion(relacion, motivo)`: da de baja el vínculo y su espejo (motivo opcional).
+ * `false` si ya estaba dado de baja. Errores: `relacion_no_encontrada` (P0002),
+ * `pacientes_sin_permiso` (42501).
+ */
+export async function bajaRelacion(
+  tx: TransaccionConecta,
+  relacionId: string,
+  motivo?: string | null,
+): Promise<boolean> {
+  const { rows } = await tx.execute<{ cambio: boolean }>(
+    sql`select app.baja_relacion(${relacionId}::uuid, ${motivo ?? null}::text) as cambio`,
+  );
+  return primera(rows, 'app.baja_relacion').cambio;
+}
+
+/** Vínculos activos de un paciente, vistos desde su ficha, ordenados por el nombre del familiar. */
+export async function listarRelaciones(
+  tx: TransaccionConecta,
+  pacienteId: string,
+  opciones: { ahora?: Date | undefined } = {},
+): Promise<Relacion[]> {
+  const { rows } = await tx.execute<FilaRelacion>(
+    consultaRelaciones(sql`r.paciente_id = ${pacienteId}::uuid`, opciones.ahora),
+  );
+  return rows.map(relacionDe);
+}
+
+// Alertas manuales y nota interna ---------------------------------------------------------------
+
+/** Datos de una alerta manual nueva (`crearAlertaSchema` del contrato). */
+export interface DatosAlerta {
+  tipo: TipoAlerta;
+  texto: string;
+}
+
+type FilaAlerta = {
+  id: string;
+  tipo: TipoAlerta;
+  texto: string;
+  activa: boolean;
+  created_at: Date | string;
+  creada_por: string | null;
+};
+
+function consultaAlertas(filtro: ReturnType<typeof sql>) {
+  return sql`
+    select a.id, a.tipo, a.texto, a.activa, a.created_at, u.nombre as creada_por
+    from app.paciente_alerta a left join app.usuario u on u.id = a.creada_por
+    where a.clinica_id = app.clinica_actual() and ${filtro}
+    order by a.created_at, a.id`;
+}
+
+function alertaDe(f: FilaAlerta): AlertaManual {
+  return {
+    id: f.id,
+    tipo: f.tipo,
+    texto: f.texto,
+    activa: f.activa,
+    creadaEn: fecha(f.created_at).toISOString(),
+    creadaPor: f.creada_por,
+  };
+}
+
+/**
+ * Alertas manuales de un paciente (activas; con `incluirInactivas`, también las inactivas, que la base
+ * solo muestra a quien tiene `ficha_clinica:ver`), las más viejas primero. `creadaPor` es el nombre.
+ */
+export async function listarAlertas(
+  tx: TransaccionConecta,
+  pacienteId: string,
+  opciones: { incluirInactivas?: boolean | undefined } = {},
+): Promise<AlertaManual[]> {
+  const filtro = opciones.incluirInactivas
+    ? sql`a.paciente_id = ${pacienteId}::uuid`
+    : sql`a.paciente_id = ${pacienteId}::uuid and a.activa`;
+  const { rows } = await tx.execute<FilaAlerta>(consultaAlertas(filtro));
+  return rows.map(alertaDe);
+}
+
+/** Una alerta por id (o null si no es de la clínica, o si es inactiva y falta `ficha_clinica:ver`). */
+export async function obtenerAlerta(
+  tx: TransaccionConecta,
+  alertaId: string,
+): Promise<AlertaManual | null> {
+  const { rows } = await tx.execute<FilaAlerta>(consultaAlertas(sql`a.id = ${alertaId}::uuid`));
+  return rows[0] ? alertaDe(rows[0]) : null;
+}
+
+/**
+ * `app.crear_alerta(paciente, tipo, texto)`: alerta manual activa (`ficha_clinica:editar`) de tipo
+ * `alergia` o `condicion`. Devuelve la alerta. Errores: `ficha_clinica_sin_permiso` (42501),
+ * `paciente_alerta_texto_check` (23514, 3 a 200 caracteres), `paciente_alerta_tipo_check` (23514),
+ * `paciente_alerta_paciente_fkey` (23503).
+ */
+export async function crearAlerta(
+  tx: TransaccionConecta,
+  pacienteId: string,
+  datos: DatosAlerta,
+): Promise<AlertaManual> {
+  const { rows } = await tx.execute<{ id: string }>(
+    sql`select app.crear_alerta(${pacienteId}::uuid, ${datos.tipo}, ${datos.texto}) as id`,
+  );
+  const alerta = await obtenerAlerta(tx, primera(rows, 'app.crear_alerta').id);
+  if (!alerta) throw new Error('app.crear_alerta no dejó ver la alerta creada.');
+  return alerta;
+}
+
+/**
+ * `app.cambiar_alerta(alerta, activa)`: activa o desactiva (`ficha_clinica:editar` y, para
+ * desactivar o reactivar, también `ficha_clinica:ver`; desactivar queda en auditoría como «anular»).
+ * `false` si ya estaba así. Errores: `alerta_no_encontrada` (P0002; también una inactiva para quien
+ * no tiene `ficha_clinica:ver`), `ficha_clinica_sin_permiso` (42501).
+ */
+export async function cambiarAlerta(
+  tx: TransaccionConecta,
+  alertaId: string,
+  activa: boolean,
+): Promise<boolean> {
+  const { rows } = await tx.execute<{ cambio: boolean }>(
+    sql`select app.cambiar_alerta(${alertaId}::uuid, ${activa}::boolean) as cambio`,
+  );
+  return primera(rows, 'app.cambiar_alerta').cambio;
+}
+
+/**
+ * `app.guardar_nota_interna(paciente, texto)`: crea o reemplaza la nota interna; `null` o vacío la
+ * borra (`ficha_clinica:editar` y `ficha_clinica:ver`). Errores: `ficha_clinica_sin_permiso` (42501), `paciente_nota_texto_check`
+ * (23514, más de 2000 caracteres), `paciente_nota_paciente_fkey` (23503).
+ */
+export async function guardarNotaInterna(
+  tx: TransaccionConecta,
+  pacienteId: string,
+  texto: string | null,
+): Promise<void> {
+  await tx.execute(sql`select app.guardar_nota_interna(${pacienteId}::uuid, ${texto}::text)`);
+}
+
+/** La nota interna, o null si no hay o si el usuario del contexto no tiene `ficha_clinica:ver`. */
+export async function leerNotaInterna(
+  tx: TransaccionConecta,
+  pacienteId: string,
+): Promise<string | null> {
+  const { rows } = await tx.execute<{ texto: string | null }>(
+    sql`select n.texto from app.paciente_nota n
+        where n.clinica_id = app.clinica_actual() and n.paciente_id = ${pacienteId}::uuid`,
+  );
+  return rows[0]?.texto ?? null;
+}
+
+/** `app.tiene_permiso(modulo, accion)`: lo que la base cree del usuario del contexto. */
+export async function tienePermisoEnBase(
+  tx: TransaccionConecta,
+  modulo: Modulo,
+  accion: Accion,
+): Promise<boolean> {
+  const { rows } = await tx.execute<{ tiene: boolean }>(
+    sql`select app.tiene_permiso(${modulo}, ${accion}) as tiene`,
+  );
+  return primera(rows, 'app.tiene_permiso').tiene;
 }

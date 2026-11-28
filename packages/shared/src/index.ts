@@ -9,3 +9,5 @@ export * from './contrato/profesionales.js';
 export * from './contrato/catalogos.js';
 export * from './contrato/archivos.js';
 export * from './contrato/rutas.js';
+export * from './documentos.js';
+export * from './contrato/pacientes.js';

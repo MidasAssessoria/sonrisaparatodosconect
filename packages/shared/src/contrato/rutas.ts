@@ -59,6 +59,20 @@ export const RUTAS_API = [
   'POST /archivos archivo',
   'GET /archivos/:id/url archivo',
   'GET /archivos/descarga publica',
+
+  // Sprint 3 · pacientes (contrato/pacientes.ts)
+  'GET /pacientes pacientes:ver',
+  'POST /pacientes pacientes:crear',
+  'GET /pacientes/:id pacientes:ver',
+  'PATCH /pacientes/:id pacientes:editar',
+  'POST /pacientes/:id/desactivar pacientes:anular',
+  'POST /pacientes/:id/reactivar pacientes:anular',
+  'GET /buscar pacientes:ver',
+  'POST /pacientes/:id/relaciones pacientes:editar',
+  'PATCH /relaciones/:id pacientes:editar',
+  'DELETE /relaciones/:id pacientes:editar',
+  'POST /pacientes/:id/alertas ficha_clinica:editar',
+  'PATCH /alertas/:id ficha_clinica:editar',
 ] as const;
 export type RutaApi = (typeof RUTAS_API)[number];
 
