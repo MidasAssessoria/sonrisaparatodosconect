@@ -108,8 +108,15 @@ export type AlertaManual = z.infer<typeof alertaManualSchema>;
 /** Alerta médica derivada de la anamnesis vigente (Sprint 4, contrato/anamnesis.ts). */
 export const alertaMedicaSchema = z.object({
   tipo: z.enum(TIPOS_ALERTA),
-  /** Texto listo para mostrar, con el detalle entre paréntesis si lo hay. */
+  /** Texto de la regla, sin el detalle libre del paciente: «Alergia a la penicilina». */
   texto: z.string(),
+  /**
+   * Detalle libre que escribió el paciente en esa pregunta («urticaria con amoxicilina»). Solo
+   * con `ficha_clinica:ver`; para los demás llega `null` (revisión de seguridad del Sprint 4: el
+   * texto libre puede traer cualquier dato de salud). Si la pregunta generó varias alertas, todas
+   * llevan el mismo detalle: es de la pregunta, no de una opción.
+   */
+  detalle: z.string().nullable(),
   gravedad: z.enum(['alta', 'media']),
   grupoAlergia: z.string().nullable(),
   /** Pregunta que la generó. */

@@ -20,9 +20,10 @@ import { alertaMedicaSchema, TIPOS_ALERTA } from './pacientes.js';
  *     su nombre y CI son obligatorios. Se guarda quién registró la versión (usuario) y quién firmó.
  *   - La pregunta de embarazo/lactancia (`soloSexo: 'F'`) se muestra y se acepta solo si el sexo
  *     del paciente no es M (si el sexo no está cargado, se pregunta).
- *   - La ALERTA MÉDICA se calcula siempre de la versión vigente con las reglas del catálogo (no se
- *     guarda a mano). Si la respuesta trae detalle, se agrega entre paréntesis: «Alergia a la
- *     penicilina (urticaria con amoxicilina)». Aparece en la ficha del paciente
+ *   - La ALERTA MÉDICA se calcula de la versión vigente con las reglas del catálogo al momento de
+ *     guardar (no se guarda a mano). El detalle libre de la respuesta va aparte
+ *     (`AlertaMedica.detalle`, solo con `ficha_clinica:ver`); quien lo ve lo muestra entre
+ *     paréntesis: «Alergia a la penicilina (urticaria con amoxicilina)». Aparece en la ficha del paciente
  *     (`Paciente.alertasMedicas`), cuenta para el filtro «Con alerta», y la ve quien tiene
  *     `pacientes:ver` (como las alertas manuales activas: recepción la necesita al recibir al
  *     paciente). El cuestionario completo, en cambio, solo con `ficha_clinica:ver`.
@@ -103,9 +104,19 @@ export type Pregunta = z.infer<typeof preguntaSchema>;
  * mandándola de nuevo. Responde el catálogo completo, incluidas las inactivas.
  */
 export const reemplazarPreguntasSchema = z.object({
-  preguntas: z.array(preguntaSchema).min(1).max(200),
+  /** Activas e inactivas: las inactivas nunca se borran, por eso el tope es amplio. */
+  preguntas: z.array(preguntaSchema).min(1).max(500),
 });
-export const catalogoPreguntasSchema = z.object({ preguntas: z.array(preguntaSchema) });
+/**
+ * `huella`: identifica el contenido del catálogo ACTIVO (cambia con cualquier edición de texto,
+ * opciones, alertas, tipo, obligatoriedad o activación). El formulario la manda al guardar
+ * (`CrearAnamnesis.huellaCatalogo`): si el catálogo cambió mientras el paciente completaba, 409
+ * (revisión de seguridad del Sprint 4: la versión firmada tiene que ser lo que el paciente vio).
+ */
+export const catalogoPreguntasSchema = z.object({
+  preguntas: z.array(preguntaSchema),
+  huella: z.string(),
+});
 
 /** Respuesta a una pregunta. Lleva solo los campos de su tipo. */
 export const respuestaSchema = z.object({
@@ -137,10 +148,25 @@ export const signosVitalesSchema = z.object({
  * `versionBase`: la versión vigente que se abrió para actualizar (null si no había); si otra
  * persona guardó una versión en el medio, 409 `conflicto` («Otra persona actualizó la anamnesis
  * mientras la completabas…»), así nadie pisa sin saber.
+ *
+ * Los dos 409 se distinguen por `detalles[0].campo`: `versionBase` (otra versión guardada en el
+ * medio: la web trae la nueva y muestra las diferencias por pregunta antes de volver a guardar) o
+ * `huellaCatalogo` (el cuestionario cambió: la web vuelve a pedirlo, pasa las respuestas que
+ * siguen valiendo y avisa cuáles no se pudieron pasar).
+ *
+ * Opción múltiple: `opciones: []` significa «Ninguna» y cuenta como respondida (la web la ofrece
+ * como opción explícita). No mandar la respuesta es «sin responder».
+ *
+ * Firma: la del paciente o su tutor es SIEMPRE dibujada (no hay alternativa escrita con el
+ * teclado mientras el cliente no responda P5). La API exige un PNG real de hasta 2000 × 2000 px,
+ * solo con los bloques IHDR, PLTE, tRNS, IDAT, IEND, con la imagen descomprimible y con trazo
+ * (píxeles no transparentes): una firma vacía es «Falta la firma.».
  */
 export const crearAnamnesisSchema = z
   .object({
     versionBase: z.number().int().min(1).nullable(),
+    /** `huella` del catálogo con el que se armó el formulario. */
+    huellaCatalogo: z.string().min(1).max(128),
     respuestas: z.array(respuestaSchema).max(200),
     signosVitales: signosVitalesSchema.partial().default({}),
     firmante: z.object({

@@ -78,6 +78,7 @@ describe('contrato del Sprint 4', () => {
   const firma = 'data:image/png;base64,iVBORw0KGgo=';
   const base = {
     versionBase: null,
+    huellaCatalogo: 'h1',
     respuestas: [{ codigo: 'alergias', si: true, opciones: ['penicilina'], detalle: 'urticaria' }],
     firmante: { nombre: 'Ana Giménez', esTutor: false },
     firmaPng: firma,

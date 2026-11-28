@@ -379,7 +379,7 @@ Mantengo tu orden dentro del MVP (pacientes → anamnesis → agenda → odontog
 - Como administración, edito el catálogo de preguntas (5 secciones, sí/no, opción múltiple, texto, número).
 - Como paciente, completo y firmo en la tablet. *CA*: sin firma o sin «Declaro que es verdadero» no guarda; si es menor de 18 exige nombre y CI del tutor y firma el tutor.
 - Como odontólogo, actualizo la anamnesis. *CA*: abre con los valores vigentes y guarda la versión siguiente; la anterior queda intacta y consultable.
-- Como odontólogo, veo la alerta médica. *CA*: se calcula de la versión vigente; con detalle queda «Alergia a la penicilina (urticaria con amoxicilina)»; embarazo solo se pregunta si sexo F.
+- Como odontólogo, veo la alerta médica. *CA*: se calcula de la versión vigente; con detalle queda «Alergia a la penicilina (urticaria con amoxicilina)»; embarazo se pregunta si el sexo no es M (si no está cargado, también: es lo más seguro); el detalle libre solo lo ve quien tiene `ficha_clinica:ver`.
 - Como recepción, el filtro «Con alerta» incluye las derivadas.
 - Historial del paciente (línea de tiempo), primera versión.
 

@@ -49,8 +49,14 @@ export const NOMBRES_CATEGORIA_ARCHIVO = Object.keys(CATEGORIAS_ARCHIVO) as [
  * apenas lo lee, antes de aceptar un solo byte del archivo. SVG no se acepta en ninguna categoría
  * (revisión de seguridad del Sprint 2).
  */
+/** Categorías que guarda la propia API (no se suben por `POST /archivos`). */
+export const CATEGORIAS_ARCHIVO_INTERNAS = ['firma_paciente'] as const;
+export const CATEGORIAS_ARCHIVO_SUBIBLES = NOMBRES_CATEGORIA_ARCHIVO.filter(
+  (c) => !(CATEGORIAS_ARCHIVO_INTERNAS as readonly string[]).includes(c),
+) as [CategoriaArchivo, ...CategoriaArchivo[]];
+
 export const subirArchivoCamposSchema = z.object({
-  categoria: z.enum(NOMBRES_CATEGORIA_ARCHIVO),
+  categoria: z.enum(CATEGORIAS_ARCHIVO_SUBIBLES),
 });
 
 export const archivoSchema = z.object({
