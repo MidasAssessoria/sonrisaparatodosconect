@@ -527,8 +527,48 @@ describe('rendimiento con 20.000 pacientes', () => {
            from generate_series(1, 20000) g`,
           [clinica.clinicaId],
         );
+        // Sprint 4: el 40 % con anamnesis de dos versiones y tres alertas derivadas cada una (la
+        // primera ya no vigente): 8.000 pacientes con alerta y 48.000 filas en anamnesis_alerta.
+        await c.query(
+          `insert into app.archivo (clinica_id, categoria, paciente_id, almacen, bucket, ruta,
+                                    nombre_original, tipo, bytes, sha256)
+           select $1::uuid, 'firma_paciente', p.id, 'local', 'pruebas',
+                  $1::text || '/' || gen_random_uuid()::text, 'firma.png', 'image/png', 1, repeat('a', 64)
+           from (select id, row_number() over (order by id) as n from app.paciente
+                 where clinica_id = $1::uuid) p
+           cross join generate_series(1, 2) v
+           where p.n % 5 < 2`,
+          [clinica.clinicaId],
+        );
+        await c.query(
+          `insert into app.anamnesis (clinica_id, paciente_id, version, firmante_nombre, es_tutor,
+                                      firma_archivo_id, declaracion_veracidad)
+           select $1::uuid, a.paciente_id,
+                  row_number() over (partition by a.paciente_id order by a.id), 'Firmante de carga',
+                  false, a.id, true
+           from app.archivo a where a.clinica_id = $1::uuid and a.categoria = 'firma_paciente'`,
+          [clinica.clinicaId],
+        );
+        await c.query(
+          `insert into app.anamnesis_alerta (clinica_id, anamnesis_id, paciente_id, orden,
+                                             pregunta_codigo, tipo, texto, gravedad, vigente)
+           select $1::uuid, an.id, an.paciente_id, o, 'alergias', 'alergia',
+                  'Alergia de carga ' || o, 'alta', an.version = 2
+           from app.anamnesis an cross join generate_series(0, 2) o
+           where an.clinica_id = $1::uuid`,
+          [clinica.clinicaId],
+        );
+        await c.query(
+          `insert into app.anamnesis_vigente (clinica_id, paciente_id, anamnesis_id, version, con_alerta)
+           select $1::uuid, an.paciente_id, an.id, an.version, true
+           from app.anamnesis an where an.clinica_id = $1::uuid and an.version = 2`,
+          [clinica.clinicaId],
+        );
         await c.query('analyze app.paciente');
         await c.query('analyze app.paciente_busqueda');
+        await c.query('analyze app.anamnesis_vigente');
+        await c.query('analyze app.anamnesis');
+        await c.query('analyze app.anamnesis_alerta');
       },
       { confirmar: true },
     );
@@ -580,6 +620,18 @@ describe('rendimiento con 20.000 pacientes', () => {
     resultados['lista con alerta'] = await medir(() =>
       enClinica(clinica, (tx) => listarPacientes(tx, { filtro: 'con_alerta' })),
     );
+    // Sprint 4: con 8.000 pacientes con alertas derivadas, con y sin texto.
+    const conAlertaGonzalez = await enClinica(clinica, (tx) =>
+      listarPacientes(tx, { filtro: 'con_alerta', texto: 'gonzalez' }),
+    );
+    expect(conAlertaGonzalez.items.length).toBeGreaterThan(0);
+    expect(conAlertaGonzalez.items.every((p) => p.conAlerta)).toBe(true);
+    resultados['lista con alerta gonzalez'] = await medir(() =>
+      enClinica(clinica, (tx) => listarPacientes(tx, { filtro: 'con_alerta', texto: 'gonzalez' })),
+    );
+    resultados['lista con alerta ana'] = await medir(() =>
+      enClinica(clinica, (tx) => listarPacientes(tx, { filtro: 'con_alerta', texto: 'ana' })),
+    );
     // Una página del medio, con el cursor opaco de la anterior (0025).
     const primera = await enClinica(clinica, (tx) => listarPacientes(tx, { limite: 500 }));
     resultados['lista con cursor'] = await medir(() =>
@@ -629,6 +681,20 @@ describe('rendimiento con 20.000 pacientes', () => {
         if (SALIDA_RENDIMIENTO)
           appendFileSync(SALIDA_RENDIMIENTO, `EXPLAIN «1.000.370»:\n${planCi}\n\n`);
         expect(planCi).toMatch(/paciente_busqueda_texto_idx/);
+
+        // «Con alerta» (0030): una fila por paciente en anamnesis_vigente, nunca un recorrido de
+        // anamnesis_alerta (con 48.000 filas y la política evaluada por fila tardaba >300 ms).
+        await c.query("select set_config('app.busqueda_patron', '', true)");
+        const conAlerta = await c.query<{ 'QUERY PLAN': string }>(
+          `explain (costs off)
+           select r.id from app.resumen_pacientes() r where r.activo and r.con_alerta
+           order by r.orden_apellidos collate "C", r.orden_nombres collate "C", r.id limit 51`,
+        );
+        const planAlerta = conAlerta.rows.map((f) => f['QUERY PLAN']).join('\n');
+        if (SALIDA_RENDIMIENTO)
+          appendFileSync(SALIDA_RENDIMIENTO, `EXPLAIN «con alerta»:\n${planAlerta}\n\n`);
+        expect(planAlerta).toMatch(/anamnesis_vigente/);
+        expect(planAlerta).not.toMatch(/anamnesis_alerta/);
       },
     );
   });

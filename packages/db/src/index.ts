@@ -37,6 +37,7 @@ export {
   reemplazarPreguntas,
   type AnamnesisGuardada,
   type AnamnesisResumen,
+  type CatalogoPreguntas,
   type CampoDeError,
   type DatosAnamnesis,
   type EventoHistorial,

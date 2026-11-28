@@ -105,15 +105,45 @@ async function firma(pacienteId: string, c: Clinica = A): Promise<string> {
   return (await crearFirmaDePrueba(admin, { clinicaId: c.datos.clinicaId, pacienteId })).archivoId;
 }
 
+/** Marca: «la huella del cuestionario de ahora» (la pone guardarTx). */
+const HUELLA_ACTUAL = '(actual)';
+
 function datos(firmaArchivoId: string, extra: Partial<DatosAnamnesis> = {}): DatosAnamnesis {
   return {
     versionBase: null,
+    huellaCatalogo: HUELLA_ACTUAL,
     respuestas: [],
     firmante: { nombre: 'Ana Prueba', ci: null, esTutor: false },
     firmaArchivoId,
     declaracionVeracidad: true,
     ...extra,
   };
+}
+
+/** guardarAnamnesis con la huella del cuestionario de ahora (salvo que la prueba mande otra). */
+async function guardarTx(
+  tx: Parameters<Parameters<typeof conContexto>[2]>[0],
+  pacienteId: string,
+  d: DatosAnamnesis,
+): Promise<{ id: string; version: number }> {
+  const huellaCatalogo =
+    d.huellaCatalogo === HUELLA_ACTUAL ? (await catalogoPreguntas(tx)).huella : d.huellaCatalogo;
+  return guardarAnamnesis(tx, pacienteId, { ...d, huellaCatalogo });
+}
+
+/** Solo las preguntas del catálogo. */
+async function preguntasDe(
+  tx: Parameters<Parameters<typeof conContexto>[2]>[0],
+  opciones: { incluirInactivas?: boolean } = {},
+): Promise<Pregunta[]> {
+  return (await catalogoPreguntas(tx, opciones)).preguntas;
+}
+
+async function reemplazar(
+  tx: Parameters<Parameters<typeof conContexto>[2]>[0],
+  preguntas: Pregunta[],
+): Promise<Pregunta[]> {
+  return (await reemplazarPreguntas(tx, preguntas)).preguntas;
 }
 
 /** Guarda con una firma nueva del paciente. */
@@ -124,7 +154,7 @@ async function guardar(
   c: Clinica = A,
 ): Promise<{ id: string; version: number }> {
   const f = await firma(pacienteId, c);
-  return conApi(quien, (tx) => guardarAnamnesis(tx, pacienteId, datos(f, extra)), c);
+  return conApi(quien, (tx) => guardarTx(tx, pacienteId, datos(f, extra)), c);
 }
 
 async function falla(promesa: Promise<unknown>): Promise<CampoDeError> {
@@ -160,7 +190,7 @@ function pregunta(p: Partial<Pregunta> & Pick<Pregunta, 'codigo' | 'tipo'>): Pre
 // ---------------------------------------------------------------------------------------------
 describe('catálogo de preguntas', () => {
   it('alta_clinica siembra el cuestionario de la maqueta: 5 secciones, 19 preguntas, sin signos vitales', async () => {
-    const preguntas = await conApi('recepcion', (tx) => catalogoPreguntas(tx));
+    const preguntas = await conApi('recepcion', (tx) => preguntasDe(tx));
     expect(preguntas).toHaveLength(19);
     expect([...new Set(preguntas.map((p) => p.seccion))]).toEqual([1, 2, 3, 4, 5]);
     expect(preguntas.map((p) => p.codigo)).toEqual([
@@ -242,7 +272,7 @@ describe('catálogo de preguntas', () => {
   });
 
   it('administración reemplaza el cuestionario: crea, edita, deja inactiva la que falta y la reactiva', async () => {
-    const base = await conApi('administracion', (tx) => catalogoPreguntas(tx), B);
+    const base = await conApi('administracion', (tx) => preguntasDe(tx), B);
     const sinCirugias = base
       .filter((p) => p.codigo !== 'cirugias')
       .map((p) =>
@@ -258,7 +288,7 @@ describe('catálogo de preguntas', () => {
     });
     const resultado = await conApi(
       'administracion',
-      (tx) => reemplazarPreguntas(tx, [...sinCirugias, nueva]),
+      (tx) => reemplazar(tx, [...sinCirugias, nueva]),
       B,
     );
     expect(resultado.filter((p) => p.activa)).toHaveLength(19);
@@ -269,12 +299,12 @@ describe('catálogo de preguntas', () => {
     });
     expect(resultado.find((p) => p.codigo === 'presion_habitual')).toEqual({ ...nueva });
     // La inactiva no está en el GET y queda en auditoría como baja (módulo configuracion).
-    const activas = await conApi('odontologo', (tx) => catalogoPreguntas(tx), B);
+    const activas = await conApi('odontologo', (tx) => preguntasDe(tx), B);
     expect(activas.map((p) => p.codigo)).not.toContain('cirugias');
     // El editor del catálogo lo pide entero con configuracion:editar, sin ficha_clinica:ver.
     const completo = await conApi(
       'administracion',
-      (tx) => catalogoPreguntas(tx, { incluirInactivas: true }),
+      (tx) => preguntasDe(tx, { incluirInactivas: true }),
       B,
     );
     expect(completo).toEqual(resultado);
@@ -293,23 +323,18 @@ describe('catálogo de preguntas', () => {
     // Reactivarla: mandarla de nuevo.
     const otraVez = await conApi(
       'administracion',
-      (tx) =>
-        reemplazarPreguntas(tx, [
-          ...sinCirugias,
-          nueva,
-          base.find((p) => p.codigo === 'cirugias')!,
-        ]),
+      (tx) => reemplazar(tx, [...sinCirugias, nueva, base.find((p) => p.codigo === 'cirugias')!]),
       B,
     );
     expect(otraVez.filter((p) => p.activa)).toHaveLength(20);
     // Y de vuelta sin cirugías (las pruebas de abajo lo usan).
-    await conApi('administracion', (tx) => reemplazarPreguntas(tx, [...sinCirugias, nueva]), B);
+    await conApi('administracion', (tx) => reemplazar(tx, [...sinCirugias, nueva]), B);
   });
 
   it('reemplazar sin configuracion:editar se rechaza en la base', async () => {
-    const base = await conApi('dueno', (tx) => catalogoPreguntas(tx));
+    const base = await conApi('dueno', (tx) => preguntasDe(tx));
     for (const quien of ['odontologo', 'recepcion', 'asistente'] as const) {
-      expect(await falla(conApi(quien, (tx) => reemplazarPreguntas(tx, base)))).toMatchObject({
+      expect(await falla(conApi(quien, (tx) => reemplazar(tx, base)))).toMatchObject({
         codigoPg: '42501',
         restriccion: 'configuracion_sin_permiso',
       });
@@ -317,7 +342,7 @@ describe('catálogo de preguntas', () => {
   });
 
   it('reemplazar valida y dice qué pregunta falló (column = preguntas.<codigo>)', async () => {
-    const base = await conApi('dueno', (tx) => catalogoPreguntas(tx));
+    const base = await conApi('dueno', (tx) => preguntasDe(tx));
     const casos: [Pregunta[], Partial<CampoDeError>][] = [
       [
         [...base, base[0]!],
@@ -364,11 +389,11 @@ describe('catálogo de preguntas', () => {
     ];
     for (const [preguntas, esperado] of casos) {
       expect(
-        await falla(conApi('administracion', (tx) => reemplazarPreguntas(tx, preguntas))),
+        await falla(conApi('administracion', (tx) => reemplazar(tx, preguntas))),
       ).toMatchObject(esperado);
     }
     // Nada cambió.
-    expect(await conApi('dueno', (tx) => catalogoPreguntas(tx))).toEqual(base);
+    expect(await conApi('dueno', (tx) => preguntasDe(tx))).toEqual(base);
   });
 
   it('app_api no escribe el catálogo directamente', async () => {
@@ -418,7 +443,8 @@ describe('versiones', () => {
       alertasMedicas: [
         {
           tipo: 'alergia',
-          texto: 'Alergia a la penicilina (urticaria con amoxicilina)',
+          texto: 'Alergia a la penicilina',
+          detalle: 'urticaria con amoxicilina',
           gravedad: 'alta',
           grupoAlergia: 'penicilina',
           codigo: 'alergias',
@@ -508,7 +534,7 @@ describe('versiones', () => {
   it('dos guardados simultáneos del mismo paciente: uno gana y el otro recibe el conflicto, sin huecos', async () => {
     const pacienteId = await nuevoPaciente();
     const [f1, f2] = [await firma(pacienteId), await firma(pacienteId)];
-    const sentencia = `select * from app.guardar_anamnesis($1, null, '[]'::jsonb, 'Ana Prueba', null, false, $2, true)`;
+    const sentencia = `select * from app.guardar_anamnesis($1, null, app.huella_catalogo(), '[]'::jsonb, 'Ana Prueba', null, false, $2, true)`;
     const c1 = await api.connect();
     const c2 = await api.connect();
     try {
@@ -543,7 +569,7 @@ describe('versiones', () => {
   it('con REPEATABLE READ el segundo también recibe el conflicto (no la violación de unicidad)', async () => {
     const pacienteId = await nuevoPaciente();
     const [f1, f2] = [await firma(pacienteId), await firma(pacienteId)];
-    const sentencia = `select * from app.guardar_anamnesis($1, null, '[]'::jsonb, 'Ana Prueba', null, false, $2, true)`;
+    const sentencia = `select * from app.guardar_anamnesis($1, null, app.huella_catalogo(), '[]'::jsonb, 'Ana Prueba', null, false, $2, true)`;
     const c1 = await api.connect();
     const c2 = await api.connect();
     try {
@@ -583,8 +609,7 @@ describe('versiones', () => {
           return await conApi('odontologo', async (tx) => {
             const { versiones } = await listarAnamnesis(tx, pacienteId);
             const base = versiones[0]?.version ?? null;
-            return (await guardarAnamnesis(tx, pacienteId, datos(f, { versionBase: base })))
-              .version;
+            return (await guardarTx(tx, pacienteId, datos(f, { versionBase: base }))).version;
           });
         } catch (error) {
           if (campoDeError(error)?.restriccion !== 'anamnesis_conflicto_version') throw error;
@@ -766,6 +791,7 @@ describe('validación contra el catálogo vigente', () => {
         {
           tipo: 'condicion',
           texto: 'Embarazo / lactancia',
+          detalle: null,
           gravedad: 'alta',
           grupoAlergia: null,
           codigo: 'embarazo',
@@ -828,13 +854,11 @@ describe('validación contra el catálogo vigente', () => {
       { confirmar: true },
     );
     const usada = await firma(p);
-    await conApi('odontologo', (tx) => guardarAnamnesis(tx, p, datos(usada)));
+    await conApi('odontologo', (tx) => guardarTx(tx, p, datos(usada)));
     const deB = await firma(await nuevoPaciente({}, B), B);
     for (const f of [deOtro, logo, deBaja, usada, deB]) {
       expect(
-        await falla(
-          conApi('odontologo', (tx) => guardarAnamnesis(tx, p, datos(f, { versionBase: 1 }))),
-        ),
+        await falla(conApi('odontologo', (tx) => guardarTx(tx, p, datos(f, { versionBase: 1 })))),
       ).toMatchObject({ restriccion: 'anamnesis_firma_invalida', campo: 'firmaPng' });
     }
     // Paciente dado de baja y paciente de otra clínica.
@@ -846,12 +870,12 @@ describe('validación contra el catálogo vigente', () => {
     });
     const ajeno = await nuevoPaciente({}, B);
     const f = await firma(ajeno, B);
-    expect(
-      await falla(conApi('odontologo', (tx) => guardarAnamnesis(tx, ajeno, datos(f)))),
-    ).toMatchObject({
-      codigoPg: 'P0002',
-      restriccion: 'paciente_no_encontrado',
-    });
+    expect(await falla(conApi('odontologo', (tx) => guardarTx(tx, ajeno, datos(f))))).toMatchObject(
+      {
+        codigoPg: 'P0002',
+        restriccion: 'paciente_no_encontrado',
+      },
+    );
     // Ninguna versión de más.
     expect((await conApi('odontologo', (tx) => listarAnamnesis(tx, p))).versiones).toHaveLength(1);
   });
@@ -914,34 +938,32 @@ describe('tutor por edad (zona de la clínica)', () => {
     // Sin fecha de nacimiento: firma el paciente (decisión documentada en 0029).
     const sinFecha = await nuevoPaciente({ fechaNac: null });
     expect((await guardar('odontologo', sinFecha)).version).toBe(1);
-    // clinica.edad_tutor manda (no un 18 fijo).
+    // clinica.edad_tutor manda (no un 18 fijo). En una clínica propia: cambiarla en una
+    // compartida afectaría a las pruebas que corren después.
+    const propia = await prepararClinica();
     await enTransaccion(
       admin,
-      { clinica: B.datos.clinicaId },
-      (c) => c.query('update app.clinica set edad_tutor = 21 where id = $1', [B.datos.clinicaId]),
+      { clinica: propia.datos.clinicaId },
+      (c) =>
+        c.query('update app.clinica set edad_tutor = 21 where id = $1', [propia.datos.clinicaId]),
       { confirmar: true },
     );
     const de19 = await nuevoPaciente(
       { fechaNac: fechas.hoy18.replace(/^\d{4}/, (a) => String(Number(a) - 1)) },
-      B,
+      propia,
     );
+    expect(await falla(guardar('odontologo', de19, {}, propia))).toMatchObject({
+      restriccion: 'anamnesis_tutor_requerido',
+    });
     expect(
-      await falla(
-        guardar('odontologo', de19, { respuestas: [{ codigo: 'motivo', texto: 'Control' }] }, B),
-      ),
-    ).toMatchObject({ restriccion: 'anamnesis_tutor_requerido' });
-    await enTransaccion(
-      admin,
-      { clinica: B.datos.clinicaId },
-      (c) => c.query('update app.clinica set edad_tutor = 18 where id = $1', [B.datos.clinicaId]),
-      { confirmar: true },
-    );
+      (await conApi('odontologo', (tx) => listarAnamnesis(tx, de19), propia)).requiereTutor,
+    ).toBe(true);
   });
 });
 
 // ---------------------------------------------------------------------------------------------
 describe('alerta médica derivada', () => {
-  it('cada regla de la semilla, en orden, con el detalle en la última alerta de la pregunta', async () => {
+  it('cada regla de la semilla, en orden; el detalle va aparte y lo llevan todas las alertas de la pregunta', async () => {
     const p = await nuevoPaciente({ sexo: 'F' });
     await guardar('odontologo', p, {
       respuestas: [
@@ -981,6 +1003,7 @@ describe('alerta médica derivada', () => {
         codigo: 'enfermedades',
         tipo: 'condicion',
         texto: 'Diabetes',
+        detalle: null,
         gravedad: 'media',
         grupoAlergia: null,
       },
@@ -988,6 +1011,7 @@ describe('alerta médica derivada', () => {
         codigo: 'enfermedades',
         tipo: 'condicion',
         texto: 'Cardiopatía',
+        detalle: null,
         gravedad: 'alta',
         grupoAlergia: null,
       },
@@ -995,13 +1019,15 @@ describe('alerta médica derivada', () => {
         codigo: 'enfermedades',
         tipo: 'condicion',
         texto: 'Alteración de la coagulación',
+        detalle: null,
         gravedad: 'alta',
         grupoAlergia: null,
       },
       {
         codigo: 'medicacion',
         tipo: 'condicion',
-        texto: 'Anticoagulantes (Warfarina)',
+        texto: 'Anticoagulantes',
+        detalle: null,
         gravedad: 'alta',
         grupoAlergia: null,
       },
@@ -1009,6 +1035,7 @@ describe('alerta médica derivada', () => {
         codigo: 'alergias',
         tipo: 'alergia',
         texto: 'Alergia a la penicilina',
+        detalle: null,
         gravedad: 'alta',
         grupoAlergia: 'penicilina',
       },
@@ -1016,6 +1043,7 @@ describe('alerta médica derivada', () => {
         codigo: 'alergias',
         tipo: 'alergia',
         texto: 'Alergia a anestésicos locales',
+        detalle: null,
         gravedad: 'alta',
         grupoAlergia: 'anestesicos_locales',
       },
@@ -1023,6 +1051,7 @@ describe('alerta médica derivada', () => {
         codigo: 'alergias',
         tipo: 'alergia',
         texto: 'Alergia al látex',
+        detalle: null,
         gravedad: 'alta',
         grupoAlergia: 'latex',
       },
@@ -1030,13 +1059,15 @@ describe('alerta médica derivada', () => {
         codigo: 'alergias',
         tipo: 'alergia',
         texto: 'Alergia a material dental',
+        detalle: null,
         gravedad: 'alta',
         grupoAlergia: 'material_dental',
       },
       {
         codigo: 'alergias',
         tipo: 'alergia',
-        texto: 'Alergia a medicamentos (ibuprofeno)',
+        texto: 'Alergia a medicamentos',
+        detalle: null,
         gravedad: 'alta',
         grupoAlergia: 'otro_medicamento',
       },
@@ -1044,9 +1075,25 @@ describe('alerta médica derivada', () => {
         codigo: 'embarazo',
         tipo: 'condicion',
         texto: 'Embarazo / lactancia',
+        detalle: null,
         gravedad: 'alta',
         grupoAlergia: null,
       },
+    ]);
+    // Con ficha_clinica:ver, el detalle de la respuesta, el mismo en todas las alertas de la pregunta.
+    expect(
+      (await conApi('odontologo', (tx) => alertasMedicas(tx, p))).map((x) => [x.codigo, x.detalle]),
+    ).toEqual([
+      ['enfermedades', null],
+      ['enfermedades', null],
+      ['enfermedades', null],
+      ['medicacion', 'Warfarina'],
+      ['alergias', 'ibuprofeno'],
+      ['alergias', 'ibuprofeno'],
+      ['alergias', 'ibuprofeno'],
+      ['alergias', 'ibuprofeno'],
+      ['alergias', 'ibuprofeno'],
+      ['embarazo', null],
     ]);
     // «No» al embarazo y opciones sin regla: sin alertas.
     const q = await nuevoPaciente({ sexo: 'F' });
@@ -1073,7 +1120,7 @@ describe('alerta médica derivada', () => {
       },
       B,
     );
-    const actual = await conApi('administracion', (tx) => catalogoPreguntas(tx), B);
+    const actual = await conApi('administracion', (tx) => preguntasDe(tx), B);
     const cambiado = actual.map((q) =>
       q.codigo !== 'alergias'
         ? q
@@ -1096,12 +1143,12 @@ describe('alerta médica derivada', () => {
             ),
           },
     );
-    await conApi('administracion', (tx) => reemplazarPreguntas(tx, cambiado), B);
+    await conApi('administracion', (tx) => reemplazar(tx, cambiado), B);
     // La versión 1 sigue diciendo lo que se firmó.
     const v1 = await conApi('odontologo', (tx) => obtenerAnamnesis(tx, p, 1), B);
-    expect(v1?.alertasMedicas.map((a) => [a.texto, a.gravedad, a.grupoAlergia])).toEqual([
-      ['Alergia a la penicilina (urticaria)', 'alta', 'penicilina'],
-    ]);
+    expect(v1?.alertasMedicas.map((a) => [a.texto, a.detalle, a.gravedad, a.grupoAlergia])).toEqual(
+      [['Alergia a la penicilina', 'urticaria', 'alta', 'penicilina']],
+    );
     expect(v1?.respuestas.find((r) => r.codigo === 'alergias')).toMatchObject({
       pregunta:
         '¿Es alérgico a algún medicamento (como penicilina o anestésicos locales), látex o material dental?',
@@ -1109,7 +1156,7 @@ describe('alerta médica derivada', () => {
     });
     expect(
       (await conApi('recepcion', (tx) => alertasMedicas(tx, p), B)).map((a) => a.texto),
-    ).toEqual(['Alergia a la penicilina (urticaria)']);
+    ).toEqual(['Alergia a la penicilina']);
     // Una versión nueva usa las reglas de hoy.
     await guardar(
       'odontologo',
@@ -1125,12 +1172,13 @@ describe('alerta médica derivada', () => {
         codigo: 'alergias',
         tipo: 'alergia',
         texto: 'Alergia a betalactámicos',
+        detalle: null,
         gravedad: 'media',
         grupoAlergia: 'betalactamicos',
       },
     ]);
     // Vuelve el catálogo de antes para las demás pruebas.
-    await conApi('administracion', (tx) => reemplazarPreguntas(tx, actual), B);
+    await conApi('administracion', (tx) => reemplazar(tx, actual), B);
   });
 
   it('«Con alerta» incluye a quien solo tiene alertas derivadas, también para recepción, y deja de incluirlo con una versión sin alertas', async () => {
@@ -1160,6 +1208,7 @@ describe('alerta médica derivada', () => {
           codigo: 'medicacion',
           tipo: 'condicion',
           texto: 'Anticoagulantes',
+          detalle: null,
           gravedad: 'alta',
           grupoAlergia: null,
         },
@@ -1208,14 +1257,24 @@ describe('alerta médica derivada', () => {
       requiereTutor: false,
     });
     expect(await conApi('recepcion', (tx) => obtenerAnamnesis(tx, p, 'vigente'))).toBeNull();
-    // El asistente (ficha_clinica:ver) ve las dos versiones y las tres alertas… del látex con detalle.
+    // El detalle («guantes») no está en ninguna columna de anamnesis_alerta: solo en la respuesta.
+    await como('recepcion', async (c) => {
+      expect(
+        await valor(
+          c,
+          `select count(*)::int from app.anamnesis_alerta a
+           where to_jsonb(a)::text like '%guantes%'`,
+        ),
+      ).toBe(0);
+    });
+    // El asistente (ficha_clinica:ver) ve las dos versiones y sus alertas.
     await como('asistente', async (c) => {
       const { rows } = await c.query(
         'select texto, vigente from app.anamnesis_alerta where paciente_id = $1 order by created_at, orden',
         [p],
       );
       expect(rows).toEqual([
-        { texto: 'Alergia al látex (guantes)', vigente: false },
+        { texto: 'Alergia al látex', vigente: false },
         { texto: 'Alergia a la penicilina', vigente: true },
       ]);
     });

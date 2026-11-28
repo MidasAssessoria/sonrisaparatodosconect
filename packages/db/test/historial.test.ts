@@ -7,6 +7,7 @@ import {
   bajaRelacion,
   cambiarAlerta,
   campoDeError,
+  catalogoPreguntas,
   conContexto,
   crearAlerta,
   crearPaciente,
@@ -95,9 +96,10 @@ beforeAll(async () => {
     clinicaId: clinica.clinicaId,
     pacienteId,
   });
-  await conApi('odontologo', (tx) =>
+  await conApi('odontologo', async (tx) =>
     guardarAnamnesis(tx, pacienteId, {
       versionBase: null,
+      huellaCatalogo: (await catalogoPreguntas(tx)).huella,
       respuestas: [{ codigo: 'alergias', opciones: ['penicilina'] }],
       firmante: { nombre: 'Lucía Historial', ci: null, esTutor: false },
       firmaArchivoId: archivoId,

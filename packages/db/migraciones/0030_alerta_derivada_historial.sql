@@ -2,9 +2,11 @@
 -- paciente.
 --
 --   * app.resumen_pacientes (sigue siendo el ÚNICO lugar de con_alerta): con_alerta = alguna alerta
---     manual activa O alguna alerta médica derivada vigente (anamnesis_alerta.vigente, 0029). Lo
+--     manual activa O la anamnesis vigente dejó alguna alerta médica (anamnesis_vigente.con_alerta,
+--     0029: una fila por paciente, unida por índice; un EXISTS sobre anamnesis_alerta terminaba en
+--     un Seq Scan de toda la tabla con la política evaluada por fila). Lo
 --     usan sin cambios app.listar_pacientes (filtro con_alerta), app.buscar_pacientes,
---     app.pacientes_con_ci y obtenerPaciente. Las filas vigentes de anamnesis_alerta las ve toda la
+--     app.pacientes_con_ci y obtenerPaciente. anamnesis_vigente la ve toda la
 --     clínica (0029), así que el filtro da lo mismo para recepción que para un odontólogo.
 --   * app.historial_paciente(paciente, cursor = NULL, limite = 30): línea de tiempo del paciente
 --     (eventoHistorialSchema), del más nuevo al más viejo, armada desde audit_log y las tablas:
@@ -44,14 +46,14 @@ BEGIN ATOMIC
          -- Alertas: las manuales activas y las médicas derivadas de la anamnesis vigente (0029).
          (EXISTS (SELECT 1 FROM app.paciente_alerta a
                   WHERE a.clinica_id = p.clinica_id AND a.paciente_id = p.id AND a.activa)
-          OR EXISTS (SELECT 1 FROM app.anamnesis_alerta d
-                     WHERE d.clinica_id = p.clinica_id AND d.paciente_id = p.id AND d.vigente)),
+          OR COALESCE(v.con_alerta, false)),
          p.activo, p.orden_apellidos, p.orden_nombres, p.created_at
   FROM app.paciente p
   JOIN (SELECT c.id, app.hoy_clinica(COALESCE(p_ahora, pg_catalog.now())) AS hoy, c.edad_pediatrica
         FROM app.clinica c
         WHERE c.id = app.clinica_actual()
-        OFFSET 0) k ON k.id = p.clinica_id;
+        OFFSET 0) k ON k.id = p.clinica_id
+  LEFT JOIN app.anamnesis_vigente v ON v.clinica_id = p.clinica_id AND v.paciente_id = p.id;
 END;
 COMMENT ON FUNCTION app.resumen_pacientes(timestamptz) IS
   'Resumen de los pacientes de la clínica del contexto (pacienteResumenSchema + clinica_id, claves de orden y created_at). Único lugar de edad, pediátrico y con_alerta (manuales activas o derivadas vigentes, desde 0030).';

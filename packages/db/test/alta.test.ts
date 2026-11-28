@@ -228,12 +228,14 @@ describe('semilla de desarrollo', () => {
       ]);
       // Sprint 4: la anamnesis de Ana deja la alerta de la penicilina con su detalle; la de Mateo
       // la firma Ana como tutora.
-      const alertasAna = await c.query('select texto, grupo_alergia from app.alertas_medicas($1)', [
-        DEMO.pacientes.ana,
-      ]);
+      const alertasAna = await c.query(
+        'select texto, detalle, grupo_alergia from app.alertas_medicas($1)',
+        [DEMO.pacientes.ana],
+      );
       expect(alertasAna.rows).toEqual([
         {
-          texto: 'Alergia a la penicilina (urticaria con amoxicilina)',
+          texto: 'Alergia a la penicilina',
+          detalle: 'urticaria con amoxicilina',
           grupo_alergia: 'penicilina',
         },
       ]);

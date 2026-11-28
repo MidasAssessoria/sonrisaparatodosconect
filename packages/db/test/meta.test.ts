@@ -82,7 +82,7 @@ const SQL_CONCESIONES_EXPUESTAS = `
 
 describe('RLS en todo el schema app', () => {
   it('toda tabla tiene RLS habilitado y forzado y al menos una política', async () => {
-    expect(await tablasDeApp()).toHaveLength(28);
+    expect(await tablasDeApp()).toHaveLength(29);
     expect(await consultar(SQL_TABLAS_SIN_RLS)).toEqual([]);
   });
 
@@ -129,6 +129,9 @@ describe('RLS en todo el schema app', () => {
       { tabla: 'anamnesis', politica: 'anamnesis_ver', cmd: 'SELECT' },
       { tabla: 'anamnesis_alerta', politica: 'anamnesis_alerta_ver', cmd: 'SELECT' },
       { tabla: 'anamnesis_respuesta', politica: 'anamnesis_respuesta_ver', cmd: 'SELECT' },
+      // 0029: la firma del paciente (archivo de ficha_clinica), solo con ficha_clinica:ver.
+      { tabla: 'archivo', politica: 'archivo_ficha_clinica_editar', cmd: 'UPDATE' },
+      { tabla: 'archivo', politica: 'archivo_ficha_clinica_ver', cmd: 'SELECT' },
       { tabla: 'audit_log', politica: 'audit_log_modulo', cmd: 'SELECT' },
       { tabla: 'paciente_alerta', politica: 'paciente_alerta_inactiva_editar', cmd: 'UPDATE' },
       { tabla: 'paciente_alerta', politica: 'paciente_alerta_inactiva_ver', cmd: 'SELECT' },
@@ -292,6 +295,7 @@ describe('privilegios', () => {
       anamnesis: ['SELECT'],
       anamnesis_respuesta: ['SELECT'],
       anamnesis_alerta: ['SELECT'],
+      anamnesis_vigente: ['SELECT'],
     };
     const filas = await consultar<{ tabla: string; privilegios: string[] }>(
       `select c.relname as tabla,
@@ -387,8 +391,9 @@ describe('privilegios', () => {
         'app.resumen_pacientes(timestamp with time zone)',
         'app.sesion_del_dueno()',
         // 0028–0030: anamnesis.
-        'app.alertas_medicas(uuid)',
-        'app.guardar_anamnesis(uuid,integer,jsonb,text,text,boolean,uuid,boolean,integer,integer,integer,numeric)',
+        'app.alertas_medicas(uuid,uuid)',
+        'app.huella_catalogo()',
+        'app.guardar_anamnesis(uuid,integer,text,jsonb,text,text,boolean,uuid,boolean,integer,integer,integer,numeric)',
         'app.historial_paciente(uuid,text,integer)',
         'app.reemplazar_preguntas_anamnesis(jsonb)',
         'app.requiere_tutor(date,timestamp with time zone)',
@@ -429,6 +434,7 @@ describe('privilegios', () => {
           'sesion_del_dueno',
           'requiere_tutor',
           'alertas_medicas',
+          'huella_catalogo',
           'historial_paciente',
           'guardar_anamnesis',
           'reemplazar_preguntas_anamnesis',
@@ -462,11 +468,12 @@ describe('privilegios', () => {
       'app.revisar_vinculos_por_sexo()': false,
       'app.sesion_del_dueno()': false,
       'app.requiere_tutor(date,timestamp with time zone)': false,
-      'app.alertas_medicas(uuid)': false,
+      'app.alertas_medicas(uuid,uuid)': false,
+      'app.huella_catalogo()': false,
       'app.historial_paciente(uuid,text,integer)': false,
       // 0028–0029: app_api no escribe las tablas de anamnesis; estas dos sí (con sus defensas:
       // permiso del actor, contexto de clínica y app.proteger_anamnesis en cada fila).
-      'app.guardar_anamnesis(uuid,integer,jsonb,text,text,boolean,uuid,boolean,integer,integer,integer,numeric)': true,
+      'app.guardar_anamnesis(uuid,integer,text,jsonb,text,text,boolean,uuid,boolean,integer,integer,integer,numeric)': true,
       'app.reemplazar_preguntas_anamnesis(jsonb)': true,
     });
   });
@@ -534,7 +541,7 @@ describe('funciones', () => {
         'app.desactivar_mfa()',
         'app.encolar(text,jsonb)',
         // 0028–0029: las únicas escrituras del cuestionario y de las versiones de la anamnesis.
-        'app.guardar_anamnesis(uuid,integer,jsonb,text,text,boolean,uuid,boolean,integer,integer,integer,numeric)',
+        'app.guardar_anamnesis(uuid,integer,text,jsonb,text,text,boolean,uuid,boolean,integer,integer,integer,numeric)',
         'app.reemplazar_preguntas_anamnesis(jsonb)',
         // 0019: mantiene el índice de búsqueda (app_api no escribe paciente_busqueda).
         'app.indexar_paciente()',
@@ -567,7 +574,14 @@ describe('triggers de auditoría y de no borrado', () => {
   // numerador y sesion cambian en cada pedido: su registro es otro (el documento numerado, 'ingresar').
   // paciente_busqueda es un dato derivado de paciente (cuyos cambios sí se auditan).
   // anamnesis_alerta se deriva de la versión de la anamnesis (cuya alta sí se audita).
-  const SIN_AUDITAR = ['audit_log', 'numerador', 'sesion', 'paciente_busqueda', 'anamnesis_alerta'];
+  const SIN_AUDITAR = [
+    'audit_log',
+    'numerador',
+    'sesion',
+    'paciente_busqueda',
+    'anamnesis_alerta',
+    'anamnesis_vigente',
+  ];
 
   async function triggers(): Promise<
     { tabla: string; funcion: string; tipo: number; argumentos: string[] }[]
@@ -782,12 +796,13 @@ describe('triggers de auditoría y de no borrado', () => {
           t.tipo === (1 | 2 | 16),
       ),
     ).toBe(true);
-    // Defensa de permisos en las cuatro tablas de anamnesis (también dentro de SECURITY DEFINER).
+    // Defensa de permisos en las cinco tablas de anamnesis (también dentro de SECURITY DEFINER).
     for (const tabla of [
       'anamnesis_pregunta',
       'anamnesis',
       'anamnesis_respuesta',
       'anamnesis_alerta',
+      'anamnesis_vigente',
     ]) {
       const ok = todas.some(
         (t) =>
@@ -795,6 +810,16 @@ describe('triggers de auditoría y de no borrado', () => {
       );
       expect({ tabla, ok }).toEqual({ tabla, ok: true });
     }
+  });
+
+  it('la firma de una anamnesis no se da de baja (trigger para todos)', async () => {
+    const todas = await triggers();
+    expect(
+      todas.some(
+        (t) =>
+          t.tabla === 'archivo' && t.funcion === 'proteger_firma_en_uso' && t.tipo === (1 | 2 | 16),
+      ),
+    ).toBe(true);
   });
 
   it('toda tabla (salvo audit_log) tiene created_at, created_by, updated_at y updated_by', async () => {

@@ -55,6 +55,7 @@ export interface DatosClinica extends ClinicaDePrueba {
   anamnesisId: string;
   respuestaId: string;
   alertaMedicaId: string;
+  anamnesisVigenteId: string;
   firmaArchivoId: string;
 }
 
@@ -190,7 +191,8 @@ export async function poblarClinica(admin: pg.Pool): Promise<DatosClinica> {
       );
       const anamnesisId = await valor<string>(
         c,
-        `select id from app.guardar_anamnesis($1, null, $2::jsonb, 'Ana Escenario', null, false, $3, true)`,
+        `select id from app.guardar_anamnesis($1, null, app.huella_catalogo(), $2::jsonb,
+                                              'Ana Escenario', null, false, $3, true)`,
         [
           pacientes[0],
           JSON.stringify([{ codigo: 'alergias', opciones: ['penicilina'] }]),
@@ -207,8 +209,14 @@ export async function poblarClinica(admin: pg.Pool): Promise<DatosClinica> {
         'select id from app.anamnesis_alerta where anamnesis_id = $1',
         [anamnesisId],
       );
+      const anamnesisVigenteId = await valor<string>(
+        c,
+        'select id from app.anamnesis_vigente where anamnesis_id = $1',
+        [anamnesisId],
+      );
       return {
         ...clinica,
+        anamnesisVigenteId,
         preguntaId,
         anamnesisId,
         respuestaId,
@@ -571,6 +579,14 @@ export const CASOS: CasoTabla[] = [
     id: (d) => d.alertaMedicaId,
     editar: null,
     baja: 'vigente = false',
+    insertar: null,
+    referenciarAjena: null,
+  },
+  {
+    tabla: 'anamnesis_vigente',
+    id: (d) => d.anamnesisVigenteId,
+    editar: null,
+    baja: 'con_alerta = false',
     insertar: null,
     referenciarAjena: null,
   },

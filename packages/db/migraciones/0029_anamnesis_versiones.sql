@@ -29,31 +29,59 @@
 --   * anamnesis_alerta: la ALERTA MÉDICA DERIVADA de cada versión, calculada por la base al
 --     guardar con las reglas del catálogo de ESE momento (y no con las de hoy): cambiar el
 --     catálogo después no cambia la alerta de una versión ya firmada, que es lo que la persona
---     firmó. Por eso no hace falta copiar las reglas en cada respuesta. Texto con el detalle de la
---     respuesta entre paréntesis («Alergia a la penicilina (urticaria con amoxicilina)»); si una
---     pregunta de opción múltiple genera varias alertas, el detalle va en la última (como la
---     maqueta, medAlerts), sin el punto final. Orden: sección, orden y código de la pregunta, y el
---     orden de las opciones en el catálogo.
+--     firmó. Por eso no hace falta copiar las reglas en cada respuesta. El texto es el de la regla
+--     («Alergia a la penicilina»), SIN el detalle libre de la respuesta: ese detalle puede traer
+--     cualquier dato de salud y no se copia en esta tabla. El detalle de una alerta es el de la
+--     respuesta a su pregunta (anamnesis_respuesta.detalle, sin espacios ni puntos al final): lo
+--     llevan todas las alertas de esa pregunta y lo arma app.alertas_medicas con un LEFT JOIN a
+--     anamnesis_respuesta, que solo existe para quien tiene ficha_clinica:ver. Así el
+--     enmascaramiento lo hace la base (RLS): para recepción el detalle es NULL consulte como
+--     consulte, porque no hay ninguna columna con el detalle que la política de alertas vigentes
+--     deje ver. Orden: sección, orden y código de la pregunta, y el orden de las opciones en el
+--     catálogo.
 --     vigente = true solo en las de la versión vigente (la última): al guardar una versión nueva,
 --     las anteriores pasan a false en la misma transacción (es lo único que cambia de una fila;
 --     app.proteger_alerta_derivada). Exposición: la política RESTRICTIVA anamnesis_alerta_ver deja
 --     ver las filas vigentes a cualquiera de la clínica (el permiso pacientes:ver lo controla la
 --     API, como con las alertas manuales activas) y todas a quien tiene ficha_clinica:ver. Así
 --     recepción ve el texto de la alerta vigente y nada más: ni las respuestas, ni los signos
---     vitales, ni las alertas de versiones viejas. Es un dato derivado (su origen, la versión, sí
---     se audita): no lleva app.auditar.
+--     vitales, ni las alertas de versiones viejas, ni los detalles. Es un dato derivado (su
+--     origen, la versión, sí se audita): no lleva app.auditar.
+--   * anamnesis_vigente: una fila por paciente con anamnesis (la versión vigente, su id y
+--     con_alerta = la vigente dejó alguna alerta). La mantiene app.guardar_anamnesis en la misma
+--     transacción. Existe para el filtro «Con alerta» (0030): con muchas alertas derivadas, el
+--     EXISTS sobre anamnesis_alerta terminaba en un Seq Scan de toda la tabla evaluando la política
+--     por fila (319 ms con 20.000 pacientes y 48.000 alertas); una fila por paciente se une por
+--     índice. La ve toda la clínica (no tiene nada clínico más allá de «tiene alerta», que recepción
+--     ya ve). Dato derivado: sin app.auditar.
+--   * archivo, defensa en profundidad de la firma: política RESTRICTIVA archivo_ficha_clinica_ver
+--     (SELECT) y _editar (UPDATE): un archivo de módulo ficha_clinica (firma_paciente) solo existe
+--     para quien tiene ficha_clinica:ver, salvo el worker (app_worker lee los archivos que verifica,
+--     con la clínica del trabajo y sin usuario) y una sesión del dueño. Trigger
+--     archivo_firma_en_uso (BEFORE UPDATE, para todos): un archivo que es la firma de una anamnesis
+--     no se da de baja (archivo_firma_en_uso, 23514). paciente_id, ruta y sha256 ya no cambian para
+--     nadie (archivo_auditoria_fila, 0013/0028).
 --   * app.guardar_anamnesis(...): la única forma de guardar una versión. SECURITY DEFINER (app_api
 --     no escribe estas tablas). En una transacción:
 --       1. exige ficha_clinica:crear Y ficha_clinica:ver del actor (ficha_clinica_sin_permiso,
 --          42501). Ver también: «Actualizar» parte de las respuestas vigentes y la versionBase solo
 --          se puede comparar con lo que se ve (como la nota interna, 0023: no se escribe lo que no se
 --          ve). La API igual devuelve la versión completa, que pide ver;
---       2. bloquea al paciente (FOR NO KEY UPDATE): dos guardados del mismo paciente se esperan.
+--       2. toma el bloqueo consultivo del cuestionario de la clínica en modo COMPARTIDO (el mismo que
+--          app.reemplazar_preguntas_anamnesis toma exclusivo): un reemplazo en curso termina antes,
+--          y uno que empiece después espera a que este guardado termine. Con el bloqueo tomado,
+--          compara huellaCatalogo con app.huella_catalogo(): si no coincide,
+--          anamnesis_conflicto_catalogo (40001, COLUMN huellaCatalogo) — el cuestionario cambió
+--          mientras el paciente lo completaba. Con READ COMMITTED (el de la API) la comparación ve el
+--          último reemplazo confirmado; con REPEATABLE READ la instantánea es la del primer pedido de
+--          la transacción, así que la API no debe abrirla así para guardar;
+--          después bloquea al paciente (FOR NO KEY UPDATE): dos guardados del mismo paciente se esperan.
 --          El segundo ve la versión que dejó el primero y, con la misma versionBase, recibe
 --          anamnesis_conflicto_version (40001, COLUMN versionBase). Nunca dos con el mismo número
 --          ni huecos (un guardado que falla se revierte entero). Con REPEATABLE READ el segundo
 --          choca con anamnesis_version_key y también responde anamnesis_conflicto_version;
---       3. versionBase tiene que ser la vigente (NULL si no hay ninguna);
+--       3. versionBase tiene que ser la vigente (NULL si no hay ninguna), y la huella del
+--          cuestionario la de ahora (paso 2);
 --       4. valida contra el catálogo VIGENTE: pregunta activa de la clínica
 --          (anamnesis_pregunta_desconocida, 22023), una respuesta por pregunta
 --          (anamnesis_respuesta_repetida, 22023), los campos del tipo (anamnesis_respuesta_invalida,
@@ -81,14 +109,17 @@
 --          vitales (anamnesis_signos_vitales, 22023, COLUMN signosVitales.<campo>), paciente
 --          inactivo (anamnesis_paciente_inactivo, 22023), paciente de otra clínica o inexistente
 --          (paciente_no_encontrado, P0002);
---       7. copia los textos, guarda la versión, sus respuestas y sus alertas, y deja vigentes solo
---          las nuevas. Devuelve (id, version).
+--       7. copia los textos, guarda la versión, sus respuestas y sus alertas, deja vigentes solo
+--          las nuevas y actualiza anamnesis_vigente. Devuelve (id, version).
+--     Orden de los conflictos: primero versionBase, después huellaCatalogo.
 --     El código de la pregunta (o el campo del contrato) que causó un error va en el campo COLUMN
 --     del error de Postgres (`column` en node-postgres): la API no tiene que leer el mensaje.
 --   * app.requiere_tutor(fecha_nac, ahora = now()): menor de clinica.edad_tutor a la fecha de
 --     «ahora» en la zona de la clínica del contexto; false sin fecha de nacimiento.
---   * app.alertas_medicas(paciente): las alertas derivadas vigentes, en orden (SECURITY INVOKER: la
---     ve quien ve la fila, ver arriba).
+--   * app.alertas_medicas(paciente, anamnesis = NULL): las alertas derivadas, en orden, con su
+--     detalle solo para quien tiene ficha_clinica:ver (NULL para los demás, por RLS). Sin anamnesis,
+--     las vigentes; con el id de una versión, las de esa versión (las de una versión vieja solo
+--     existen con ficha_clinica:ver). SECURITY INVOKER.
 
 -- ---------------------------------------------------------------------------------------------
 -- anamnesis
@@ -235,6 +266,28 @@ CREATE INDEX anamnesis_alerta_vigente_idx ON app.anamnesis_alerta (clinica_id, p
   WHERE vigente;
 
 -- ---------------------------------------------------------------------------------------------
+-- anamnesis_vigente (una fila por paciente con anamnesis)
+-- ---------------------------------------------------------------------------------------------
+CREATE TABLE app.anamnesis_vigente (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  clinica_id uuid NOT NULL REFERENCES app.clinica (id),
+  paciente_id uuid NOT NULL,
+  anamnesis_id uuid NOT NULL,
+  version integer NOT NULL CONSTRAINT anamnesis_vigente_version_check CHECK (version >= 1),
+  con_alerta boolean NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  created_by uuid REFERENCES app.usuario (id),
+  updated_at timestamptz,
+  updated_by uuid REFERENCES app.usuario (id),
+  CONSTRAINT anamnesis_vigente_clinica_id_id_key UNIQUE (clinica_id, id),
+  CONSTRAINT anamnesis_vigente_paciente_key UNIQUE (clinica_id, paciente_id),
+  CONSTRAINT anamnesis_vigente_anamnesis_fkey FOREIGN KEY (clinica_id, anamnesis_id, paciente_id)
+    REFERENCES app.anamnesis (clinica_id, id, paciente_id)
+);
+COMMENT ON TABLE app.anamnesis_vigente IS
+  'Versión vigente de la anamnesis de cada paciente y si dejó alguna alerta médica (dato derivado, lo mantiene app.guardar_anamnesis). Para «Con alerta».';
+
+-- ---------------------------------------------------------------------------------------------
 -- Inmutabilidad
 -- ---------------------------------------------------------------------------------------------
 -- Por sentencia: rechaza también un UPDATE que no alcanzaría ninguna fila.
@@ -319,6 +372,13 @@ CREATE TRIGGER anamnesis_alerta_solo_vigencia BEFORE UPDATE ON app.anamnesis_ale
 CREATE TRIGGER anamnesis_alerta_sin_borrado BEFORE DELETE OR TRUNCATE ON app.anamnesis_alerta
   FOR EACH STATEMENT EXECUTE FUNCTION app.rechazar_borrado();
 
+CREATE TRIGGER anamnesis_vigente_auditoria_fila BEFORE INSERT OR UPDATE ON app.anamnesis_vigente
+  FOR EACH ROW EXECUTE FUNCTION app.fijar_auditoria_fila('paciente_id');
+CREATE TRIGGER anamnesis_vigente_proteger BEFORE INSERT OR UPDATE ON app.anamnesis_vigente
+  FOR EACH ROW EXECUTE FUNCTION app.proteger_anamnesis();
+CREATE TRIGGER anamnesis_vigente_sin_borrado BEFORE DELETE OR TRUNCATE ON app.anamnesis_vigente
+  FOR EACH STATEMENT EXECUTE FUNCTION app.rechazar_borrado();
+
 -- ---------------------------------------------------------------------------------------------
 -- RLS y permisos
 -- ---------------------------------------------------------------------------------------------
@@ -328,6 +388,8 @@ ALTER TABLE app.anamnesis_respuesta ENABLE ROW LEVEL SECURITY;
 ALTER TABLE app.anamnesis_respuesta FORCE ROW LEVEL SECURITY;
 ALTER TABLE app.anamnesis_alerta ENABLE ROW LEVEL SECURITY;
 ALTER TABLE app.anamnesis_alerta FORCE ROW LEVEL SECURITY;
+ALTER TABLE app.anamnesis_vigente ENABLE ROW LEVEL SECURITY;
+ALTER TABLE app.anamnesis_vigente FORCE ROW LEVEL SECURITY;
 
 CREATE POLICY anamnesis_aislamiento ON app.anamnesis
   USING (clinica_id = app.clinica_actual())
@@ -336,6 +398,9 @@ CREATE POLICY anamnesis_respuesta_aislamiento ON app.anamnesis_respuesta
   USING (clinica_id = app.clinica_actual())
   WITH CHECK (clinica_id = app.clinica_actual());
 CREATE POLICY anamnesis_alerta_aislamiento ON app.anamnesis_alerta
+  USING (clinica_id = app.clinica_actual())
+  WITH CHECK (clinica_id = app.clinica_actual());
+CREATE POLICY anamnesis_vigente_aislamiento ON app.anamnesis_vigente
   USING (clinica_id = app.clinica_actual())
   WITH CHECK (clinica_id = app.clinica_actual());
 
@@ -356,6 +421,48 @@ CREATE POLICY anamnesis_alerta_ver ON app.anamnesis_alerta
 GRANT SELECT ON app.anamnesis TO app_api;
 GRANT SELECT ON app.anamnesis_respuesta TO app_api;
 GRANT SELECT ON app.anamnesis_alerta TO app_api;
+GRANT SELECT ON app.anamnesis_vigente TO app_api;
+
+-- ---------------------------------------------------------------------------------------------
+-- archivo: la firma del paciente, solo con ficha_clinica:ver, y no se da de baja si está en uso
+-- ---------------------------------------------------------------------------------------------
+-- El worker (app_worker) lee los archivos que verifica con la clínica del trabajo y sin usuario:
+-- pasa sin el permiso (solo tiene SELECT). Va antes en el OR: las demás funciones no se evalúan.
+CREATE POLICY archivo_ficha_clinica_ver ON app.archivo
+  AS RESTRICTIVE
+  FOR SELECT
+  USING (modulo IS DISTINCT FROM 'ficha_clinica' OR CURRENT_USER = 'app_worker'
+         OR (SELECT app.sesion_del_dueno()) OR (SELECT app.tiene_permiso('ficha_clinica', 'ver')));
+CREATE POLICY archivo_ficha_clinica_editar ON app.archivo
+  AS RESTRICTIVE
+  FOR UPDATE
+  USING (modulo IS DISTINCT FROM 'ficha_clinica'
+         OR (SELECT app.sesion_del_dueno()) OR (SELECT app.tiene_permiso('ficha_clinica', 'ver')))
+  WITH CHECK (clinica_id = app.clinica_actual());
+GRANT EXECUTE ON FUNCTION app.sesion_del_dueno() TO app_worker;
+GRANT EXECUTE ON FUNCTION app.tiene_permiso(text, text) TO app_worker;
+
+CREATE OR REPLACE FUNCTION app.proteger_firma_en_uso() RETURNS trigger
+  LANGUAGE plpgsql
+  SET search_path = pg_catalog, pg_temp
+AS $$
+BEGIN
+  IF OLD.deleted_at IS NULL AND NEW.deleted_at IS NOT NULL AND OLD.categoria = 'firma_paciente'
+     AND EXISTS (SELECT 1 FROM app.anamnesis a
+                 WHERE a.clinica_id = OLD.clinica_id AND a.firma_archivo_id = OLD.id) THEN
+    RAISE EXCEPTION 'Esa firma es parte de una anamnesis firmada: no se da de baja.'
+      USING ERRCODE = 'check_violation', CONSTRAINT = 'archivo_firma_en_uso';
+  END IF;
+  RETURN NEW;
+END
+$$;
+COMMENT ON FUNCTION app.proteger_firma_en_uso() IS
+  'BEFORE UPDATE de archivo: la firma de una anamnesis no se da de baja (paciente_id, ruta y sha256 ya son fijos por archivo_auditoria_fila).';
+
+-- Quien llega a la fila de una firma tiene ficha_clinica:ver (política de arriba) y ve las
+-- anamnesis; una sesión del dueño también.
+CREATE TRIGGER archivo_firma_en_uso BEFORE UPDATE ON app.archivo
+  FOR EACH ROW EXECUTE FUNCTION app.proteger_firma_en_uso();
 
 -- ---------------------------------------------------------------------------------------------
 -- app.requiere_tutor y app.alertas_medicas
@@ -376,18 +483,27 @@ $$;
 COMMENT ON FUNCTION app.requiere_tutor(date, timestamptz) IS
   'true si con esa fecha de nacimiento el paciente es menor de clinica.edad_tutor a la fecha de p_ahora en la zona de la clínica del contexto. false sin fecha de nacimiento.';
 
-CREATE OR REPLACE FUNCTION app.alertas_medicas(p_paciente_id uuid)
-  RETURNS TABLE (codigo text, tipo text, texto text, gravedad text, grupo_alergia text)
+CREATE OR REPLACE FUNCTION app.alertas_medicas(p_paciente_id uuid, p_anamnesis_id uuid DEFAULT NULL)
+  RETURNS TABLE (
+    codigo text, tipo text, texto text, detalle text, gravedad text, grupo_alergia text, orden integer
+  )
   LANGUAGE sql
   STABLE
 BEGIN ATOMIC
-  SELECT a.pregunta_codigo, a.tipo, a.texto, a.gravedad, a.grupo_alergia
+  SELECT a.pregunta_codigo, a.tipo, a.texto,
+         NULLIF(pg_catalog.btrim(pg_catalog.regexp_replace(r.detalle, '[.\s]+$', '')), ''),
+         a.gravedad, a.grupo_alergia, a.orden::integer
   FROM app.anamnesis_alerta a
-  WHERE a.clinica_id = app.clinica_actual() AND a.paciente_id = p_paciente_id AND a.vigente
+  -- El detalle es el de la respuesta: sin ficha_clinica:ver la fila no existe (RLS) y queda NULL.
+  LEFT JOIN app.anamnesis_respuesta r
+    ON r.clinica_id = a.clinica_id AND r.anamnesis_id = a.anamnesis_id
+   AND r.pregunta_codigo = a.pregunta_codigo
+  WHERE a.clinica_id = app.clinica_actual() AND a.paciente_id = p_paciente_id
+    AND (CASE WHEN p_anamnesis_id IS NULL THEN a.vigente ELSE a.anamnesis_id = p_anamnesis_id END)
   ORDER BY a.orden;
 END;
-COMMENT ON FUNCTION app.alertas_medicas(uuid) IS
-  'Alertas médicas derivadas de la anamnesis vigente del paciente, en orden. Vacío si no hay anamnesis.';
+COMMENT ON FUNCTION app.alertas_medicas(uuid, uuid) IS
+  'Alertas médicas derivadas del paciente (las vigentes, o las de la versión p_anamnesis_id), en orden. detalle solo con ficha_clinica:ver (NULL para los demás, por RLS).';
 
 -- ---------------------------------------------------------------------------------------------
 -- app.guardar_anamnesis
@@ -395,6 +511,7 @@ COMMENT ON FUNCTION app.alertas_medicas(uuid) IS
 CREATE OR REPLACE FUNCTION app.guardar_anamnesis(
   p_paciente_id uuid,
   p_version_base integer,
+  p_huella_catalogo text,
   p_respuestas jsonb,
   p_firmante_nombre text,
   p_firmante_ci text,
@@ -451,7 +568,10 @@ BEGIN
       USING ERRCODE = 'insufficient_privilege', CONSTRAINT = 'ficha_clinica_sin_permiso';
   END IF;
 
-  -- 1. El paciente, bloqueado: dos guardados del mismo paciente se esperan.
+  -- 1. El cuestionario (compartido: un reemplazo espera, y este espera a uno en curso) y el
+  --    paciente, bloqueados: dos guardados del mismo paciente se esperan.
+  PERFORM pg_catalog.pg_advisory_xact_lock_shared(
+    pg_catalog.hashtextextended('conecta:anamnesis_pregunta:' || v_clinica::text, 0));
   SELECT p.sexo, p.fecha_nac, p.activo INTO v_sexo, v_fecha_nac, v_activo
   FROM app.paciente p
   WHERE p.clinica_id = v_clinica AND p.id = p_paciente_id
@@ -474,6 +594,13 @@ BEGIN
             COLUMN = 'versionBase';
   END IF;
   v_version := v_vigente + 1;
+
+  -- El cuestionario con el que se armó el formulario tiene que ser el de ahora.
+  IF p_huella_catalogo IS DISTINCT FROM app.huella_catalogo() THEN
+    RAISE EXCEPTION 'El cuestionario cambió mientras se completaba la anamnesis: abrilo de nuevo y revisá las respuestas.'
+      USING ERRCODE = 'serialization_failure', CONSTRAINT = 'anamnesis_conflicto_catalogo',
+            COLUMN = 'huellaCatalogo';
+  END IF;
 
   -- 3. Firmante, firma, declaración y signos vitales.
   v_nombre := pg_catalog.btrim(pg_catalog.regexp_replace(COALESCE(p_firmante_nombre, ''), '\s+', ' ', 'g'));
@@ -671,14 +798,10 @@ BEGIN
             v_si, v_opciones, v_etiquetas, v_texto, v_numero,
             CASE WHEN v_q.tipo IN ('si_no', 'multiple') THEN v_detalle END);
 
-    -- Alertas de esta pregunta (reglas del catálogo de este momento); el detalle, en la última.
+    -- Alertas de esta pregunta (reglas del catálogo de este momento). El detalle NO se copia:
+    -- queda en la respuesta (ver app.alertas_medicas).
     v_largo := pg_catalog.jsonb_array_length(v_lista);
     IF v_largo > 0 THEN
-      v_detalle := NULLIF(pg_catalog.btrim(pg_catalog.regexp_replace(COALESCE(v_detalle, ''), '[.\s]+$', '')), '');
-      IF v_detalle IS NOT NULL THEN
-        v_lista := pg_catalog.jsonb_set(v_lista, ARRAY[(v_largo - 1)::text, 'texto'],
-          pg_catalog.to_jsonb((v_lista -> (v_largo - 1) ->> 'texto') || ' (' || v_detalle || ')'));
-      END IF;
       v_alertas := v_alertas || (
         SELECT pg_catalog.jsonb_agg(a || pg_catalog.jsonb_build_object(
                  'codigo', v_codigo, 'seccion', v_q.seccion, 'ordenPregunta', v_q.orden, 'n', n)
@@ -710,6 +833,11 @@ BEGIN
                                                  e ->> 'codigo', (e ->> 'n')::integer) - 1)::smallint,
          e ->> 'codigo', e ->> 'tipo', e ->> 'texto', e ->> 'gravedad', e ->> 'grupoAlergia'
   FROM pg_catalog.jsonb_array_elements(v_alertas) e;
+  INSERT INTO app.anamnesis_vigente AS v (clinica_id, paciente_id, anamnesis_id, version, con_alerta)
+  VALUES (v_clinica, p_paciente_id, v_id, v_version, pg_catalog.jsonb_array_length(v_alertas) > 0)
+  ON CONFLICT (clinica_id, paciente_id) DO UPDATE
+    SET anamnesis_id = EXCLUDED.anamnesis_id, version = EXCLUDED.version,
+        con_alerta = EXCLUDED.con_alerta;
 
   RETURN QUERY SELECT v_id, v_version;
 EXCEPTION
@@ -732,11 +860,11 @@ EXCEPTION
     END;
 END
 $$;
-COMMENT ON FUNCTION app.guardar_anamnesis(uuid, integer, jsonb, text, text, boolean, uuid, boolean, integer, integer, integer, numeric) IS
+COMMENT ON FUNCTION app.guardar_anamnesis(uuid, integer, text, jsonb, text, text, boolean, uuid, boolean, integer, integer, integer, numeric) IS
   'Guarda la versión siguiente de la anamnesis del paciente (ver 0029): valida contra el catálogo vigente, exige tutor según la edad en la zona de la clínica, compara versionBase, copia los textos y calcula la alerta médica. Exige ficha_clinica:crear y ver. Devuelve (id, version).';
 
 GRANT EXECUTE ON FUNCTION app.requiere_tutor(date, timestamptz) TO app_api;
-GRANT EXECUTE ON FUNCTION app.alertas_medicas(uuid) TO app_api;
-GRANT EXECUTE ON FUNCTION app.guardar_anamnesis(uuid, integer, jsonb, text, text, boolean, uuid, boolean, integer, integer, integer, numeric) TO app_api;
+GRANT EXECUTE ON FUNCTION app.alertas_medicas(uuid, uuid) TO app_api;
+GRANT EXECUTE ON FUNCTION app.guardar_anamnesis(uuid, integer, text, jsonb, text, text, boolean, uuid, boolean, integer, integer, integer, numeric) TO app_api;
 
 CALL app.asegurar_permisos();

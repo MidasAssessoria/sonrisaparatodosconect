@@ -271,7 +271,8 @@ export type RestriccionPaciente = (typeof RESTRICCIONES_PACIENTES)[number];
  * `constraint` de sus errores. Código entre paréntesis. Los que vienen de una respuesta o de un
  * campo del pedido llevan además, en el campo `column` del error de Postgres, la ruta del campo
  * del contrato: `respuestas.<codigo de la pregunta>`, `firmante.ci`, `firmante.nombre`,
- * `firmante.esTutor`, `firmaPng`, `declaracionVeracidad`, `signosVitales.<campo>`, `versionBase`;
+ * `firmante.esTutor`, `firmaPng`, `declaracionVeracidad`, `signosVitales.<campo>`, `versionBase`,
+ * `huellaCatalogo`;
  * en el catálogo, `preguntas.<codigo>` (o `preguntas`). Leelo con `campoDeError`.
  * Además, reglas que ya existían: `ficha_clinica_sin_permiso` (42501; para guardar hacen falta
  * ficha_clinica:crear Y ver), `paciente_no_encontrado` (P0002), `cursor_invalido` (22023). Y
@@ -283,7 +284,7 @@ export type RestriccionPaciente = (typeof RESTRICCIONES_PACIENTES)[number];
 export const RESTRICCIONES_ANAMNESIS = [
   /** (42501) Al actor le falta configuracion:editar para reemplazar el cuestionario. */
   'configuracion_sin_permiso',
-  /** (22023) El cuestionario no es una lista de 1 a 200 preguntas. */
+  /** (22023) El cuestionario no es una lista de 1 a 500 preguntas. */
   'anamnesis_catalogo_invalido',
   /** (22023) Una pregunta del cuestionario no es un objeto o no tiene código. */
   'anamnesis_pregunta_invalida',
@@ -291,6 +292,12 @@ export const RESTRICCIONES_ANAMNESIS = [
   'anamnesis_pregunta_repetida',
   /** (40001) `versionBase` no es la vigente: otra persona guardó una versión en el medio. */
   'anamnesis_conflicto_version',
+  /** (40001, column = huellaCatalogo) El cuestionario cambió mientras se completaba. */
+  'anamnesis_conflicto_catalogo',
+  /** (22023) Entre activas e inactivas, el cuestionario pasaría de 500 preguntas. */
+  'anamnesis_catalogo_lleno',
+  /** (23514) Dar de baja el archivo que es la firma de una anamnesis. */
+  'archivo_firma_en_uso',
   /** (22023) El paciente está dado de baja. */
   'anamnesis_paciente_inactivo',
   /** (22023) Respuesta a una pregunta que no existe o ya no está activa. */
@@ -857,6 +864,20 @@ export const anamnesisAlerta = esquemaApp.table('anamnesis_alerta', {
   ...auditoriaFila,
 });
 
+/**
+ * Versión vigente de la anamnesis de cada paciente (0029, dato derivado que mantiene
+ * `guardarAnamnesis`): `conAlerta` alimenta el filtro «Con alerta». La ve toda la clínica.
+ */
+export const anamnesisVigente = esquemaApp.table('anamnesis_vigente', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  clinicaId: uuid('clinica_id').notNull(),
+  pacienteId: uuid('paciente_id').notNull(),
+  anamnesisId: uuid('anamnesis_id').notNull(),
+  version: integer('version').notNull(),
+  conAlerta: boolean('con_alerta').notNull(),
+  ...auditoriaFila,
+});
+
 /** Todas las tablas, para `drizzle(pool, { schema })` y para la prueba de introspección. */
 export const esquema = {
   usuario,
@@ -887,5 +908,6 @@ export const esquema = {
   anamnesis,
   anamnesisRespuesta,
   anamnesisAlerta,
+  anamnesisVigente,
 };
 export type Esquema = typeof esquema;

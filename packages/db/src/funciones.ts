@@ -1199,32 +1199,51 @@ function preguntaDe(f: FilaPregunta): Pregunta {
 export async function catalogoPreguntas(
   tx: TransaccionConecta,
   opciones: { incluirInactivas?: boolean | undefined } = {},
-): Promise<Pregunta[]> {
-  const { rows } = await tx.execute<FilaPregunta>(sql`
-    select q.codigo, q.seccion, q.orden, q.texto, q.tipo, q.opciones, q.alerta_si, q.con_detalle,
-           q.unidad, q.minimo::text as minimo, q.maximo::text as maximo, q.solo_sexo,
-           q.obligatoria, q.activa
-    from app.anamnesis_pregunta q
-    where q.clinica_id = app.clinica_actual()
-      and (${opciones.incluirInactivas ?? false}::boolean or q.activa)
+): Promise<CatalogoPreguntas> {
+  // Una sola sentencia: las preguntas y la huella salen de la misma instantánea.
+  const { rows } = await tx.execute<{ huella: string } & Partial<FilaPregunta>>(sql`
+    select h.huella, q.*
+    from (select app.huella_catalogo() as huella) h
+    left join lateral (
+      select q.codigo, q.seccion, q.orden, q.texto, q.tipo, q.opciones, q.alerta_si, q.con_detalle,
+             q.unidad, q.minimo::text as minimo, q.maximo::text as maximo, q.solo_sexo,
+             q.obligatoria, q.activa
+      from app.anamnesis_pregunta q
+      where q.clinica_id = app.clinica_actual()
+        and (${opciones.incluirInactivas ?? false}::boolean or q.activa)) q on true
     order by q.activa desc, q.seccion, q.orden, q.codigo`);
-  return rows.map(preguntaDe);
+  const huella = primera(rows, 'app.huella_catalogo').huella;
+  return {
+    preguntas: rows.filter((f) => f.codigo != null).map((f) => preguntaDe(f as FilaPregunta)),
+    huella,
+  };
+}
+
+/** El cuestionario y su huella (`catalogoPreguntasSchema`). */
+export interface CatalogoPreguntas {
+  preguntas: Pregunta[];
+  /**
+   * Huella del cuestionario ACTIVO (`app.huella_catalogo()`): el formulario la manda al guardar
+   * (`huellaCatalogo`). No depende de `incluirInactivas`.
+   */
+  huella: string;
 }
 
 /**
  * `app.reemplazar_preguntas_anamnesis(preguntas)`: `PUT /anamnesis/preguntas`
  * (`configuracion:editar`). Crea o actualiza cada pregunta por `codigo` (estable) y deja inactivas
  * las que no vienen; una inactiva se reactiva mandándola de nuevo. Completa los valores por defecto
- * del contrato. Devuelve el catálogo completo, incluidas las inactivas (las activas primero).
+ * del contrato. Devuelve el catálogo completo, incluidas las inactivas (las activas primero), y la
+ * huella nueva. Hasta 500 preguntas en el pedido y en total (activas + inactivas).
  * Errores (con `column` = `preguntas.<codigo>`, ver `campoDeError`): `configuracion_sin_permiso`
- * (42501), `anamnesis_catalogo_invalido`, `anamnesis_pregunta_invalida`,
+ * (42501), `anamnesis_catalogo_invalido`, `anamnesis_catalogo_lleno`, `anamnesis_pregunta_invalida`,
  * `anamnesis_pregunta_repetida` (22023), y los CHECK de la tabla con su nombre (23514, p. ej.
  * `anamnesis_pregunta_tipo_campos`, `anamnesis_pregunta_opciones_check`).
  */
 export async function reemplazarPreguntas(
   tx: TransaccionConecta,
   preguntas: readonly Pregunta[],
-): Promise<Pregunta[]> {
+): Promise<CatalogoPreguntas> {
   await tx.execute(
     sql`select app.reemplazar_preguntas_anamnesis(${JSON.stringify(preguntas)}::jsonb)`,
   );
@@ -1251,7 +1270,9 @@ export type DatosAnamnesis = Omit<
  * las reglas del catálogo de este momento; esas alertas pasan a ser las vigentes. Devuelve el id y
  * el número de versión. La API registra después la lectura si devuelve la versión completa.
  * Errores (nombre en `constraint`, campo en `column`; ver `RESTRICCIONES_ANAMNESIS` y
- * `campoDeError`): `anamnesis_conflicto_version` (40001, `versionBase` desactualizada),
+ * `campoDeError`): `anamnesis_conflicto_version` (40001, `column = versionBase`: otra versión
+ * guardada en el medio), `anamnesis_conflicto_catalogo` (40001, `column = huellaCatalogo`: el
+ * cuestionario cambió; se compara con el bloqueo del cuestionario tomado, con READ COMMITTED),
  * `ficha_clinica_sin_permiso` (42501), `paciente_no_encontrado` (P0002),
  * `anamnesis_paciente_inactivo`, `anamnesis_pregunta_desconocida`, `anamnesis_respuesta_repetida`,
  * `anamnesis_respuesta_invalida`, `anamnesis_opcion_desconocida`, `anamnesis_numero_fuera_de_rango`,
@@ -1268,7 +1289,8 @@ export async function guardarAnamnesis(
   const signos = datos.signosVitales ?? {};
   const { rows } = await tx.execute<{ id: string; version: number }>(sql`
     select id, version from app.guardar_anamnesis(
-      ${pacienteId}::uuid, ${datos.versionBase}::integer, ${JSON.stringify(datos.respuestas)}::jsonb,
+      ${pacienteId}::uuid, ${datos.versionBase}::integer, ${datos.huellaCatalogo}::text,
+      ${JSON.stringify(datos.respuestas)}::jsonb,
       ${datos.firmante.nombre}::text, ${datos.firmante.ci ?? null}::text,
       ${datos.firmante.esTutor}::boolean, ${datos.firmaArchivoId}::uuid,
       ${datos.declaracionVeracidad}::boolean, ${signos.presionSistolica ?? null}::integer,
@@ -1364,6 +1386,7 @@ type FilaAlertaMedica = {
   codigo: string;
   tipo: TipoAlerta;
   texto: string;
+  detalle: string | null;
   gravedad: GravedadAlerta;
   grupo_alergia: string | null;
 };
@@ -1372,6 +1395,7 @@ function alertaMedicaDe(f: FilaAlertaMedica): AlertaMedica {
   return {
     tipo: f.tipo,
     texto: f.texto,
+    detalle: f.detalle,
     gravedad: f.gravedad,
     grupoAlergia: f.grupo_alergia,
     codigo: f.codigo,
@@ -1408,10 +1432,8 @@ export async function obtenerAnamnesis(
     where r.clinica_id = app.clinica_actual() and r.anamnesis_id = ${f.id}::uuid
     order by r.seccion, r.orden, r.pregunta_codigo`);
   const alertas = await tx.execute<FilaAlertaMedica>(sql`
-    select d.pregunta_codigo as codigo, d.tipo, d.texto, d.gravedad, d.grupo_alergia
-    from app.anamnesis_alerta d
-    where d.clinica_id = app.clinica_actual() and d.anamnesis_id = ${f.id}::uuid
-    order by d.orden`);
+    select codigo, tipo, texto, detalle, gravedad, grupo_alergia
+    from app.alertas_medicas(${pacienteId}::uuid, ${f.id}::uuid)`);
   return {
     id: f.id,
     pacienteId: f.paciente_id,
@@ -1450,16 +1472,19 @@ export async function obtenerAnamnesis(
 
 /**
  * `app.alertas_medicas(paciente)`: la alerta médica del paciente, derivada de su anamnesis vigente
- * (vacía si no tiene). Solo el texto de cada alerta, su tipo, gravedad, grupo de alergia y el
- * código de la pregunta: la ve cualquiera de la clínica (la API exige `pacientes:ver`), sin abrir
- * las respuestas, que solo existen con `ficha_clinica:ver`.
+ * (vacía si no tiene): texto de la regla, tipo, gravedad, grupo de alergia y código de la
+ * pregunta. La ve cualquiera de la clínica (la API exige `pacientes:ver`). `detalle` (el texto
+ * libre de la respuesta, el mismo en todas las alertas de una pregunta) solo con
+ * `ficha_clinica:ver`; para los demás la base devuelve null (sale de la respuesta, que sin ese
+ * permiso no existe).
  */
 export async function alertasMedicas(
   tx: TransaccionConecta,
   pacienteId: string,
 ): Promise<AlertaMedica[]> {
   const { rows } = await tx.execute<FilaAlertaMedica>(
-    sql`select codigo, tipo, texto, gravedad, grupo_alergia from app.alertas_medicas(${pacienteId}::uuid)`,
+    sql`select codigo, tipo, texto, detalle, gravedad, grupo_alergia
+        from app.alertas_medicas(${pacienteId}::uuid)`,
   );
   return rows.map(alertaMedicaDe);
 }

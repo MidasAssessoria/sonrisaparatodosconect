@@ -633,6 +633,8 @@ export async function crearAnamnesisDePrueba(
     tutor?: { nombre: string; ci: string };
     /** Por defecto, la vigente (la base la compara igual). */
     versionBase?: number | null;
+    /** Por defecto, la del cuestionario de ahora. */
+    huellaCatalogo?: string;
     signosVitales?: {
       presionSistolica?: number;
       presionDiastolica?: number;
@@ -660,7 +662,8 @@ export async function crearAnamnesisDePrueba(
           : (vigente.rows[0]?.version ?? null);
       const signos = opciones.signosVitales ?? {};
       const { rows } = await cliente.query<{ id: string; version: number }>(
-        `select id, version from app.guardar_anamnesis($1, $2, $3::jsonb, $4, $5, $6, $7, true,
+        `select id, version from app.guardar_anamnesis($1, $2, coalesce($12, app.huella_catalogo()),
+                                                        $3::jsonb, $4, $5, $6, $7, true,
                                                         $8, $9, $10, $11)`,
         [
           opciones.pacienteId,
@@ -674,6 +677,7 @@ export async function crearAnamnesisDePrueba(
           signos.presionDiastolica ?? null,
           signos.pulso ?? null,
           signos.pesoKg ?? null,
+          opciones.huellaCatalogo ?? null,
         ],
       );
       const fila = rows[0];

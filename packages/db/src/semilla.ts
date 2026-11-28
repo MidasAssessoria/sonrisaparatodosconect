@@ -524,7 +524,8 @@ async function sembrarAnamnesis(cliente: pg.PoolClient, a: AnamnesisDemo): Promi
   );
   const [sistolica, diastolica, pulso, peso] = a.signos;
   await cliente.query(
-    `select app.guardar_anamnesis($1, null, $2::jsonb, $3, $4, $5, $6, true, $7, $8, $9, $10)`,
+    `select app.guardar_anamnesis($1, null, app.huella_catalogo(), $2::jsonb, $3, $4, $5, $6, true,
+                                  $7, $8, $9, $10)`,
     [
       a.pacienteId,
       JSON.stringify(a.respuestas),

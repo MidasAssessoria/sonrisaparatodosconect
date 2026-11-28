@@ -12,6 +12,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import {
   alertasMedicas,
   campoDeError,
+  catalogoPreguntas,
   conContexto,
   DIRECTORIO_MIGRACIONES,
   guardarAnamnesis,
@@ -60,7 +61,7 @@ beforeAll(async () => {
   });
 });
 
-const SQL_GUARDAR = `select * from app.guardar_anamnesis($1, $2, $3::jsonb, $4, $5, $6, $7, $8)`;
+const SQL_GUARDAR = `select * from app.guardar_anamnesis($1, $2, app.huella_catalogo(), $3::jsonb, $4, $5, $6, $7, $8)`;
 
 /** Llama a guardar_anamnesis crudo como app_api con un contexto cualquiera (se revierte). */
 function guardarCrudo(
@@ -259,13 +260,20 @@ describe('pasada adversarial como app_api', () => {
       .archivoId;
     const datos: DatosAnamnesis = {
       versionBase: null,
+      huellaCatalogo: '',
       respuestas: [],
       firmante: { nombre: 'Ana Ana', ci: null, esTutor: false },
       firmaArchivoId: f,
       declaracionVeracidad: true,
     };
-    const r = await conContexto(api, { clinicaId: A.clinicaId, usuarioId: odontologoA }, (tx) =>
-      guardarAnamnesis(tx, pacienteA, datos),
+    const r = await conContexto(
+      api,
+      { clinicaId: A.clinicaId, usuarioId: odontologoA },
+      async (tx) =>
+        guardarAnamnesis(tx, pacienteA, {
+          ...datos,
+          huellaCatalogo: (await catalogoPreguntas(tx)).huella,
+        }),
     );
     expect(r.version).toBe(1);
   });

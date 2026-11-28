@@ -26,18 +26,30 @@
 --     opciones solo y siempre (al menos una) en multiple, alertaSiSi solo en si_no, detalle solo en
 --     si_no y multiple, unidad/mínimo/máximo solo en numero, mínimo <= máximo.
 --   * app.reemplazar_preguntas_anamnesis(preguntas jsonb): PUT /anamnesis/preguntas. Recibe el
---     arreglo de preguntaSchema (1 a 200; los valores por defecto del contrato se completan acá),
+--     arreglo de preguntaSchema (1 a 500; los valores por defecto del contrato se completan acá),
 --     crea o actualiza por codigo y deja inactivas las que faltan (se reactivan mandándolas de
 --     nuevo). Devuelve cuántas quedaron activas. SECURITY DEFINER: app_api solo LEE la tabla, así
 --     el catálogo cambia únicamente por acá. Exige configuracion:editar del actor
 --     (configuracion_sin_permiso, 42501). Errores con el código de la pregunta en el campo COLUMN
 --     del error («preguntas.<codigo>»): anamnesis_pregunta_repetida (22023), anamnesis_pregunta_invalida
 --     (22023, no es un objeto o le falta el código) y cualquier CHECK de la tabla con su nombre
---     (23514/22P02…); sin pregunta: anamnesis_catalogo_invalido (22023, COLUMN «preguntas»).
---     Dos reemplazos a la vez del mismo catálogo se esperan (bloqueo consultivo por clínica).
+--     (23514/22P02…); sin pregunta o con más de 500: anamnesis_catalogo_invalido (22023, COLUMN
+--     «preguntas»); si entre activas e inactivas la clínica pasaría de 500 preguntas (las
+--     inactivas nunca se borran): anamnesis_catalogo_lleno (22023, COLUMN «preguntas»).
+--     Dos reemplazos a la vez del mismo catálogo se esperan, y un guardado de anamnesis espera a un
+--     reemplazo en curso (y al revés): bloqueo consultivo por clínica, exclusivo para reemplazar y
+--     compartido para guardar (app.guardar_anamnesis, 0029).
+--   * app.huella_catalogo(): huella del cuestionario ACTIVO de la clínica del contexto (SHA-256 en
+--     hex del jsonb de las preguntas activas, ordenadas por código, con todo lo que la persona ve o
+--     lo que cambia la validación y las alertas: sección, orden, texto, tipo, opciones con sus
+--     alertas, alerta de «sí», detalle, unidad, rango, sexo y obligatoriedad). Cambia con cualquier
+--     edición de esos datos o con activar/desactivar una pregunta; no cambia si un reemplazo no
+--     cambia nada. La devuelve catalogoPreguntas y la exige app.guardar_anamnesis (la versión
+--     firmada tiene que ser la del cuestionario que vio el paciente).
 --   * app.proteger_anamnesis() (BEFORE INSERT OR UPDATE): defensa en la base, también dentro de
 --     las funciones SECURITY DEFINER (mira la SESIÓN, como app.proteger_pacientes):
---     anamnesis_pregunta exige configuracion:editar; las tablas de 0029, ficha_clinica:crear y ver.
+--     anamnesis_pregunta exige configuracion:editar; las tablas de 0029 (anamnesis,
+--     anamnesis_respuesta, anamnesis_alerta, anamnesis_vigente), ficha_clinica:crear y ver.
 --   * Semilla: app.sembrar_preguntas_anamnesis(clinica) carga el cuestionario de la maqueta
 --     (referencia/maqueta/codigo/gestion/anam.js, ANQ y ALERTA): 5 secciones, 19 preguntas, con
 --     las reglas de alerta: alergias (penicilina, anestésicos locales, látex, material dental,
@@ -240,7 +252,7 @@ BEGIN
 
   IF TG_TABLE_NAME = 'anamnesis_pregunta' THEN
     v_permisos := ARRAY['configuracion:editar'];
-  ELSIF TG_TABLE_NAME IN ('anamnesis', 'anamnesis_respuesta', 'anamnesis_alerta') THEN
+  ELSIF TG_TABLE_NAME IN ('anamnesis', 'anamnesis_respuesta', 'anamnesis_alerta', 'anamnesis_vigente') THEN
     v_permisos := ARRAY['ficha_clinica:crear', 'ficha_clinica:ver'];
   ELSE
     RAISE EXCEPTION 'app.proteger_anamnesis() no está pensada para %.%.', TG_TABLE_SCHEMA, TG_TABLE_NAME;
@@ -304,8 +316,8 @@ BEGIN
       USING ERRCODE = 'insufficient_privilege', CONSTRAINT = 'configuracion_sin_permiso';
   END IF;
   IF p_preguntas IS NULL OR pg_catalog.jsonb_typeof(p_preguntas) <> 'array'
-     OR pg_catalog.jsonb_array_length(p_preguntas) NOT BETWEEN 1 AND 200 THEN
-    RAISE EXCEPTION 'El cuestionario va con 1 a 200 preguntas.'
+     OR pg_catalog.jsonb_array_length(p_preguntas) NOT BETWEEN 1 AND 500 THEN
+    RAISE EXCEPTION 'El cuestionario va con 1 a 500 preguntas.'
       USING ERRCODE = 'invalid_parameter_value', CONSTRAINT = 'anamnesis_catalogo_invalido',
             COLUMN = 'preguntas';
   END IF;
@@ -373,6 +385,13 @@ BEGIN
   UPDATE app.anamnesis_pregunta q SET activa = false
   WHERE q.clinica_id = v_clinica AND q.activa AND NOT (q.codigo = ANY (v_codigos));
 
+  -- Activas e inactivas: las inactivas no se borran nunca.
+  IF (SELECT pg_catalog.count(*) FROM app.anamnesis_pregunta q WHERE q.clinica_id = v_clinica) > 500 THEN
+    RAISE EXCEPTION 'El cuestionario no puede pasar de 500 preguntas entre activas e inactivas: reutilizá los códigos de las que ya no usás.'
+      USING ERRCODE = 'invalid_parameter_value', CONSTRAINT = 'anamnesis_catalogo_lleno',
+            COLUMN = 'preguntas';
+  END IF;
+
   SELECT pg_catalog.count(*)::integer INTO v_activas
   FROM app.anamnesis_pregunta q WHERE q.clinica_id = v_clinica AND q.activa;
   RETURN v_activas;
@@ -382,6 +401,31 @@ COMMENT ON FUNCTION app.reemplazar_preguntas_anamnesis(jsonb) IS
   'Reemplaza el cuestionario de la clínica del contexto (arreglo de preguntaSchema): crea o actualiza por código y deja inactivas las que faltan. Devuelve cuántas quedan activas. Exige configuracion:editar.';
 
 GRANT EXECUTE ON FUNCTION app.reemplazar_preguntas_anamnesis(jsonb) TO app_api;
+
+-- ---------------------------------------------------------------------------------------------
+-- app.huella_catalogo
+-- ---------------------------------------------------------------------------------------------
+-- STABLE: dentro de una sentencia usa la misma instantánea que la consulta que la llama (así
+-- catalogoPreguntas devuelve las preguntas y su huella coherentes). Orden con COLLATE "C": la
+-- huella no depende de la intercalación de la base.
+CREATE OR REPLACE FUNCTION app.huella_catalogo() RETURNS text
+  LANGUAGE sql
+  STABLE
+  SET search_path = pg_catalog, pg_temp
+AS $$
+  SELECT pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(COALESCE(
+    (SELECT pg_catalog.jsonb_agg(pg_catalog.jsonb_build_array(
+              q.codigo, q.seccion, q.orden, q.texto, q.tipo, q.opciones, q.alerta_si, q.con_detalle,
+              q.unidad, q.minimo, q.maximo, q.solo_sexo, q.obligatoria)
+            ORDER BY q.codigo COLLATE "C")
+     FROM app.anamnesis_pregunta q
+     WHERE q.clinica_id = app.clinica_actual() AND q.activa),
+    '[]'::jsonb)::text, 'UTF8')), 'hex')
+$$;
+COMMENT ON FUNCTION app.huella_catalogo() IS
+  'Huella (SHA-256 hex) del cuestionario activo de la clínica del contexto. Cambia con cualquier edición o activación que cambie lo que se pregunta o cómo se valida.';
+
+GRANT EXECUTE ON FUNCTION app.huella_catalogo() TO app_api;
 
 -- ---------------------------------------------------------------------------------------------
 -- Semilla: el cuestionario de la maqueta
