@@ -328,8 +328,11 @@ describe('worker: archivo.verificar', () => {
     const suelto = new Promise<void>((r) => (soltar = r));
     const lento: LectorArchivos = {
       async leer(ubicacion) {
-        avisarEmpezo();
-        await suelto;
+        // Solo frena el archivo de esta prueba: un trabajo que quedó de otra puede llegar antes.
+        if (ubicacion.ruta.endsWith(archivo.id)) {
+          avisarEmpezo();
+          await suelto;
+        }
         return real.leer(ubicacion);
       },
     };
