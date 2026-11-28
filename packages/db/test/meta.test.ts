@@ -6,15 +6,18 @@
 import {
   ACCIONES,
   ACCIONES_AUDITORIA,
+  alertaMedicaSchema,
   CATEGORIAS_ARCHIVO,
   ESTADOS_SEDE,
   MODULOS,
   NOMBRES_CATEGORIA_ARCHIVO,
   IDIOMAS_PACIENTE,
   ORIGENES_PACIENTE,
+  SECCIONES_ANAMNESIS,
   SEXOS,
   TASAS_IVA,
   TIPOS_ALERTA,
+  TIPOS_PREGUNTA,
   TIPOS_RELACION,
 } from '@conecta/shared';
 import { describe, expect, it } from 'vitest';
@@ -22,6 +25,7 @@ import {
   ACCIONES_EVENTO,
   ALMACENES_ARCHIVO,
   ESTADOS_MEMBRESIA,
+  GRAVEDADES_ALERTA,
   MOTIVOS_CIERRE_SESION,
   TIPOS_NUMERADOR,
 } from '../src/esquema.js';
@@ -78,7 +82,7 @@ const SQL_CONCESIONES_EXPUESTAS = `
 
 describe('RLS en todo el schema app', () => {
   it('toda tabla tiene RLS habilitado y forzado y al menos una política', async () => {
-    expect(await tablasDeApp()).toHaveLength(24);
+    expect(await tablasDeApp()).toHaveLength(28);
     expect(await consultar(SQL_TABLAS_SIN_RLS)).toEqual([]);
   });
 
@@ -120,6 +124,11 @@ describe('RLS en todo el schema app', () => {
        where schemaname = 'app' and permissive = 'RESTRICTIVE' order by 1, 2`,
     );
     expect(filas).toEqual([
+      // 0029: la anamnesis y sus respuestas solo con ficha_clinica:ver; de la alerta derivada, las
+      // vigentes para toda la clínica.
+      { tabla: 'anamnesis', politica: 'anamnesis_ver', cmd: 'SELECT' },
+      { tabla: 'anamnesis_alerta', politica: 'anamnesis_alerta_ver', cmd: 'SELECT' },
+      { tabla: 'anamnesis_respuesta', politica: 'anamnesis_respuesta_ver', cmd: 'SELECT' },
       { tabla: 'audit_log', politica: 'audit_log_modulo', cmd: 'SELECT' },
       { tabla: 'paciente_alerta', politica: 'paciente_alerta_inactiva_editar', cmd: 'UPDATE' },
       { tabla: 'paciente_alerta', politica: 'paciente_alerta_inactiva_ver', cmd: 'SELECT' },
@@ -278,6 +287,11 @@ describe('privilegios', () => {
       paciente_relacion: ['INSERT', 'SELECT', 'UPDATE'],
       paciente_alerta: ['INSERT', 'SELECT', 'UPDATE'],
       paciente_nota: ['INSERT', 'SELECT', 'UPDATE'],
+      // 0028–0029: las escriben solo app.reemplazar_preguntas_anamnesis y app.guardar_anamnesis.
+      anamnesis_pregunta: ['SELECT'],
+      anamnesis: ['SELECT'],
+      anamnesis_respuesta: ['SELECT'],
+      anamnesis_alerta: ['SELECT'],
     };
     const filas = await consultar<{ tabla: string; privilegios: string[] }>(
       `select c.relname as tabla,
@@ -372,6 +386,12 @@ describe('privilegios', () => {
         'app.modulos_con_accion(text)',
         'app.resumen_pacientes(timestamp with time zone)',
         'app.sesion_del_dueno()',
+        // 0028–0030: anamnesis.
+        'app.alertas_medicas(uuid)',
+        'app.guardar_anamnesis(uuid,integer,jsonb,text,text,boolean,uuid,boolean,integer,integer,integer,numeric)',
+        'app.historial_paciente(uuid,text,integer)',
+        'app.reemplazar_preguntas_anamnesis(jsonb)',
+        'app.requiere_tutor(date,timestamp with time zone)',
       ].sort(),
     );
   });
@@ -407,6 +427,11 @@ describe('privilegios', () => {
           'edad_en',
           'revisar_vinculos_por_sexo',
           'sesion_del_dueno',
+          'requiere_tutor',
+          'alertas_medicas',
+          'historial_paciente',
+          'guardar_anamnesis',
+          'reemplazar_preguntas_anamnesis',
         ],
       ],
     );
@@ -436,6 +461,13 @@ describe('privilegios', () => {
       // Trigger de cambio de sexo: también corre como app_api (RLS y pacientes:editar).
       'app.revisar_vinculos_por_sexo()': false,
       'app.sesion_del_dueno()': false,
+      'app.requiere_tutor(date,timestamp with time zone)': false,
+      'app.alertas_medicas(uuid)': false,
+      'app.historial_paciente(uuid,text,integer)': false,
+      // 0028–0029: app_api no escribe las tablas de anamnesis; estas dos sí (con sus defensas:
+      // permiso del actor, contexto de clínica y app.proteger_anamnesis en cada fila).
+      'app.guardar_anamnesis(uuid,integer,jsonb,text,text,boolean,uuid,boolean,integer,integer,integer,numeric)': true,
+      'app.reemplazar_preguntas_anamnesis(jsonb)': true,
     });
   });
 
@@ -469,15 +501,18 @@ describe('privilegios', () => {
        from pg_proc p join pg_namespace n on n.oid = p.pronamespace
        where n.nspname = 'app'
          and p.proname in ('proteger_acceso', 'proteger_invitacion', 'proteger_profesional',
-                           'limitar_rol_al_actor', 'proteger_pacientes')
+                           'limitar_rol_al_actor', 'proteger_pacientes', 'proteger_anamnesis',
+                           'rechazar_edicion_inmutable')
        order by 1`,
     );
     expect(filas).toEqual([
       { funcion: 'limitar_rol_al_actor', ok: true },
       { funcion: 'proteger_acceso', ok: true },
+      { funcion: 'proteger_anamnesis', ok: true },
       { funcion: 'proteger_invitacion', ok: true },
       { funcion: 'proteger_pacientes', ok: true },
       { funcion: 'proteger_profesional', ok: true },
+      { funcion: 'rechazar_edicion_inmutable', ok: true },
     ]);
   });
 });
@@ -498,6 +533,9 @@ describe('funciones', () => {
         'app.consultar_invitacion(text)',
         'app.desactivar_mfa()',
         'app.encolar(text,jsonb)',
+        // 0028–0029: las únicas escrituras del cuestionario y de las versiones de la anamnesis.
+        'app.guardar_anamnesis(uuid,integer,jsonb,text,text,boolean,uuid,boolean,integer,integer,integer,numeric)',
+        'app.reemplazar_preguntas_anamnesis(jsonb)',
         // 0019: mantiene el índice de búsqueda (app_api no escribe paciente_busqueda).
         'app.indexar_paciente()',
         'app.registrar_evento(text,text,uuid,jsonb,uuid)',
@@ -528,7 +566,8 @@ describe('triggers de auditoría y de no borrado', () => {
   // tgtype: 1 fila, 2 BEFORE, 4 INSERT, 8 DELETE, 16 UPDATE, 32 TRUNCATE.
   // numerador y sesion cambian en cada pedido: su registro es otro (el documento numerado, 'ingresar').
   // paciente_busqueda es un dato derivado de paciente (cuyos cambios sí se auditan).
-  const SIN_AUDITAR = ['audit_log', 'numerador', 'sesion', 'paciente_busqueda'];
+  // anamnesis_alerta se deriva de la versión de la anamnesis (cuya alta sí se audita).
+  const SIN_AUDITAR = ['audit_log', 'numerador', 'sesion', 'paciente_busqueda', 'anamnesis_alerta'];
 
   async function triggers(): Promise<
     { tabla: string; funcion: string; tipo: number; argumentos: string[] }[]
@@ -575,6 +614,9 @@ describe('triggers de auditoría y de no borrado', () => {
       paciente_relacion: 'pacientes',
       paciente_alerta: 'ficha_clinica',
       paciente_nota: 'ficha_clinica',
+      anamnesis_pregunta: 'configuracion',
+      anamnesis: 'ficha_clinica',
+      anamnesis_respuesta: 'ficha_clinica',
     });
   });
 
@@ -723,6 +765,38 @@ describe('triggers de auditoría y de no borrado', () => {
     }
   });
 
+  it('las versiones de la anamnesis y sus respuestas rechazan UPDATE (por sentencia); la alerta derivada solo deja de estar vigente', async () => {
+    const todas = await triggers();
+    for (const tabla of ['anamnesis', 'anamnesis_respuesta']) {
+      const ok = todas.some(
+        (t) =>
+          t.tabla === tabla && t.funcion === 'rechazar_edicion_inmutable' && t.tipo === (2 | 16),
+      );
+      expect({ tabla, ok }).toEqual({ tabla, ok: true });
+    }
+    expect(
+      todas.some(
+        (t) =>
+          t.tabla === 'anamnesis_alerta' &&
+          t.funcion === 'proteger_alerta_derivada' &&
+          t.tipo === (1 | 2 | 16),
+      ),
+    ).toBe(true);
+    // Defensa de permisos en las cuatro tablas de anamnesis (también dentro de SECURITY DEFINER).
+    for (const tabla of [
+      'anamnesis_pregunta',
+      'anamnesis',
+      'anamnesis_respuesta',
+      'anamnesis_alerta',
+    ]) {
+      const ok = todas.some(
+        (t) =>
+          t.tabla === tabla && t.funcion === 'proteger_anamnesis' && t.tipo === (1 | 2 | 4 | 16),
+      );
+      expect({ tabla, ok }).toEqual({ tabla, ok: true });
+    }
+  });
+
   it('toda tabla (salvo audit_log) tiene created_at, created_by, updated_at y updated_by', async () => {
     const filas = await consultar<{ tabla: string; faltan: string[] }>(
       `select c.relname as tabla,
@@ -798,8 +872,50 @@ describe('valores de los CHECK sincronizados con el código', () => {
     ['paciente_origen_check', ORIGENES_PACIENTE],
     ['paciente_relacion_tipo_check', TIPOS_RELACION],
     ['paciente_alerta_tipo_check', TIPOS_ALERTA],
+    ['anamnesis_pregunta_tipo_check', TIPOS_PREGUNTA],
+    ['anamnesis_respuesta_tipo_check', TIPOS_PREGUNTA],
+    ['anamnesis_alerta_tipo_check', TIPOS_ALERTA],
+    ['anamnesis_alerta_gravedad_check', GRAVEDADES_ALERTA],
   ] as const)('%s coincide con el código', async (restriccion, valores) => {
     expect((await valoresDelCheck(restriccion)).sort()).toEqual([...valores].sort());
+  });
+
+  it('las reglas de alerta del catálogo aceptan exactamente TIPOS_ALERTA y las gravedades del contrato; las secciones son las del contrato', async () => {
+    expect([...GRAVEDADES_ALERTA].sort()).toEqual(
+      [...alertaMedicaSchema.shape.gravedad.options].sort(),
+    );
+    const regla = (tipo: string, gravedad = 'alta') =>
+      JSON.stringify({ tipo, texto: 'Alerta de prueba', gravedad, grupoAlergia: null });
+    for (const tipo of TIPOS_ALERTA) {
+      const [fila] = await consultar<{ ok: boolean }>(
+        'select app.regla_alerta_valida($1::jsonb) as ok',
+        [regla(tipo)],
+      );
+      expect({ tipo, ok: fila?.ok }).toEqual({ tipo, ok: true });
+    }
+    for (const gravedad of GRAVEDADES_ALERTA) {
+      const [fila] = await consultar<{ ok: boolean }>(
+        'select app.regla_alerta_valida($1::jsonb) as ok',
+        [regla('alergia', gravedad)],
+      );
+      expect({ gravedad, ok: fila?.ok }).toEqual({ gravedad, ok: true });
+    }
+    for (const [tipo, gravedad] of [
+      ['otra', 'alta'],
+      ['alergia', 'baja'],
+    ] as const) {
+      const [fila] = await consultar<{ ok: boolean }>(
+        'select app.regla_alerta_valida($1::jsonb) as ok',
+        [regla(tipo, gravedad)],
+      );
+      expect({ tipo, gravedad, ok: fila?.ok }).toEqual({ tipo, gravedad, ok: false });
+    }
+    const [secciones] = await consultar<{ definicion: string }>(
+      `select pg_get_constraintdef(oid) as definicion from pg_constraint
+       where conname = 'anamnesis_pregunta_seccion_check' and connamespace = 'app'::regnamespace`,
+    );
+    expect(secciones?.definicion).toContain(`>= 1`);
+    expect(secciones?.definicion).toContain(`<= ${SECCIONES_ANAMNESIS.length}`);
   });
 
   it('tratamiento_iva_check acepta exactamente TASAS_IVA', async () => {
@@ -836,14 +952,19 @@ describe('valores de los CHECK sincronizados con el código', () => {
         "insert into app.clinica (id, nombre) values ($1, 'Clínica de la meta-prueba')",
         [id],
       );
+      // firma_paciente pide el paciente (0028).
+      const paciente = await c.query<{ id: string }>(
+        "insert into app.paciente (clinica_id, nombres) values ($1, 'Paciente meta') returning id",
+        [id],
+      );
       for (const [categoria, datos] of Object.entries(CATEGORIAS_ARCHIVO)) {
         const { rows } = await c.query<{ modulo: string }>(
           `insert into app.archivo (clinica_id, categoria, almacen, bucket, ruta, nombre_original,
-                                    tipo, bytes, sha256)
+                                    tipo, bytes, sha256, paciente_id)
            values ($1::uuid, $2::text, 'local', 'pruebas', $1::text || '/' || $2::text || '/x.png',
-                   'x.png', 'image/png', 1, repeat('a', 64))
+                   'x.png', 'image/png', 1, repeat('a', 64), $3)
            returning modulo`,
-          [id, categoria],
+          [id, categoria, categoria === 'firma_paciente' ? paciente.rows[0]!.id : null],
         );
         expect({ categoria, modulo: rows[0]?.modulo }).toEqual({ categoria, modulo: datos.modulo });
       }

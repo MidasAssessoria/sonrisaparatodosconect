@@ -49,6 +49,13 @@ export interface DatosClinica extends ClinicaDePrueba {
   relacionId: string;
   alertaId: string;
   notaId: string;
+  /** Pregunta del cuestionario (sembrado por alta_clinica). */
+  preguntaId: string;
+  /** Versión 1 de la anamnesis de pacienteId (alérgico a la penicilina), con su firma. */
+  anamnesisId: string;
+  respuestaId: string;
+  alertaMedicaId: string;
+  firmaArchivoId: string;
 }
 
 export async function poblarClinica(admin: pg.Pool): Promise<DatosClinica> {
@@ -168,8 +175,45 @@ export async function poblarClinica(admin: pg.Pool): Promise<DatosClinica> {
          values ($1, $2, 'Nota del escenario') returning id`,
         [clinica.clinicaId, pacientes[0]],
       );
+      const preguntaId = await valor<string>(
+        c,
+        "select id from app.anamnesis_pregunta where clinica_id = $1 and codigo = 'alergias'",
+        [clinica.clinicaId],
+      );
+      const firmaArchivoId = await valor<string>(
+        c,
+        `insert into app.archivo (clinica_id, categoria, paciente_id, almacen, bucket, ruta,
+                                  nombre_original, tipo, bytes, sha256)
+         values ($1, 'firma_paciente', $2, 'local', 'pruebas', $3, 'firma.png', 'image/png', 10, $4)
+         returning id`,
+        [clinica.clinicaId, pacientes[0], `${clinica.clinicaId}/${randomUUID()}`, hashAlAzar()],
+      );
+      const anamnesisId = await valor<string>(
+        c,
+        `select id from app.guardar_anamnesis($1, null, $2::jsonb, 'Ana Escenario', null, false, $3, true)`,
+        [
+          pacientes[0],
+          JSON.stringify([{ codigo: 'alergias', opciones: ['penicilina'] }]),
+          firmaArchivoId,
+        ],
+      );
+      const respuestaId = await valor<string>(
+        c,
+        'select id from app.anamnesis_respuesta where anamnesis_id = $1',
+        [anamnesisId],
+      );
+      const alertaMedicaId = await valor<string>(
+        c,
+        'select id from app.anamnesis_alerta where anamnesis_id = $1',
+        [anamnesisId],
+      );
       return {
         ...clinica,
+        preguntaId,
+        anamnesisId,
+        respuestaId,
+        alertaMedicaId,
+        firmaArchivoId,
         pacienteId: pacientes[0]!,
         pacienteFamiliarId: pacientes[1]!,
         pacienteLibreId: pacientes[2]!,
@@ -495,6 +539,40 @@ export const CASOS: CasoTabla[] = [
       "insert into app.paciente_nota (clinica_id, paciente_id, texto) values ($1, $2, 'Nota')",
       [p.clinicaId, a.pacienteId],
     ],
+  },
+  // 0028–0029: app_api solo lee; las escriben app.reemplazar_preguntas_anamnesis y
+  // app.guardar_anamnesis (ver test/anamnesis.test.ts).
+  {
+    tabla: 'anamnesis_pregunta',
+    id: (d) => d.preguntaId,
+    editar: null,
+    baja: 'activa = false',
+    insertar: null,
+    referenciarAjena: null,
+  },
+  {
+    tabla: 'anamnesis',
+    id: (d) => d.anamnesisId,
+    editar: null,
+    baja: null,
+    insertar: null,
+    referenciarAjena: null,
+  },
+  {
+    tabla: 'anamnesis_respuesta',
+    id: (d) => d.respuestaId,
+    editar: null,
+    baja: null,
+    insertar: null,
+    referenciarAjena: null,
+  },
+  {
+    tabla: 'anamnesis_alerta',
+    id: (d) => d.alertaMedicaId,
+    editar: null,
+    baja: 'vigente = false',
+    insertar: null,
+    referenciarAjena: null,
   },
   {
     tabla: 'numerador',

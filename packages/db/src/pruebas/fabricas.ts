@@ -413,6 +413,8 @@ export async function crearArchivoDePrueba(
     clinicaId: string;
     categoria?: CategoriaArchivo;
     sedeId?: string;
+    /** Paciente del archivo (obligatorio con `firma_paciente`). */
+    pacienteId?: string;
     /** Usuario del contexto (subido_por y created_by). Por defecto, el sistema (NULL). */
     usuarioId?: string;
   },
@@ -427,14 +429,15 @@ export async function crearArchivoDePrueba(
         opciones.usuarioId ?? '',
       ]);
       const { rows } = await cliente.query<{ id: string }>(
-        `insert into app.archivo (clinica_id, categoria, sede_id, almacen, bucket, ruta,
+        `insert into app.archivo (clinica_id, categoria, sede_id, paciente_id, almacen, bucket, ruta,
                                   nombre_original, tipo, bytes, ancho, alto, sha256)
-         values ($1, $2, $3, 'local', 'pruebas', $4, 'logo.png', 'image/png', 2048, 64, 64, $5)
+         values ($1, $2, $3, $4, 'local', 'pruebas', $5, 'logo.png', 'image/png', 2048, 64, 64, $6)
          returning id`,
         [
           opciones.clinicaId,
           categoria,
           opciones.sedeId ?? null,
+          opciones.pacienteId ?? null,
           ruta,
           randomBytes(32).toString('hex'),
         ],
@@ -585,6 +588,97 @@ export async function crearAlertaDePrueba(
         ],
       );
       return { alertaId };
+    },
+    SIN_VERIFICAR,
+  );
+}
+
+/** Archivo `firma_paciente` de un paciente (solo metadatos), para firmar una anamnesis. */
+export async function crearFirmaDePrueba(
+  admin: pg.Pool,
+  opciones: { clinicaId: string; pacienteId: string },
+): Promise<{ archivoId: string }> {
+  const { archivoId } = await crearArchivoDePrueba(admin, {
+    clinicaId: opciones.clinicaId,
+    categoria: 'firma_paciente',
+    pacienteId: opciones.pacienteId,
+  });
+  return { archivoId };
+}
+
+/** Respuesta a una pregunta de la anamnesis (forma de `respuestaSchema`). */
+export interface RespuestaDePrueba {
+  codigo: string;
+  si?: boolean;
+  opciones?: string[];
+  texto?: string;
+  numero?: number;
+  detalle?: string;
+}
+
+/**
+ * Guarda una versión de la anamnesis con `app.guardar_anamnesis` desde una sesión del dueño de las
+ * tablas (sin las defensas de permisos, como alta del sistema: registrada_por NULL; o como
+ * `usuarioId` si se pasa). Pasa por TODAS las validaciones del catálogo y del tutor. Crea la firma.
+ * Por defecto: la versión siguiente a la vigente, sin respuestas, firmada por «Paciente de prueba»
+ * (o, con `tutor`, por ese tutor con su CI).
+ */
+export async function crearAnamnesisDePrueba(
+  admin: pg.Pool,
+  opciones: {
+    clinicaId: string;
+    pacienteId: string;
+    respuestas?: RespuestaDePrueba[];
+    firmante?: string;
+    tutor?: { nombre: string; ci: string };
+    /** Por defecto, la vigente (la base la compara igual). */
+    versionBase?: number | null;
+    signosVitales?: {
+      presionSistolica?: number;
+      presionDiastolica?: number;
+      pulso?: number;
+      pesoKg?: number;
+    };
+    usuarioId?: string;
+  },
+): Promise<{ anamnesisId: string; version: number; firmaArchivoId: string }> {
+  const { archivoId } = await crearFirmaDePrueba(admin, opciones);
+  return conContextoCliente(
+    admin,
+    { clinicaId: opciones.clinicaId, usuarioId: randomUUID() },
+    async (cliente) => {
+      await cliente.query("select set_config('app.usuario_id', $1, true)", [
+        opciones.usuarioId ?? '',
+      ]);
+      const vigente = await cliente.query<{ version: number | null }>(
+        'select max(version) as version from app.anamnesis where clinica_id = $1 and paciente_id = $2',
+        [opciones.clinicaId, opciones.pacienteId],
+      );
+      const base =
+        opciones.versionBase !== undefined
+          ? opciones.versionBase
+          : (vigente.rows[0]?.version ?? null);
+      const signos = opciones.signosVitales ?? {};
+      const { rows } = await cliente.query<{ id: string; version: number }>(
+        `select id, version from app.guardar_anamnesis($1, $2, $3::jsonb, $4, $5, $6, $7, true,
+                                                        $8, $9, $10, $11)`,
+        [
+          opciones.pacienteId,
+          base,
+          JSON.stringify(opciones.respuestas ?? []),
+          opciones.tutor?.nombre ?? opciones.firmante ?? 'Paciente de prueba',
+          opciones.tutor?.ci ?? null,
+          opciones.tutor !== undefined,
+          archivoId,
+          signos.presionSistolica ?? null,
+          signos.presionDiastolica ?? null,
+          signos.pulso ?? null,
+          signos.pesoKg ?? null,
+        ],
+      );
+      const fila = rows[0];
+      if (!fila) throw new Error('No se pudo guardar la anamnesis de prueba.');
+      return { anamnesisId: fila.id, version: fila.version, firmaArchivoId: archivoId };
     },
     SIN_VERIFICAR,
   );

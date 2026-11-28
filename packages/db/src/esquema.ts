@@ -16,6 +16,7 @@ import type {
   SEXOS,
   TasaIva,
   TipoAlerta,
+  TipoPregunta,
   TipoRelacion,
 } from '@conecta/shared';
 import { sql } from 'drizzle-orm';
@@ -26,6 +27,7 @@ import {
   inet,
   integer,
   jsonb,
+  numeric,
   pgSchema,
   smallint,
   text,
@@ -263,6 +265,70 @@ export const RESTRICCIONES_PACIENTES = [
   'pacientes_filtro',
 ] as const;
 export type RestriccionPaciente = (typeof RESTRICCIONES_PACIENTES)[number];
+
+/**
+ * Nombres de regla del Sprint 4 (anamnesis, migraciones 0028–0030) que la base pone en el campo
+ * `constraint` de sus errores. Código entre paréntesis. Los que vienen de una respuesta o de un
+ * campo del pedido llevan además, en el campo `column` del error de Postgres, la ruta del campo
+ * del contrato: `respuestas.<codigo de la pregunta>`, `firmante.ci`, `firmante.nombre`,
+ * `firmante.esTutor`, `firmaPng`, `declaracionVeracidad`, `signosVitales.<campo>`, `versionBase`;
+ * en el catálogo, `preguntas.<codigo>` (o `preguntas`). Leelo con `campoDeError`.
+ * Además, reglas que ya existían: `ficha_clinica_sin_permiso` (42501; para guardar hacen falta
+ * ficha_clinica:crear Y ver), `paciente_no_encontrado` (P0002), `cursor_invalido` (22023). Y
+ * restricciones reales: los CHECK de anamnesis_pregunta (`anamnesis_pregunta_*_check`,
+ * `anamnesis_pregunta_tipo_campos`, 23514; al reemplazar el catálogo vienen con
+ * `column = preguntas.<codigo>`), `archivo_paciente_check` (23514, firma_paciente sin paciente),
+ * `archivo_paciente_fkey` (23503).
+ */
+export const RESTRICCIONES_ANAMNESIS = [
+  /** (42501) Al actor le falta configuracion:editar para reemplazar el cuestionario. */
+  'configuracion_sin_permiso',
+  /** (22023) El cuestionario no es una lista de 1 a 200 preguntas. */
+  'anamnesis_catalogo_invalido',
+  /** (22023) Una pregunta del cuestionario no es un objeto o no tiene código. */
+  'anamnesis_pregunta_invalida',
+  /** (22023) Dos preguntas con el mismo código en el cuestionario. */
+  'anamnesis_pregunta_repetida',
+  /** (40001) `versionBase` no es la vigente: otra persona guardó una versión en el medio. */
+  'anamnesis_conflicto_version',
+  /** (22023) El paciente está dado de baja. */
+  'anamnesis_paciente_inactivo',
+  /** (22023) Respuesta a una pregunta que no existe o ya no está activa. */
+  'anamnesis_pregunta_desconocida',
+  /** (22023) Dos respuestas para la misma pregunta. */
+  'anamnesis_respuesta_repetida',
+  /** (22023) La respuesta no tiene la forma de su tipo (o detalle donde no va, o demasiado largo). */
+  'anamnesis_respuesta_invalida',
+  /** (22023) Una opción marcada que la pregunta no tiene. */
+  'anamnesis_opcion_desconocida',
+  /** (22023) Número fuera del mínimo/máximo de la pregunta. */
+  'anamnesis_numero_fuera_de_rango',
+  /** (22023) Pregunta obligatoria sin responder. */
+  'anamnesis_obligatoria_sin_responder',
+  /** (22023) Pregunta solo para sexo F (embarazo) respondida para un paciente de sexo M. */
+  'anamnesis_pregunta_no_aplica',
+  /** (22023) Nombre de quien firma de menos de 3 o más de 120 caracteres. */
+  'anamnesis_firmante_nombre',
+  /** (22023) Cédula de quien firma con formato inválido. */
+  'anamnesis_firmante_ci',
+  /** (22023) Paciente menor de clinica.edad_tutor y no firma un tutor. */
+  'anamnesis_tutor_requerido',
+  /** (22023; 23514 si viene de la tabla) Firma un tutor sin cédula. */
+  'anamnesis_tutor_sin_ci',
+  /** (22023) Falta la firma. */
+  'anamnesis_sin_firma',
+  /** (22023 / 23514) La firma no es un archivo firma_paciente vigente de este paciente, o ya se usó. */
+  'anamnesis_firma_invalida',
+  /** (22023 / 23514) Falta marcar la declaración de veracidad. */
+  'anamnesis_sin_declaracion',
+  /** (22023) Un signo vital fuera de rango (column = signosVitales.<campo>). */
+  'anamnesis_signos_vitales',
+  /** (42501) UPDATE de una versión o respuesta (o volver vigente una alerta vieja). */
+  'anamnesis_inmutable',
+  /** (22023) Límite del historial fuera de 1..1000. */
+  'historial_limite',
+] as const;
+export type RestriccionAnamnesis = (typeof RESTRICCIONES_ANAMNESIS)[number];
 
 export type SexoPaciente = (typeof SEXOS)[number];
 export type IdiomaPaciente = (typeof IDIOMAS_PACIENTE)[number];
@@ -570,9 +636,11 @@ export const archivo = esquemaApp.table('archivo', {
   modulo: text('modulo')
     .$type<Modulo>()
     .generatedAlwaysAs(
-      sql`CASE categoria WHEN 'firma_profesional'::text THEN 'personal'::text WHEN 'logo_clinica'::text THEN 'configuracion'::text ELSE NULL::text END`,
+      sql`CASE categoria WHEN 'firma_profesional'::text THEN 'personal'::text WHEN 'logo_clinica'::text THEN 'configuracion'::text WHEN 'firma_paciente'::text THEN 'ficha_clinica'::text ELSE NULL::text END`,
     ),
   sedeId: uuid('sede_id'),
+  /** Paciente dueño del archivo (0028): obligatorio para `firma_paciente`. No cambia. */
+  pacienteId: uuid('paciente_id'),
   almacen: text('almacen').$type<AlmacenArchivo>().notNull(),
   bucket: text('bucket').notNull(),
   ruta: text('ruta').notNull(),
@@ -695,6 +763,100 @@ export const pacienteNota = esquemaApp.table('paciente_nota', {
   ...auditoriaFila,
 });
 
+/** Gravedad de una alerta médica derivada (`reglaAlertaSchema.gravedad` del contrato). */
+export const GRAVEDADES_ALERTA = ['alta', 'media'] as const;
+export type GravedadAlerta = (typeof GRAVEDADES_ALERTA)[number];
+
+/**
+ * Pregunta del cuestionario de la anamnesis (módulo configuracion, 0028). `codigo` estable y único
+ * por clínica; no se borra (`activa`). `opciones` y `alertaSi` con la forma del contrato
+ * (camelCase). app_api solo lee: se cambia con `reemplazarPreguntas`.
+ */
+export const anamnesisPregunta = esquemaApp.table('anamnesis_pregunta', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  clinicaId: uuid('clinica_id').notNull(),
+  codigo: text('codigo').notNull(),
+  seccion: smallint('seccion').notNull(),
+  orden: smallint('orden').notNull(),
+  texto: text('texto').notNull(),
+  tipo: text('tipo').$type<TipoPregunta>().notNull(),
+  /** `[{ valor, etiqueta, alerta }]` (solo multiple). */
+  opciones: jsonb('opciones')
+    .notNull()
+    .default(sql`'[]'::jsonb`),
+  /** Regla `{ tipo, texto, gravedad, grupoAlergia }` (solo si_no) o NULL. */
+  alertaSi: jsonb('alerta_si'),
+  conDetalle: boolean('con_detalle').notNull().default(false),
+  unidad: text('unidad'),
+  minimo: numeric('minimo'),
+  maximo: numeric('maximo'),
+  soloSexo: text('solo_sexo').$type<'F'>(),
+  obligatoria: boolean('obligatoria').notNull().default(false),
+  activa: boolean('activa').notNull().default(true),
+  ...auditoriaFila,
+});
+
+/**
+ * Versión firmada de la anamnesis (módulo ficha_clinica, 0029). Inmutable; solo con
+ * `ficha_clinica:ver` (RLS). La escribe únicamente `guardarAnamnesis`. La fecha es `createdAt`.
+ */
+export const anamnesis = esquemaApp.table('anamnesis', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  clinicaId: uuid('clinica_id').notNull(),
+  pacienteId: uuid('paciente_id').notNull(),
+  version: integer('version').notNull(),
+  registradaPor: uuid('registrada_por'),
+  firmanteNombre: text('firmante_nombre').notNull(),
+  firmanteCi: text('firmante_ci'),
+  esTutor: boolean('es_tutor').notNull(),
+  firmaArchivoId: uuid('firma_archivo_id').notNull(),
+  declaracionVeracidad: boolean('declaracion_veracidad').notNull(),
+  presionSistolica: smallint('presion_sistolica'),
+  presionDiastolica: smallint('presion_diastolica'),
+  pulso: smallint('pulso'),
+  pesoKg: numeric('peso_kg'),
+  ...auditoriaFila,
+});
+
+/** Respuesta de una versión, con copia de la pregunta (0029). Inmutable; solo con ficha_clinica:ver. */
+export const anamnesisRespuesta = esquemaApp.table('anamnesis_respuesta', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  clinicaId: uuid('clinica_id').notNull(),
+  anamnesisId: uuid('anamnesis_id').notNull(),
+  preguntaCodigo: text('pregunta_codigo').notNull(),
+  seccion: smallint('seccion').notNull(),
+  orden: smallint('orden').notNull(),
+  preguntaTexto: text('pregunta_texto').notNull(),
+  tipo: text('tipo').$type<TipoPregunta>().notNull(),
+  unidad: text('unidad'),
+  respuestaSi: boolean('respuesta_si'),
+  opciones: text('opciones').array(),
+  etiquetas: text('etiquetas').array(),
+  texto: text('texto'),
+  numero: numeric('numero'),
+  detalle: text('detalle'),
+  ...auditoriaFila,
+});
+
+/**
+ * Alerta médica derivada de una versión (0029), calculada al guardar. `vigente` solo en las de la
+ * versión vigente: esas las ve toda la clínica; el resto, solo con `ficha_clinica:ver`.
+ */
+export const anamnesisAlerta = esquemaApp.table('anamnesis_alerta', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  clinicaId: uuid('clinica_id').notNull(),
+  anamnesisId: uuid('anamnesis_id').notNull(),
+  pacienteId: uuid('paciente_id').notNull(),
+  orden: smallint('orden').notNull(),
+  preguntaCodigo: text('pregunta_codigo').notNull(),
+  tipo: text('tipo').$type<TipoAlerta>().notNull(),
+  texto: text('texto').notNull(),
+  gravedad: text('gravedad').$type<GravedadAlerta>().notNull(),
+  grupoAlergia: text('grupo_alergia'),
+  vigente: boolean('vigente').notNull().default(true),
+  ...auditoriaFila,
+});
+
 /** Todas las tablas, para `drizzle(pool, { schema })` y para la prueba de introspección. */
 export const esquema = {
   usuario,
@@ -721,5 +883,9 @@ export const esquema = {
   pacienteRelacion,
   pacienteAlerta,
   pacienteNota,
+  anamnesisPregunta,
+  anamnesis,
+  anamnesisRespuesta,
+  anamnesisAlerta,
 };
 export type Esquema = typeof esquema;

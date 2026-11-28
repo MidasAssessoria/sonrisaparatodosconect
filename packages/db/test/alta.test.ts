@@ -178,14 +178,28 @@ describe('semilla de desarrollo', () => {
       clinicaId: DEMO.clinicaId,
       duenoId: DEMO.duenoId,
       creada: true,
-      agregados: { profesionales: 3, tramos: 15, tratamientos: 12, pacientes: 6, relaciones: 1 },
+      agregados: {
+        profesionales: 3,
+        tramos: 15,
+        tratamientos: 12,
+        pacientes: 6,
+        relaciones: 1,
+        anamnesis: 2,
+      },
     });
     const segunda = await sembrarDemo(admin);
     expect(segunda).toEqual({
       clinicaId: DEMO.clinicaId,
       duenoId: DEMO.duenoId,
       creada: false,
-      agregados: { profesionales: 0, tramos: 0, tratamientos: 0, pacientes: 0, relaciones: 0 },
+      agregados: {
+        profesionales: 0,
+        tramos: 0,
+        tratamientos: 0,
+        pacientes: 0,
+        relaciones: 0,
+        anamnesis: 0,
+      },
     });
 
     await enTransaccion(admin, { clinica: DEMO.clinicaId, usuario: DEMO.duenoId }, async (c) => {
@@ -212,6 +226,40 @@ describe('semilla de desarrollo', () => {
           sedes: 2,
         },
       ]);
+      // Sprint 4: la anamnesis de Ana deja la alerta de la penicilina con su detalle; la de Mateo
+      // la firma Ana como tutora.
+      const alertasAna = await c.query('select texto, grupo_alergia from app.alertas_medicas($1)', [
+        DEMO.pacientes.ana,
+      ]);
+      expect(alertasAna.rows).toEqual([
+        {
+          texto: 'Alergia a la penicilina (urticaria con amoxicilina)',
+          grupo_alergia: 'penicilina',
+        },
+      ]);
+      const versiones = await c.query(
+        `select p.nombres, a.version, a.firmante_nombre, a.firmante_ci, a.es_tutor
+         from app.anamnesis a join app.paciente p on p.id = a.paciente_id order by p.nombres`,
+      );
+      expect(versiones.rows).toEqual([
+        {
+          nombres: 'Ana',
+          version: 1,
+          firmante_nombre: 'Ana Giménez',
+          firmante_ci: '4123456',
+          es_tutor: false,
+        },
+        {
+          nombres: 'Mateo',
+          version: 1,
+          firmante_nombre: 'Ana Giménez',
+          firmante_ci: '4123456',
+          es_tutor: true,
+        },
+      ]);
+      expect(
+        await valor(c, 'select count(*)::int from app.alertas_medicas($1)', [DEMO.pacientes.mateo]),
+      ).toBe(0);
       await esperarDemoCompleta(c);
     });
   });
@@ -260,7 +308,14 @@ describe('semilla de desarrollo', () => {
         clinicaId: DEMO.clinicaId,
         duenoId: DEMO.duenoId,
         creada: false,
-        agregados: { profesionales: 3, tramos: 15, tratamientos: 11, pacientes: 6, relaciones: 1 },
+        agregados: {
+          profesionales: 3,
+          tramos: 15,
+          tratamientos: 11,
+          pacientes: 6,
+          relaciones: 1,
+          anamnesis: 2,
+        },
       });
       expect((await sembrarDemo(pool)).agregados).toEqual({
         profesionales: 0,
@@ -268,6 +323,7 @@ describe('semilla de desarrollo', () => {
         tratamientos: 0,
         pacientes: 0,
         relaciones: 0,
+        anamnesis: 0,
       });
       await enTransaccion(pool, { clinica: DEMO.clinicaId, usuario: DEMO.duenoId }, async (c) => {
         await esperarDemoCompleta(c);
