@@ -1,8 +1,8 @@
 import type { Anamnesis } from '@conecta/shared';
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { NuevaAnamnesis, VersionesAnamnesis } from '../../api/cliente.js';
+import type { CatalogoPreguntas, NuevaAnamnesis, VersionesAnamnesis } from '../../api/cliente.js';
 import { useSesionLista } from '../../sesion/ProveedorSesion.js';
-import { useActualizarPacientes } from './consultas.js';
+import { claves, useActualizarPacientes } from './consultas.js';
 
 /** Eventos por página del historial. */
 export const LIMITE_HISTORIAL = 30;
@@ -16,12 +16,12 @@ const FRESCURA_VERSION_MS = 4 * 60_000;
 export const clavesAnamnesis = {
   preguntas: (clinicaId: string) => ['anamnesis-preguntas', clinicaId] as const,
   catalogo: (clinicaId: string) => ['anamnesis-preguntas', clinicaId, 'catalogo'] as const,
-  paciente: (clinicaId: string, pid: string) => ['anamnesis', clinicaId, pid] as const,
+  paciente: (clinicaId: string, pid: string) => claves.anamnesis(clinicaId, pid),
   versiones: (clinicaId: string, pid: string) =>
     ['anamnesis', clinicaId, pid, 'versiones'] as const,
   version: (clinicaId: string, pid: string, version: number) =>
     ['anamnesis', clinicaId, pid, 'version', version] as const,
-  historial: (clinicaId: string, pid: string) => ['historial', clinicaId, pid] as const,
+  historial: (clinicaId: string, pid: string) => claves.historial(clinicaId, pid),
 };
 
 /** Catálogo activo del cuestionario (`ficha_clinica:ver`). */
@@ -129,5 +129,27 @@ export function useRecargarVersiones(pid: string) {
     const r = await api.anamnesis.versiones(pid);
     consultas.setQueryData(clavesAnamnesis.versiones(sesion.clinica.id, pid), r);
     return r.versiones[0]?.version ?? null;
+  };
+}
+
+/** Una versión completa pedida en el acto (tras un conflicto); entra a la caché. */
+export function useTraerVersion(pid: string) {
+  const { api, sesion } = useSesionLista();
+  const consultas = useQueryClient();
+  return async (version: number): Promise<Anamnesis> => {
+    const a = await api.anamnesis.obtener(pid, version);
+    consultas.setQueryData(clavesAnamnesis.version(sesion.clinica.id, pid, a.version), a);
+    return a;
+  };
+}
+
+/** El catálogo activo pedido de nuevo (cambió mientras se completaba); entra a la caché. */
+export function useRecargarPreguntas() {
+  const { api, sesion } = useSesionLista();
+  const consultas = useQueryClient();
+  return async (): Promise<CatalogoPreguntas> => {
+    const c = await api.anamnesis.preguntas();
+    consultas.setQueryData(clavesAnamnesis.preguntas(sesion.clinica.id), c);
+    return c;
   };
 }

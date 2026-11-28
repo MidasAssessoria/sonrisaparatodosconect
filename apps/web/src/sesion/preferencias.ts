@@ -72,6 +72,8 @@ export const claves = {
   actividad: 'actividad',
   /** Último aviso de actividad mandado a la API desde cualquier pestaña (ms). */
   avisoApi: 'aviso-api',
+  /** Tablet en modo paciente (localStorage, para todas las pestañas): ver `modoPaciente.ts`. */
+  modoPaciente: 'modo-paciente',
 } as const;
 
 /** Clave completa (con prefijo) para comparar en el evento `storage`. */

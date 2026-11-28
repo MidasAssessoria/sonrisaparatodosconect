@@ -18,26 +18,27 @@ const RECEPCION = { permisos: PERMISOS_RECEPCION, rol: ROL_RECEPCION };
 const ODONTOLOGO = { permisos: PERMISOS_ODONTOLOGO, rol: ROL_ODONTOLOGO };
 const RUTA_ANA = `/pacientes/${IDS_PACIENTES.ana}`;
 
+// Frases como las arma la base (migraciones/0030_alerta_derivada_historial.sql).
 const PAGINA_1 = {
   eventos: [
     {
       tipo: 'anamnesis',
       fecha: '2026-11-20T13:15:00Z',
-      descripcion: 'Anamnesis actualizada · versión 2',
+      descripcion: 'Se registró la anamnesis (versión 2). Firmó Ana Giménez. Deja 1 alerta médica.',
       autor: 'Lorena Fretes',
       referencia: '2',
     },
     {
       tipo: 'vinculo_agregado',
       fecha: '2026-11-12T15:00:00Z',
-      descripcion: 'Se vinculó a Mateo Giménez como hijo',
+      descripcion: 'Se agregó a Mateo Giménez al grupo familiar (hijo).',
       autor: 'Lorena Fretes',
       referencia: IDS_PACIENTES.mateo,
     },
     {
       tipo: 'alerta_creada',
       fecha: '2026-11-10T12:30:00Z',
-      descripcion: 'Alerta agregada: Alergia al látex',
+      descripcion: 'Se cargó la alerta «Alergia al látex».',
       autor: 'Dra. Marta Acosta',
       referencia: IDS_PACIENTES.alerta,
     },
@@ -49,7 +50,7 @@ const PAGINA_2 = {
     {
       tipo: 'alta',
       fecha: '2026-11-02T13:00:00Z',
-      descripcion: 'Alta del paciente en recepción',
+      descripcion: 'Alta del paciente.',
       autor: null,
       referencia: null,
     },
@@ -78,9 +79,9 @@ describe('Historial del paciente', () => {
         .getAllByRole('listitem')
         .map((li) => li.querySelector('.w-historial__texto')?.textContent);
     expect(textos()).toEqual([
-      'Anamnesis actualizada · versión 2',
-      'Se vinculó a Mateo Giménez como hijo',
-      'Alerta agregada: Alergia al látex',
+      'Se registró la anamnesis (versión 2). Firmó Ana Giménez. Deja 1 alerta médica.',
+      'Se agregó a Mateo Giménez al grupo familiar (hijo).',
+      'Se cargó la alerta «Alergia al látex».',
     ]);
     // Tipo con ícono y texto; fecha en la zona de la clínica; autor.
     const primero = within(lista).getAllByRole('listitem')[0] as HTMLElement;
@@ -95,7 +96,7 @@ describe('Historial del paciente', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Cargar más' }));
     await waitFor(() => expect(textos()).toHaveLength(4));
-    expect(textos()[3]).toBe('Alta del paciente en recepción');
+    expect(textos()[3]).toBe('Alta del paciente.');
     expect(de(f.pedidos, `${RUTA_ANA}/historial`)[1]?.url.searchParams.get('cursor')).toBe(
       'cursor-1',
     );
@@ -127,7 +128,9 @@ describe('Historial del paciente', () => {
         'GET /pacientes/:id/anamnesis/:version': ({ url }: { url: URL }) => ({
           cuerpo: url.pathname.endsWith('/1') ? v1 : v2,
         }),
-        'GET /anamnesis/preguntas': { cuerpo: { preguntas: CATALOGO_PRUEBA } },
+        'GET /anamnesis/preguntas': {
+          cuerpo: { preguntas: CATALOGO_PRUEBA, huella: 'huella-catalogo-1' },
+        },
       },
       `${RUTA_ANA}/historial`,
       ODONTOLOGO,

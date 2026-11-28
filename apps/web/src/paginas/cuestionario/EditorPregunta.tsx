@@ -139,7 +139,15 @@ function CamposAlerta({
           tipo="select"
           value={alerta.tipo}
           opciones={TIPOS_ALERTA.map((v) => ({ valor: v, texto: t.alertaTipos[v] }))}
-          onChange={(e) => onCambio({ ...alerta, tipo: e.target.value as TipoAlerta })}
+          onChange={(e) => {
+            const tipo = e.target.value as TipoAlerta;
+            // El grupo de alergia solo tiene sentido en una alergia: al pasar a condición se limpia.
+            onCambio({
+              ...alerta,
+              tipo,
+              grupoAlergia: tipo === 'alergia' ? alerta.grupoAlergia : '',
+            });
+          }}
         />
         <Campo
           etiqueta={t.gravedad}

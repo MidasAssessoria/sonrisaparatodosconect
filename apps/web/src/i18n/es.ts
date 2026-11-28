@@ -250,6 +250,15 @@ export const es = {
       vaciaSinPermiso: 'Cuando alguien del equipo clínico la complete, la vas a ver acá.',
       completar: 'Completar anamnesis',
       actualizar: 'Actualizar anamnesis',
+      pasarTablet: 'Pasar la tablet al paciente',
+      pasarTabletTitulo: '¿Pasar la tablet al paciente?',
+      pasarTabletTexto:
+        'El cuestionario se abre en pantalla completa, sin el menú ni otras fichas. Cuando el paciente termine (o cancele), la tablet queda bloqueada hasta que alguien de la clínica la desbloquee.',
+      pasarTabletCodigo:
+        'Para desbloquearla vas a necesitar el código de 6 dígitos de tu app de autenticación.',
+      pasarTabletClave: 'Para desbloquearla vas a necesitar tu contraseña.',
+      pasarTabletConfirmar: 'Pasar la tablet',
+      pasarTabletCancelar: 'Cancelar',
       verVersion: 'Ver versión',
       opcionVersion: (v: number, fecha: string, vigente: boolean) =>
         `Versión ${v} · ${fecha}${vigente ? ' (vigente)' : ''}`,
@@ -278,6 +287,7 @@ export const es = {
       sinSignos: 'No se tomaron signos vitales.',
       si: 'Sí',
       no: 'No',
+      ninguna: 'Ninguna',
       sinRespuestasSeccion: 'Sin respuestas en esta sección.',
       noEncontrada: 'No encontramos esa versión de la anamnesis.',
       guardada: (v: number) => `Guardamos la versión ${v} de la anamnesis.`,
@@ -346,16 +356,46 @@ export const es = {
         `Revisá el número: ${min !== null && max !== null ? `va entre ${min} y ${max}` : min !== null ? `va desde ${min}` : `va hasta ${max ?? ''}`}.`,
       faltaFirma: 'Falta la firma.',
       revisar: 'Revisá lo marcado antes de guardar:',
-      conflictoTitulo: 'Otra persona actualizó la anamnesis mientras la completabas',
-      conflictoTexto:
-        'Para no pisar lo que guardó, cargá la versión nueva. Lo que escribiste acá queda como está.',
-      conflictoCargar: 'Cargar la versión nueva',
-      conflictoListo: (v: number) =>
-        `Cargamos la versión ${v}. Lo que escribiste sigue igual: revisalo y tocá «Guardar anamnesis» para guardar la versión ${v + 1}.`,
-      verVersionNueva: (v: number) => `Ver la versión ${v} en otra pestaña`,
+      sinResponder: 'Sin responder',
+      ninguna: 'Ninguna',
+      instruccionPaciente:
+        'Respondé con calma. Cuando termines, firmá con el dedo y tocá «Guardar anamnesis».',
+      ciDelGrupo: 'Usamos la cédula cargada en su ficha.',
+      actualizarCuestionario: 'Actualizar cuestionario',
+      cuestionarioActualizado:
+        'Actualizamos el cuestionario. Lo que ya estaba respondido sigue acá.',
+      cuestionarioCambio:
+        'El cuestionario cambió mientras se completaba: lo actualizamos. Revisá las preguntas y volvé a tocar «Guardar anamnesis».',
+      perdida: (pregunta: string, respuesta: string) => `«${pregunta}»: ${respuesta}`,
+      dejabaAlerta: (alerta: string) => `Dejaba la alerta «${alerta}»`,
+      perdidasTexto:
+        'Si siguen valiendo, cargalas en otra pregunta o como alerta manual en la ficha.',
+      perdidasApertura: (v: number) =>
+        `Estas respuestas de la versión ${v} ya no están en el cuestionario y no se pasaron:`,
+      perdidasActualizacion: 'Estas respuestas no se pudieron pasar al cuestionario actualizado:',
+      diferenciasTitulo: (v: number, quien: string) =>
+        `${quien} guardó la versión ${v} mientras se completaba este formulario`,
+      diferenciasTexto: (v: number) =>
+        `Para no pisar lo que se guardó, revisá cada diferencia. Podés quedarte con lo de este formulario o usar lo de la versión ${v}.`,
+      sinDiferencias: (v: number) =>
+        `Las respuestas de este formulario coinciden con la versión ${v}. Se guarda como la siguiente.`,
+      enVersion: (v: number) => `En la versión ${v}`,
+      enFormulario: 'En este formulario',
+      usarVersion: (v: number) => `Usar la de la versión ${v}`,
+      usarVersionDe: (v: number, pregunta: string) =>
+        `Usar la respuesta de la versión ${v} en «${pregunta}»`,
+      revisado: (v: number) => `Revisé las diferencias con la versión ${v}`,
+      faltaRevisar: 'Revisá las diferencias con la otra versión y marcá que las revisaste.',
+      diferenciasEtiqueta: 'Diferencias con la otra versión',
+      otraPersonaGenerica: 'Otra persona',
+      noEstaEnFormulario: 'No está en este cuestionario',
       salirTitulo: '¿Salir sin guardar?',
       salirTexto: 'Se pierde lo que se completó en el formulario.',
       salirConfirmar: 'Salir sin guardar',
+      salirTituloPaciente: '¿Terminar sin guardar?',
+      salirTextoPaciente:
+        'Lo que completaste no se guarda. Después, devolvé la tablet a la clínica.',
+      salirConfirmarPaciente: 'Terminar sin guardar',
       seguir: 'Seguir completando',
     },
     historial: {
@@ -489,6 +529,30 @@ export const es = {
       activoTexto: 'Activo: aparece en la lista y en el buscador.',
     },
   },
+  modoPaciente: {
+    titulo: 'Cuestionario de salud',
+    para: (nombre: string) => `Para ${nombre}`,
+    cargando: 'Preparando el cuestionario…',
+    noSePudo: 'No pudimos abrir el cuestionario. Devolvé la tablet a la clínica.',
+    terminar: 'Terminar',
+    bloqueoTitulo: 'Devolvé la tablet a la clínica',
+    bloqueoGuardada: 'Gracias. Guardamos tu cuestionario.',
+    bloqueoTexto: 'Ya podés devolver la tablet a quien te atendió.',
+    equipo: 'Para el equipo de la clínica',
+    equipoTexto: (nombre: string) => `Desbloqueá con la cuenta de ${nombre}.`,
+    clave: 'Contraseña',
+    desbloquear: 'Desbloquear',
+    cargandoMetodo: 'Preparando el desbloqueo…',
+    faltaCodigo: 'Escribí el código de 6 dígitos.',
+    faltaClave: 'Escribí tu contraseña.',
+    otraCuenta:
+      'Esa cuenta no es la que tiene la sesión abierta. Cerramos la sesión por seguridad.',
+    restan: (n: number) => (n === 1 ? 'Queda 1 intento.' : `Quedan ${n} intentos.`),
+    demasiados: 'Hubo varios intentos fallidos: cerramos la sesión por seguridad.',
+    cerrarSesion: 'Cerrar sesión',
+    cerrarSesionAyuda:
+      'Si no tenés el código, cerrá la sesión: para volver hay que ingresar de nuevo.',
+  },
   cuestionario: {
     titulo: 'Cuestionario de salud',
     texto:
@@ -525,6 +589,8 @@ export const es = {
     guardado: 'Guardamos el cuestionario.',
     guardadoTexto: 'Las próximas anamnesis ya salen con estas preguntas.',
     errorGuardar: 'Revisá las preguntas marcadas antes de guardar.',
+    demasiadas: (n: number, max: number) =>
+      `El cuestionario tiene ${n} preguntas y el máximo es ${max}, contando las inactivas. Editá una pregunta inactiva para reusarla en vez de agregar otra.`,
     hoja: {
       tituloNueva: 'Nueva pregunta',
       tituloEditar: 'Editar pregunta',

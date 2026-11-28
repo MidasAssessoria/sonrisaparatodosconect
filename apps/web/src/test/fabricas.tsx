@@ -717,9 +717,19 @@ export const CATALOGO_PRUEBA: Pregunta[] = [
   }),
 ];
 
+/** Huella del catálogo de prueba (la API la calcula del catálogo activo). */
+export const HUELLA_CATALOGO = 'huella-catalogo-1';
+
+/** Respuesta de `GET /anamnesis/preguntas` (o del catálogo completo). */
+export function catalogoDe(preguntas: Pregunta[] = CATALOGO_PRUEBA, huella = HUELLA_CATALOGO) {
+  return { preguntas, huella };
+}
+
+/** Alerta de la vigente de Ana, con el detalle aparte (lo ve quien tiene `ficha_clinica:ver`). */
 export const ALERTA_MEDICA_PENICILINA = {
   tipo: 'alergia' as const,
-  texto: 'Alergia a la penicilina (urticaria con amoxicilina)',
+  texto: 'Alergia a la penicilina',
+  detalle: 'urticaria con amoxicilina' as string | null,
   gravedad: 'alta' as const,
   grupoAlergia: 'penicilinas',
   codigo: 'alergias',

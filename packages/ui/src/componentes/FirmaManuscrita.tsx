@@ -22,14 +22,17 @@ import { Icono } from './Icono.js';
  *     eventos «coalesced» (más puntos por cuadro en lápices rápidos) y dibuja curvas suaves entre
  *     los puntos medios; con lápiz, la presión cambia el grosor.
  *   - Alta densidad: el lienzo mide lo que ocupa en pantalla por `devicePixelRatio`. Los trazos se
- *     guardan relativos al ancho: al rotar la tablet se redibujan a la escala nueva sin perderse.
+ *     guardan en una caja de referencia: al rotar la tablet la caja entera se encaja centrada y sin
+ *     deformar (nada se recorta), y el PNG sale siempre de la caja completa.
  *   - No mueve la página: `touch-action: none` en el lienzo y, por las dudas (Safari viejo),
  *     `preventDefault` en los toques que empiezan adentro.
  *   - El PNG se arma aparte, a `anchoSalida` px de ancho y con fondo transparente: no depende de la
  *     pantalla del dispositivo y queda chico (si pasa `maxCaracteres`, se achica).
  *   - Accesible: grupo con rótulo, estado escrito («Todavía no hay firma» / «Firma lista») con
- *     ícono, error asociado y, como alternativa sin dibujar, «Firmar con el teclado»: el nombre
- *     escrito se dibuja en el lienzo y sale como la misma imagen. Cada pantalla decide si la ofrece.
+ *     ícono y error asociado. «Firmar con el teclado» (el nombre escrito se dibuja y sale como la
+ *     misma imagen) es opt-in con `permitirTeclado`: hasta que el cliente responda P5, las firmas
+ *     de pacientes van siempre dibujadas.
+ *   - Sin nada dibujado no sale PNG: «Borrar» y una firma vacía avisan `null`.
  */
 
 export interface TextosFirma {
@@ -44,6 +47,7 @@ export interface TextosFirma {
   tecladoCancelar: string;
   tecladoFalta: string;
   sinLienzo: string;
+  sinLienzoTeclado: string;
 }
 
 const TEXTOS: TextosFirma = {
@@ -57,7 +61,8 @@ const TEXTOS: TextosFirma = {
   tecladoUsar: 'Usar como firma',
   tecladoCancelar: 'Cancelar',
   tecladoFalta: 'Escribí el nombre para usarlo como firma.',
-  sinLienzo:
+  sinLienzo: 'Este dispositivo no permite dibujar la firma. Probá con otro dispositivo.',
+  sinLienzoTeclado:
     'Este dispositivo no permite dibujar la firma. Usá «Firmar con el teclado» u otro dispositivo.',
 };
 
@@ -80,7 +85,7 @@ export interface FirmaManuscritaProps {
   /** Largo máximo del data URL; si se pasa, el PNG se rehace más chico. */
   maxCaracteres?: number | undefined;
   deshabilitado?: boolean | undefined;
-  /** Ofrece «Firmar con el teclado». */
+  /** Ofrece «Firmar con el teclado» (por defecto no: ver P5 en docs/plan.md). */
   permitirTeclado?: boolean | undefined;
   /** Nombre con el que se completa «Firmar con el teclado». */
   nombreSugerido?: string | undefined;
@@ -89,7 +94,7 @@ export interface FirmaManuscritaProps {
   className?: string | undefined;
 }
 
-/** Punto relativo al ancho del lienzo (x, y y grosor van en «anchos»). */
+/** Punto en coordenadas de la caja de referencia (x, y y grosor en px de esa caja). */
 interface Punto {
   x: number;
   y: number;
@@ -99,17 +104,44 @@ interface Punto {
 const GROSOR_BASE = 2.6;
 const TINTA_RESPALDO = '#232036';
 
-function dibujarTrazo(ctx: CanvasRenderingContext2D, puntos: Punto[], escala: number): void {
+/**
+ * Caja de referencia de la firma, en px de pantalla del momento en que se trazó. Los puntos se
+ * guardan en estas coordenadas; para dibujar se encaja la caja entera, centrada y sin deformar, en
+ * el lienzo de ahora (al rotar la tablet nada se recorta ni se estira).
+ */
+interface Caja {
+  x0: number;
+  y0: number;
+  w: number;
+  h: number;
+}
+
+/** Escala y desplazamiento que encajan `caja` (entera y centrada) en un lienzo de `w × h`. */
+function encaje(caja: Caja, w: number, h: number): { s: number; dx: number; dy: number } {
+  const s = Math.min(w / caja.w, h / caja.h);
+  return {
+    s,
+    dx: (w - caja.w * s) / 2 - caja.x0 * s,
+    dy: (h - caja.h * s) / 2 - caja.y0 * s,
+  };
+}
+
+/** Lo que se ve ahora del lienzo, en coordenadas de la caja (siempre contiene a la caja). */
+function visible(caja: Caja, w: number, h: number): Caja {
+  const { s, dx, dy } = encaje(caja, w, h);
+  return { x0: -dx / s, y0: -dy / s, w: w / s, h: h / s };
+}
+
+function dibujarTrazo(ctx: CanvasRenderingContext2D, puntos: Punto[]): void {
   const primero = puntos[0];
   if (!primero) return;
   if (puntos.length === 1) {
     ctx.beginPath();
-    ctx.arc(primero.x * escala, primero.y * escala, (primero.g * escala) / 2, 0, Math.PI * 2);
+    ctx.arc(primero.x, primero.y, primero.g / 2, 0, Math.PI * 2);
     ctx.fill();
     return;
   }
-  for (let i = 1; i < puntos.length; i++)
-    dibujarTramo(ctx, puntos, i, escala, i === puntos.length - 1);
+  for (let i = 1; i < puntos.length; i++) dibujarTramo(ctx, puntos, i, i === puntos.length - 1);
 }
 
 /**
@@ -120,7 +152,6 @@ function dibujarTramo(
   ctx: CanvasRenderingContext2D,
   puntos: Punto[],
   i: number,
-  escala: number,
   ultimo: boolean,
 ): void {
   const a = puntos[i - 2];
@@ -129,10 +160,10 @@ function dibujarTramo(
   if (!b || !c) return;
   const desde = a ? { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 } : b;
   const hasta = ultimo ? c : { x: (b.x + c.x) / 2, y: (b.y + c.y) / 2 };
-  ctx.lineWidth = ((b.g + c.g) / 2) * escala;
+  ctx.lineWidth = (b.g + c.g) / 2;
   ctx.beginPath();
-  ctx.moveTo(desde.x * escala, desde.y * escala);
-  ctx.quadraticCurveTo(b.x * escala, b.y * escala, hasta.x * escala, hasta.y * escala);
+  ctx.moveTo(desde.x, desde.y);
+  ctx.quadraticCurveTo(b.x, b.y, hasta.x, hasta.y);
   ctx.stroke();
 }
 
@@ -152,6 +183,9 @@ function prepararTinta(ctx: CanvasRenderingContext2D, color: string): void {
   ctx.fillStyle = color;
 }
 
+const densidad = () =>
+  typeof window !== 'undefined' ? Math.min(window.devicePixelRatio || 1, 3) : 1;
+
 export function FirmaManuscrita({
   etiqueta,
   onCambio,
@@ -162,7 +196,10 @@ export function FirmaManuscrita({
   anchoSalida = 900,
   maxCaracteres = 400_000,
   deshabilitado,
-  permitirTeclado = true,
+  // Opt-in: una firma escrita con el teclado no es una firma dibujada. Hasta que el cliente
+  // responda P5 (docs/plan.md §7), las firmas de pacientes (anamnesis, consentimientos) van
+  // siempre dibujadas y la API rechaza un PNG sin trazo.
+  permitirTeclado = false,
   nombreSugerido,
   textos,
   id,
@@ -183,6 +220,8 @@ export function FirmaManuscrita({
   const actual = useRef<{ puntero: number; puntos: Punto[] } | null>(null);
   const textoFirma = useRef<string | null>(null);
   const imagenFondo = useRef<HTMLImageElement | null>(null);
+  /** Caja de referencia (`null` = todavía no se dibujó nada). */
+  const referencia = useRef<Caja | null>(null);
   /** Ancho en px de pantalla con el que se dibuja ahora. */
   const ancho = useRef(0);
   const refCambio = useRef(onCambio);
@@ -207,33 +246,58 @@ export function FirmaManuscrita({
     return getComputedStyle(lienzo).color || TINTA_RESPALDO;
   }, []);
 
-  /** Dibuja todo (trazos, nombre escrito, imagen de fondo) a `escala` px por ancho. */
+  const vacia = () => !trazos.current.length && !textoFirma.current && !imagenFondo.current;
+
+  /** La caja de referencia; si no hay, la de la pantalla de ahora. */
+  const cajaActual = useCallback(
+    (): Caja => referencia.current ?? { x0: 0, y0: 0, w: ancho.current || 320, h: alto },
+    [alto],
+  );
+
+  /** Dibuja todo (imagen de fondo, nombre escrito, trazos) en coordenadas de la caja. */
   const pintar = useCallback(
-    (ctx: CanvasRenderingContext2D, escala: number, altoPx: number) => {
+    (ctx: CanvasRenderingContext2D, caja: Caja) => {
       const fondo = imagenFondo.current;
       if (fondo && fondo.naturalWidth > 0) {
-        ctx.drawImage(fondo, 0, 0, escala, (fondo.naturalHeight / fondo.naturalWidth) * escala);
+        ctx.drawImage(
+          fondo,
+          caja.x0,
+          caja.y0,
+          caja.w,
+          (fondo.naturalHeight / fondo.naturalWidth) * caja.w,
+        );
       }
       prepararTinta(ctx, color());
       const texto = textoFirma.current;
       if (texto) {
-        const tamano = Math.min(altoPx * 0.38, (escala * 1.6) / Math.max(texto.length, 8));
+        const tamano = Math.min(caja.h * 0.38, (caja.w * 1.6) / Math.max(texto.length, 8));
         ctx.font = `italic 600 ${tamano}px "Hanken Grotesk", system-ui, sans-serif`;
         ctx.textBaseline = 'alphabetic';
-        ctx.fillText(texto, escala * 0.05, altoPx * 0.68, escala * 0.9);
+        ctx.fillText(texto, caja.x0 + caja.w * 0.05, caja.y0 + caja.h * 0.68, caja.w * 0.9);
       }
-      for (const trazo of trazos.current) dibujarTrazo(ctx, trazo, escala);
+      for (const trazo of trazos.current) dibujarTrazo(ctx, trazo);
     },
     [color],
   );
 
-  /** Ajusta el lienzo al ancho del contenedor y a la densidad de la pantalla, y redibuja. */
+  /** Contexto del lienzo en pantalla con la transformación de la caja a la pantalla de ahora. */
+  const contextoEnPantalla = useCallback((): CanvasRenderingContext2D | null => {
+    const lienzo = refLienzo.current;
+    const ctx = lienzo ? contexto2d(lienzo) : null;
+    if (!ctx) return null;
+    const dpr = densidad();
+    const { s, dx, dy } = encaje(cajaActual(), ancho.current || 320, alto);
+    ctx.setTransform(dpr * s, 0, 0, dpr * s, dpr * dx, dpr * dy);
+    return ctx;
+  }, [alto, cajaActual]);
+
+  /** Ajusta el lienzo al ancho del contenedor y a la densidad de la pantalla, y redibuja todo. */
   const ajustar = useCallback(() => {
     const lienzo = refLienzo.current;
     if (!lienzo) return;
     const medido = refCaja.current?.getBoundingClientRect().width ?? 0;
     const w = medido > 0 ? medido : 320;
-    const dpr = typeof window !== 'undefined' ? Math.min(window.devicePixelRatio || 1, 3) : 1;
+    const dpr = densidad();
     ancho.current = w;
     lienzo.width = Math.round(w * dpr);
     lienzo.height = Math.round(alto * dpr);
@@ -244,8 +308,12 @@ export function FirmaManuscrita({
     }
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, w, alto);
-    pintar(ctx, w, alto);
-  }, [alto, pintar]);
+    if (vacia()) return;
+    const caja = cajaActual();
+    const { s, dx, dy } = encaje(caja, w, alto);
+    ctx.setTransform(dpr * s, 0, 0, dpr * s, dpr * dx, dpr * dy);
+    pintar(ctx, caja);
+  }, [alto, pintar, cajaActual]);
 
   useLayoutEffect(() => {
     ajustar();
@@ -281,17 +349,23 @@ export function FirmaManuscrita({
     };
   }, []);
 
-  /** PNG a `anchoSalida`, achicándolo si el data URL se pasa de `maxCaracteres`. */
+  /**
+   * PNG de la caja entera a `anchoSalida` px de ancho, achicándolo si el data URL se pasa de
+   * `maxCaracteres`. Sin nada dibujado no hay PNG (una firma vacía no es una firma).
+   */
   const exportar = useCallback((): string | null => {
-    const w = ancho.current || 320;
+    if (vacia()) return null;
+    const caja = cajaActual();
     let salida = anchoSalida;
     for (let intento = 0; intento < 4; intento++) {
       const lienzo = document.createElement('canvas');
+      const escala = salida / caja.w;
       lienzo.width = Math.round(salida);
-      lienzo.height = Math.round((salida * alto) / w);
+      lienzo.height = Math.round(caja.h * escala);
       const ctx = contexto2d(lienzo);
       if (!ctx) return null;
-      pintar(ctx, lienzo.width, lienzo.height);
+      ctx.setTransform(escala, 0, 0, escala, -caja.x0 * escala, -caja.y0 * escala);
+      pintar(ctx, caja);
       let png: string;
       try {
         png = lienzo.toDataURL('image/png');
@@ -302,7 +376,7 @@ export function FirmaManuscrita({
       salida *= 0.7;
     }
     return null;
-  }, [alto, anchoSalida, maxCaracteres, pintar]);
+  }, [anchoSalida, maxCaracteres, pintar, cajaActual]);
 
   const avisar = useCallback(() => {
     const png = exportar();
@@ -315,40 +389,53 @@ export function FirmaManuscrita({
     actual.current = null;
     textoFirma.current = null;
     imagenFondo.current = null;
+    referencia.current = null;
     setHayFirma(false);
     ajustar();
   }, [ajustar]);
 
-  // `valor` desde afuera: null borra; un PNG con el lienzo vacío se dibuja de fondo.
+  // `valor` null desde afuera: el estado cambia en el render (sin efecto) y el lienzo se vacía en
+  // el efecto de abajo, sin volver a avisar.
+  const [valorPrevio, setValorPrevio] = useState(valor);
+  if (valor !== valorPrevio) {
+    setValorPrevio(valor);
+    if (valor === null && hayFirma) setHayFirma(false);
+  }
+
+  // Un PNG con el lienzo vacío se dibuja de fondo.
   useEffect(() => {
     if (valor === undefined) return;
-    const vacio = !trazos.current.length && !textoFirma.current && !imagenFondo.current;
     if (valor === null) {
-      if (!vacio || hayFirma) limpiar();
+      if (!vacia()) {
+        trazos.current = [];
+        actual.current = null;
+        textoFirma.current = null;
+        imagenFondo.current = null;
+        referencia.current = null;
+        ajustar();
+      }
       return;
     }
-    if (!vacio || typeof Image === 'undefined') return;
+    if (!vacia() || typeof Image === 'undefined') return;
     const img = new Image();
     img.onload = () => {
+      referencia.current ??= cajaActual();
       imagenFondo.current = img;
       setHayFirma(true);
       ajustar();
     };
     img.src = valor;
-  }, [valor, hayFirma, limpiar, ajustar]);
+  }, [valor, ajustar, cajaActual]);
 
+  /** Punto de un evento, en coordenadas de la caja. */
   function punto(e: { clientX: number; clientY: number; pressure: number; pointerType: string }) {
-    const lienzo = refLienzo.current;
-    const r = lienzo?.getBoundingClientRect();
-    const w = ancho.current || r?.width || 320;
+    const r = refLienzo.current?.getBoundingClientRect();
+    const { s, dx, dy } = encaje(cajaActual(), ancho.current || 320, alto);
     const x = e.clientX - (r?.left ?? 0);
     const y = e.clientY - (r?.top ?? 0);
     const presion = e.pointerType === 'pen' && e.pressure > 0 ? e.pressure : 0.5;
-    const g = (GROSOR_BASE * (0.55 + presion * 0.9)) / w;
-    return { x: x / w, y: y / w, g };
+    return { x: (x - dx) / s, y: (y - dy) / s, g: (GROSOR_BASE * (0.55 + presion * 0.9)) / s };
   }
-
-  const contexto = () => (refLienzo.current ? contexto2d(refLienzo.current) : null);
 
   function alBajar(e: EventoPuntero<HTMLCanvasElement>) {
     if (deshabilitado || sinLienzo) return;
@@ -360,12 +447,15 @@ export function FirmaManuscrita({
     } catch {
       // sin captura: igual dibuja mientras el puntero esté adentro
     }
+    // La caja crece hasta lo que se ve ahora (tras rotar, el lienzo puede mostrar más): así el
+    // trazo nuevo nunca queda afuera del PNG. Lo ya dibujado no se mueve en pantalla.
+    referencia.current = visible(cajaActual(), ancho.current || 320, alto);
     const p = punto(e);
     actual.current = { puntero: e.pointerId, puntos: [p] };
-    const ctx = contexto();
+    const ctx = contextoEnPantalla();
     if (ctx) {
       prepararTinta(ctx, color());
-      dibujarTrazo(ctx, [p], ancho.current || 320);
+      dibujarTrazo(ctx, [p]);
     }
   }
 
@@ -383,12 +473,11 @@ export function FirmaManuscrita({
         pointerType: ev.pointerType || e.pointerType,
       }),
     );
-    const ctx = contexto();
+    const ctx = contextoEnPantalla();
     if (ctx) prepararTinta(ctx, color());
     for (const p of nuevos) {
       trazo.puntos.push(p);
-      if (ctx)
-        dibujarTramo(ctx, trazo.puntos, trazo.puntos.length - 1, ancho.current || 320, false);
+      if (ctx) dibujarTramo(ctx, trazo.puntos, trazo.puntos.length - 1, false);
     }
   }
 
@@ -396,7 +485,7 @@ export function FirmaManuscrita({
     const trazo = actual.current;
     if (!trazo || trazo.puntero !== e.pointerId) return;
     actual.current = null;
-    trazos.current = [...trazos.current, trazo.puntos];
+    if (trazo.puntos.length) trazos.current = [...trazos.current, trazo.puntos];
     // Redibuja todo: el último tramo llega hasta el punto final.
     ajustar();
     avisar();
@@ -410,6 +499,7 @@ export function FirmaManuscrita({
     }
     trazos.current = [];
     imagenFondo.current = null;
+    referencia.current = { x0: 0, y0: 0, w: ancho.current || 320, h: alto };
     textoFirma.current = limpio;
     setTecleando(false);
     setFaltaNombre(false);
@@ -490,7 +580,7 @@ export function FirmaManuscrita({
       </div>
       {sinLienzo ? (
         <p className="cn-firma__ayuda" role="note">
-          {t.sinLienzo}
+          {permitirTeclado ? t.sinLienzoTeclado : t.sinLienzo}
         </p>
       ) : null}
       {permitirTeclado && tecleando ? (

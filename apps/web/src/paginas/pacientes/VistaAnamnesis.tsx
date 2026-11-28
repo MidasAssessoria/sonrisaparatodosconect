@@ -2,6 +2,7 @@ import { formatoCi, SECCIONES_ANAMNESIS, type Anamnesis } from '@conecta/shared'
 import { AlertaClinica, Boton, Chip } from '@conecta/ui';
 import { useId, useState, type ReactNode } from 'react';
 import { useTextos } from '../../i18n/idioma.js';
+import { textoAlertaMedica } from './formato.js';
 import { useSesionLista } from '../../sesion/ProveedorSesion.js';
 import { formatoFechaHora } from '../../utilidades/fechas.js';
 
@@ -36,11 +37,17 @@ function ValorRespuesta({ r }: { r: RespuestaGuardada }) {
   } else if (r.tipo === 'multiple') {
     valor = (
       <span className="w-chips">
-        {r.etiquetas.map((e) => (
-          <Chip key={e} tono="neutro" icono="check">
-            {e}
+        {r.etiquetas.length ? (
+          r.etiquetas.map((e) => (
+            <Chip key={e} tono="neutro" icono="check">
+              {e}
+            </Chip>
+          ))
+        ) : (
+          <Chip tono="neutro" icono="cerrar">
+            {t.ninguna}
           </Chip>
-        ))}
+        )}
       </span>
     );
   } else if (r.tipo === 'texto') {
@@ -124,7 +131,7 @@ export function VistaAnamnesis({
           <AlertaClinica
             compacta
             etiqueta={t.alertasVersion}
-            alertas={a.alertasMedicas.map((m) => ({ tipo: m.tipo, texto: m.texto }))}
+            alertas={a.alertasMedicas.map((m) => ({ tipo: m.tipo, texto: textoAlertaMedica(m) }))}
           />
         ) : (
           <p className="w-secundario">{t.sinAlertasVersion}</p>

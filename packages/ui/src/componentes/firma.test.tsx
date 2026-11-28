@@ -87,9 +87,21 @@ describe('FirmaManuscrita', () => {
     expect(onCambio).toHaveBeenCalledWith(PNG);
   });
 
-  it('alternativa de teclado: el nombre escrito sale como firma', () => {
+  it('sin `permitirTeclado` no hay alternativa escrita (la firma es siempre dibujada)', () => {
+    render(<FirmaManuscrita etiqueta="Firma" onCambio={() => {}} nombreSugerido="Ana Giménez" />);
+    expect(screen.queryByRole('button', { name: 'Firmar con el teclado' })).toBeNull();
+  });
+
+  it('alternativa de teclado (opt-in): el nombre escrito sale como firma', () => {
     const onCambio = vi.fn();
-    render(<FirmaManuscrita etiqueta="Firma" onCambio={onCambio} nombreSugerido="Ana Giménez" />);
+    render(
+      <FirmaManuscrita
+        etiqueta="Firma"
+        onCambio={onCambio}
+        permitirTeclado
+        nombreSugerido="Ana Giménez"
+      />,
+    );
     fireEvent.click(screen.getByRole('button', { name: 'Firmar con el teclado' }));
     const nombre = screen.getByLabelText('Escribí el nombre completo de quien firma');
     expect(nombre).toHaveValue('Ana Giménez');
@@ -141,6 +153,60 @@ describe('FirmaManuscrita', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Reiniciar' }));
     expect(screen.getByRole('status')).toHaveTextContent('Todavía no hay firma');
     expect(onCambio).toHaveBeenCalledTimes(1);
+  });
+
+  it('al rotar la tablet el trazo se encaja entero y centrado, y el PNG sale de la caja completa', () => {
+    vi.restoreAllMocks();
+    const { ctx, toDataURL } = simularLienzo();
+    const medidas: [number, number][] = [];
+    toDataURL.mockImplementation(function (this: HTMLCanvasElement) {
+      medidas.push([this.width, this.height]);
+      return PNG;
+    });
+    let anchoCaja = 600;
+    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(() => ({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      width: anchoCaja,
+      height: 200,
+      right: anchoCaja,
+      bottom: 200,
+      toJSON: () => ({}),
+    }));
+    const onCambio = vi.fn();
+    render(<FirmaManuscrita etiqueta="Firma" onCambio={onCambio} alto={200} anchoSalida={900} />);
+    trazar(screen.getByRole('img'));
+    // Caja de 600 × 200 → PNG de 900 × 300.
+    expect(medidas.at(-1)).toEqual([900, 300]);
+
+    // Rota: el lienzo pasa a 300 de ancho. La caja de 600 × 200 entra entera a escala 0,5,
+    // centrada en el alto (50 px arriba y abajo): no se recorta ni se estira.
+    anchoCaja = 300;
+    fireEvent(window, new Event('resize'));
+    expect(ctx['setTransform']?.mock.calls.at(-1)).toEqual([0.5, 0, 0, 0.5, 0, 50]);
+    expect(screen.getByRole('status')).toHaveTextContent('Firma lista');
+
+    // Un trazo nuevo después de rotar amplía la caja a lo que se ve: nada queda afuera del PNG.
+    trazar(screen.getByRole('img'));
+    expect(medidas.at(-1)).toEqual([900, 600]);
+    expect(onCambio).toHaveBeenLastCalledWith(PNG);
+  });
+
+  it('una firma vacía no se exporta', () => {
+    vi.restoreAllMocks();
+    const { toDataURL } = simularLienzo();
+    const onCambio = vi.fn();
+    render(<FirmaManuscrita etiqueta="Firma" onCambio={onCambio} />);
+    const lienzo = screen.getByRole('img');
+    // Soltar sin haber apoyado no es un trazo.
+    fireEvent.pointerUp(lienzo, { pointerId: 1, pointerType: 'touch' });
+    expect(onCambio).not.toHaveBeenCalled();
+    trazar(lienzo);
+    fireEvent.click(screen.getByRole('button', { name: 'Borrar' }));
+    expect(onCambio).toHaveBeenLastCalledWith(null);
+    expect(toDataURL).toHaveBeenCalledTimes(1);
   });
 
   it('error asociado al grupo y sin lienzo avisa la alternativa', () => {

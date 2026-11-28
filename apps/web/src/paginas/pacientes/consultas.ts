@@ -20,6 +20,9 @@ export const claves = {
   ficha: (clinicaId: string, id: string) => ['paciente', clinicaId, id] as const,
   fichas: (clinicaId: string) => ['paciente', clinicaId] as const,
   buscar: (clinicaId: string, q: string) => ['buscar', clinicaId, q] as const,
+  /** Todo lo de la anamnesis de un paciente (versiones, `requiereTutor`, cada versión). */
+  anamnesis: (clinicaId: string, id: string) => ['anamnesis', clinicaId, id] as const,
+  historial: (clinicaId: string, id: string) => ['historial', clinicaId, id] as const,
 };
 
 /**
@@ -128,16 +131,27 @@ export function useActualizarPacientes() {
     void consultas.invalidateQueries({ queryKey: claves.lista(clinica) });
     void consultas.invalidateQueries({ queryKey: ['buscar', clinica] });
   };
+  /** Cualquier cambio de la ficha deja un evento nuevo en el historial. */
+  const historial = (id: string) =>
+    void consultas.invalidateQueries({ queryKey: claves.historial(clinica, id) });
   return {
     /**
-     * Guarda la ficha respondida por la API y marca viejas la lista y el buscador. Si cambió el
-     * nombre, las fichas de sus familiares (que lo muestran en el grupo familiar) se vuelven a
-     * pedir al abrirlas.
+     * Guarda la ficha respondida por la API y marca viejas la lista, el buscador y el historial.
+     * Si cambió el nombre o la CI, las fichas de sus familiares (que lo muestran en el grupo
+     * familiar, con su CI para firmar como tutor) se vuelven a pedir al abrirlas. Si cambió la
+     * fecha de nacimiento o el sexo, la anamnesis también (`requiereTutor`, pregunta de embarazo).
      */
     ficha: (p: Paciente) => {
       const antes = consultas.getQueryData<Paciente>(claves.ficha(clinica, p.id));
       consultas.setQueryData(claves.ficha(clinica, p.id), p);
-      if (antes && (antes.nombres !== p.nombres || antes.apellidos !== p.apellidos)) {
+      historial(p.id);
+      if (antes && (antes.fechaNac !== p.fechaNac || antes.sexo !== p.sexo)) {
+        void consultas.invalidateQueries({ queryKey: claves.anamnesis(clinica, p.id) });
+      }
+      if (
+        antes &&
+        (antes.nombres !== p.nombres || antes.apellidos !== p.apellidos || antes.ci !== p.ci)
+      ) {
         const familiares = new Set(
           [...antes.relaciones, ...p.relaciones].map((r) => r.familiar.id),
         );
@@ -149,6 +163,7 @@ export function useActualizarPacientes() {
     /** Cambia la ficha en caché sin pedirla de nuevo (cada `GET` queda en auditoría). */
     cambiarFicha: (id: string, cambio: (p: Paciente) => Paciente) => {
       consultas.setQueryData<Paciente>(claves.ficha(clinica, id), (p) => (p ? cambio(p) : p));
+      historial(id);
       listas();
     },
     /** Otra ficha quedó desactualizada (p. ej. el espejo de un vínculo): se pide al abrirla. */

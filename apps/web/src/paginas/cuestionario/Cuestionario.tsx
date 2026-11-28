@@ -10,6 +10,9 @@ import { clavesAnamnesis, useCatalogoCompleto } from '../pacientes/consultasAnam
 import { EditorPregunta } from './EditorPregunta.js';
 import './cuestionario.css';
 
+/** Tope del `PUT` (activas e inactivas: las inactivas nunca se borran). */
+const MAXIMO_PREGUNTAS = 500;
+
 /** Cuántas alertas puede dejar una pregunta (la de «sí» o una por opción). */
 function alertasDe(p: Pregunta): number {
   if (p.tipo === 'si_no') return p.alertaSiSi ? 1 : 0;
@@ -271,6 +274,10 @@ export function Cuestionario() {
   function enviar() {
     if (!lista) return;
     const preguntas = renumerar(lista);
+    if (preguntas.length > MAXIMO_PREGUNTAS) {
+      setErrorLocal(t.demasiadas(preguntas.length, MAXIMO_PREGUNTAS));
+      return;
+    }
     const r = reemplazarPreguntasSchema.safeParse({ preguntas });
     if (!r.success) {
       setErrorLocal(t.errorGuardar);

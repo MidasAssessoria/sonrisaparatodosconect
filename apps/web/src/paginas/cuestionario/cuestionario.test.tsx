@@ -28,9 +28,11 @@ const CATALOGO_COMPLETO = [...CATALOGO_PRUEBA, INACTIVA];
 /** Lo que haría la API: valida, guarda y responde el catálogo completo. */
 function rutasCatalogo() {
   return {
-    'GET /anamnesis/preguntas/catalogo': { cuerpo: { preguntas: CATALOGO_COMPLETO } },
+    'GET /anamnesis/preguntas/catalogo': {
+      cuerpo: { preguntas: CATALOGO_COMPLETO, huella: 'h-completo' },
+    },
     'PUT /anamnesis/preguntas': ({ cuerpo }: { cuerpo: unknown }) => ({
-      cuerpo: reemplazarPreguntasSchema.parse(cuerpo),
+      cuerpo: { ...reemplazarPreguntasSchema.parse(cuerpo), huella: 'h-nueva' },
     }),
   };
 }
@@ -210,6 +212,61 @@ describe('Cuestionario de salud', () => {
     });
     // Las opciones que ya existían conservan su valor.
     expect(por('alergias')?.opciones.map((o) => o.valor)).toEqual(['penicilina', 'latex']);
+  });
+
+  it('al pasar una alerta de alergia a condición se limpia el grupo de alergia', async () => {
+    const f = montar(rutasCatalogo(), '/cuestionario');
+    const s4 = within(await screen.findByRole('region', { name: '4. Antecedentes médicos' }));
+    fireEvent.click(
+      s4.getByRole('button', { name: 'Editar «¿Tenés alergia a algún medicamento o material?»' }),
+    );
+    const hoja = within(await screen.findByRole('dialog', { name: 'Editar pregunta' }));
+    expect(hoja.getAllByRole('textbox', { name: /Grupo de alergia/ })[0]).toHaveValue(
+      'penicilinas',
+    );
+    fireEvent.change(hoja.getAllByRole('combobox', { name: 'Tipo de alerta' })[0]!, {
+      target: { value: 'condicion' },
+    });
+    // Penicilina pasa a condición: su grupo desaparece (queda el de látex, que sigue alergia).
+    expect(hoja.getAllByRole('textbox', { name: /Grupo de alergia/ })).toHaveLength(1);
+    fireEvent.click(hoja.getByRole('button', { name: 'Listo' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    fireEvent.click(screen.getByRole('button', { name: 'Guardar cuestionario' }));
+    await screen.findByText('Guardamos el cuestionario.');
+    const enviadas = (puts(f.pedidos)[0]?.cuerpo as { preguntas: Pregunta[] }).preguntas;
+    expect(por0(enviadas, 'alergias')?.opciones[0]?.alerta).toEqual({
+      tipo: 'condicion',
+      texto: 'Alergia a la penicilina',
+      gravedad: 'alta',
+      grupoAlergia: null,
+    });
+  });
+
+  it('más de 500 preguntas (contando las inactivas): error claro y no se manda', async () => {
+    const muchas = Array.from({ length: 501 }, (_, i) =>
+      preguntaDe({
+        codigo: `p_${i}`,
+        seccion: 1,
+        orden: 0,
+        texto: `Pregunta número ${i}`,
+        activa: false,
+      }),
+    );
+    const f = montar(
+      {
+        'GET /anamnesis/preguntas/catalogo': { cuerpo: { preguntas: muchas, huella: 'h' } },
+      },
+      '/cuestionario',
+    );
+    const s1 = within(
+      await screen.findByRole('region', { name: '1. Motivo de consulta y síntomas' }),
+    );
+    fireEvent.click(s1.getByRole('button', { name: 'Activar «Pregunta número 0»' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Guardar cuestionario' }));
+    expect(
+      await screen.findByText(/El cuestionario tiene 501 preguntas y el máximo es 500/),
+    ).toBeInTheDocument();
+    expect(puts(f.pedidos)).toHaveLength(0);
   });
 
   it('un código repetido no se acepta', async () => {

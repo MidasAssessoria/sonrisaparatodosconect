@@ -6,25 +6,34 @@ import {
   type Paciente,
   type Pregunta,
 } from '@conecta/shared';
-import { Boton, Campo, FirmaManuscrita, HojaInferior, Icono } from '@conecta/ui';
+import { Boton, Campo, Chip, FirmaManuscrita, HojaInferior, Icono } from '@conecta/ui';
 import { useId, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import type { CatalogoPreguntas } from '../../api/cliente.js';
 import { ErrorConecta } from '../../api/errores.js';
 import { AvisoPersistente, MensajeError } from '../../componentes/estados.js';
 import { useEnvioUnico } from '../../componentes/useEnvioUnico.js';
 import { useTextos } from '../../i18n/idioma.js';
 import { CasillaVerificacion, Segmento } from '../personal/componentes.js';
-import { useGuardarAnamnesis, useRecargarVersiones } from './consultasAnamnesis.js';
+import {
+  useGuardarAnamnesis,
+  useRecargarPreguntas,
+  useRecargarVersiones,
+  useTraerVersion,
+} from './consultasAnamnesis.js';
+import { DiferenciasAnamnesis, filasDiferencias } from './DiferenciasAnamnesis.js';
 import { nombreCompleto } from './formato.js';
 import {
   armarRespuestas,
   armarSignos,
   CAMPOS_SIGNOS,
   muestraDetalle,
+  pasarValores,
   preguntasDelFormulario,
   SIGNOS_VACIOS,
   VALOR_VACIO,
   valoresIniciales,
   type CampoSigno,
+  type Perdida,
   type SignosTexto,
   type ValoresFormulario,
   type ValorPregunta,
@@ -120,14 +129,16 @@ function CampoPregunta({
     >
       <legend className="w-anam-pregunta__texto">{etiqueta}</legend>
       {p.tipo === 'si_no' ? (
+        // «Sin responder» deja limpiar una respuesta tocada por error.
         <Segmento<'si' | 'no' | ''>
           etiqueta={t.respuesta}
           valor={v.si === null ? '' : v.si ? 'si' : 'no'}
           opciones={[
             { valor: 'si', texto: t.si },
             { valor: 'no', texto: t.no },
+            { valor: '', texto: t.sinResponder },
           ]}
-          onCambio={(x) => onCambio({ ...v, si: x === 'si' })}
+          onCambio={(x) => onCambio({ ...v, si: x === '' ? null : x === 'si' })}
         />
       ) : (
         <div className="w-anam-opciones">
@@ -139,6 +150,7 @@ function CampoPregunta({
               onCambio={(m) =>
                 onCambio({
                   ...v,
+                  ninguna: false,
                   // Se mantiene el orden del catálogo.
                   opciones: p.opciones
                     .map((x) => x.valor)
@@ -147,6 +159,19 @@ function CampoPregunta({
               }
             />
           ))}
+          {/* «Ninguna» es una respuesta (`opciones: []`); sin marcar nada es «sin responder». */}
+          <CasillaVerificacion
+            etiqueta={t.ninguna}
+            marcada={v.ninguna}
+            onCambio={(m) =>
+              onCambio({
+                ...v,
+                ninguna: m,
+                opciones: m ? [] : v.opciones,
+                detalle: m ? '' : v.detalle,
+              })
+            }
+          />
         </div>
       )}
       <ErrorPregunta id={idError} texto={error} />
@@ -167,6 +192,36 @@ function SeccionFormulario({ titulo, children }: { titulo: string; children: Rea
   );
 }
 
+/** Respuestas que no se pudieron pasar al cuestionario de ahora (con las alertas que dejaban). */
+function AvisoPerdidas({ titulo, perdidas }: { titulo: string; perdidas: Perdida[] }) {
+  const t = useTextos().pacientes.formularioAnamnesis;
+  return (
+    <div className="w-aviso-atencion" role="status">
+      <Icono nombre="alerta" tamano={22} />
+      <div className="w-aviso-atencion__cuerpo">
+        <p className="w-aviso-atencion__titulo">{titulo}</p>
+        <ul className="w-anam-perdidas">
+          {perdidas.map((x) => (
+            <li key={`${x.codigo}-${x.respuesta}`}>
+              <span>{t.perdida(x.pregunta, x.respuesta)}</span>
+              {x.alertas.length ? (
+                <span className="w-chips">
+                  {x.alertas.map((a) => (
+                    <Chip key={a} tono="atencion" icono="alerta">
+                      {t.dejabaAlerta(a)}
+                    </Chip>
+                  ))}
+                </span>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+        <p className="w-aviso-atencion__texto">{t.perdidasTexto}</p>
+      </div>
+    </div>
+  );
+}
+
 /* ---------- Firmante ---------- */
 
 interface Firmante {
@@ -175,11 +230,22 @@ interface Firmante {
   ci: string;
   /** Familiar elegido del grupo (para marcar el botón), o `null`. */
   familiarId: string | null;
+  /** La CI salió del vínculo (en modo paciente no se muestra). */
+  ciDelVinculo: boolean;
 }
+
+const FIRMANTE_TUTOR_VACIO: Firmante = {
+  esTutor: true,
+  familiarId: null,
+  nombre: '',
+  ci: '',
+  ciDelVinculo: false,
+};
 
 function QuienFirma({
   paciente,
   requiereTutor,
+  modoPaciente,
   firmante,
   errores,
   base,
@@ -187,6 +253,7 @@ function QuienFirma({
 }: {
   paciente: Paciente;
   requiereTutor: boolean;
+  modoPaciente: boolean;
   firmante: Firmante;
   errores: Errores;
   base: string;
@@ -194,15 +261,23 @@ function QuienFirma({
 }) {
   const textos = useTextos().pacientes;
   const t = textos.formularioAnamnesis;
-  const [sinCi, setSinCi] = useState(false);
   const tutores = paciente.relaciones.filter((r) => r.familiarEsTutorLegal);
   const nombrePaciente = nombreCompleto(paciente);
+  const errorFirmante = errores['firmante.esTutor'] ?? errores['firmante'];
+  const sinCi = firmante.familiarId !== null && !firmante.ciDelVinculo;
+  // En modo paciente la cédula de un familiar no se muestra: se usa sin verla.
+  const ciOculta = modoPaciente && firmante.ciDelVinculo;
 
   /** Elegir un tutor del grupo familiar completa su nombre y su CI (las trae el vínculo). */
   function elegirTutor(r: Paciente['relaciones'][number]) {
     const { id, nombre, ci } = r.familiar;
-    setSinCi(!ci);
-    onCambio({ esTutor: true, familiarId: id, nombre, ci: ci ? formatoCi(ci) : '' });
+    onCambio({
+      esTutor: true,
+      familiarId: id,
+      nombre,
+      ci: ci ? formatoCi(ci) : '',
+      ciDelVinculo: !!ci,
+    });
   }
 
   const datosTutor = (
@@ -231,10 +306,7 @@ function QuienFirma({
               type="button"
               className="w-segmento__opcion"
               aria-pressed={firmante.familiarId === null}
-              onClick={() => {
-                setSinCi(false);
-                onCambio({ esTutor: true, familiarId: null, nombre: '', ci: '' });
-              }}
+              onClick={() => onCambio(FIRMANTE_TUTOR_VACIO)}
             >
               {firmante.familiarId === null ? <Icono nombre="check" tamano={18} /> : null}
               <span>{t.otraPersona}</span>
@@ -250,30 +322,44 @@ function QuienFirma({
           maxLength={120}
           autoComplete="off"
           value={firmante.nombre}
-          onChange={(e) => onCambio({ ...firmante, nombre: e.target.value, familiarId: null })}
+          onChange={(e) =>
+            // Otro nombre ya no es el familiar elegido: su cédula no le corresponde.
+            onCambio({
+              ...firmante,
+              nombre: e.target.value,
+              familiarId: null,
+              ...(firmante.ciDelVinculo ? { ci: '', ciDelVinculo: false } : {}),
+            })
+          }
           error={errores['firmante.nombre']}
         />
-        <Campo
-          id={idCampo(base, 'firmante.ci')}
-          etiqueta={t.ciTutor}
-          requerido
-          inputMode="numeric"
-          autoComplete="off"
-          maxLength={15}
-          value={firmante.ci}
-          onChange={(e) => {
-            setSinCi(false);
-            onCambio({ ...firmante, ci: e.target.value });
-          }}
-          ayuda={sinCi ? t.sinCiEnFicha : t.ciTutorAyuda}
-          error={errores['firmante.ci']}
-        />
+        {ciOculta ? (
+          <p className="w-secundario" id={idCampo(base, 'firmante.ci')}>
+            {t.ciDelGrupo}
+          </p>
+        ) : (
+          <Campo
+            id={idCampo(base, 'firmante.ci')}
+            etiqueta={t.ciTutor}
+            requerido
+            inputMode="numeric"
+            autoComplete="off"
+            maxLength={15}
+            value={firmante.ci}
+            onChange={(e) => onCambio({ ...firmante, ci: e.target.value, ciDelVinculo: false })}
+            ayuda={sinCi ? t.sinCiEnFicha : t.ciTutorAyuda}
+            error={errores['firmante.ci']}
+          />
+        )}
       </div>
+      {ciOculta && errores['firmante.ci'] ? (
+        <ErrorPregunta id={`${base}-ci-error`} texto={errores['firmante.ci']} />
+      ) : null}
     </>
   );
 
   return (
-    <div className="w-anam-firmante">
+    <div className="w-anam-firmante" id={idCampo(base, 'firmante.esTutor')} tabIndex={-1}>
       <h3 className="w-anam-bloque__titulo">{t.quienFirma}</h3>
       {requiereTutor ? (
         <>
@@ -288,8 +374,14 @@ function QuienFirma({
             onCambio={(m) =>
               onCambio(
                 m
-                  ? { esTutor: true, familiarId: null, nombre: '', ci: '' }
-                  : { esTutor: false, familiarId: null, nombre: nombrePaciente, ci: '' },
+                  ? FIRMANTE_TUTOR_VACIO
+                  : {
+                      esTutor: false,
+                      familiarId: null,
+                      nombre: nombrePaciente,
+                      ci: '',
+                      ciDelVinculo: false,
+                    },
               )
             }
           />
@@ -300,6 +392,8 @@ function QuienFirma({
           ) : null}
         </>
       )}
+      {/* El error de quién firma (p. ej. «es menor: firma un tutor») va acá, no solo en el resumen. */}
+      <ErrorPregunta id={`${base}-firmante-error`} texto={errorFirmante} />
     </div>
   );
 }
@@ -308,12 +402,20 @@ function QuienFirma({
 
 export interface FormularioAnamnesisProps {
   paciente: Paciente;
-  catalogo: Pregunta[];
+  /** Catálogo activo (con su huella) con el que se arma el formulario. */
+  catalogo: CatalogoPreguntas;
   /** Versión vigente al abrir (precarga y `versionBase`), o `null` si es la primera. */
   vigente: Anamnesis | null;
   requiereTutor: boolean;
+  /** Lo completa el paciente en la tablet: sin enlaces ni datos de otros (CI de familiares). */
+  modoPaciente?: boolean;
   onGuardada: (a: Anamnesis) => void;
   onCancelar: () => void;
+}
+
+interface AvisoPerdida {
+  titulo: string;
+  perdidas: Perdida[];
 }
 
 /**
@@ -325,6 +427,7 @@ export function FormularioAnamnesis({
   catalogo,
   vigente,
   requiereTutor,
+  modoPaciente = false,
   onGuardada,
   onCancelar,
 }: FormularioAnamnesisProps) {
@@ -334,42 +437,57 @@ export function FormularioAnamnesis({
   const unaVez = useEnvioUnico();
   const guardarVersion = useGuardarAnamnesis(paciente.id);
   const recargarVersiones = useRecargarVersiones(paciente.id);
+  const traerVersion = useTraerVersion(paciente.id);
+  const recargarPreguntas = useRecargarPreguntas();
   const refResumen = useRef<HTMLDivElement>(null);
 
+  const [cuestionario, setCuestionario] = useState<CatalogoPreguntas>(catalogo);
   const preguntas = useMemo(
-    () => preguntasDelFormulario(catalogo, paciente.sexo),
-    [catalogo, paciente.sexo],
+    () => preguntasDelFormulario(cuestionario.preguntas, paciente.sexo),
+    [cuestionario, paciente.sexo],
   );
-  const [valores, setValores] = useState<ValoresFormulario>(() =>
-    valoresIniciales(preguntas, vigente),
+  const [inicio] = useState(() => valoresIniciales(preguntas, vigente, t));
+  const [valores, setValores] = useState<ValoresFormulario>(inicio.valores);
+  const [avisosPerdida, setAvisosPerdida] = useState<AvisoPerdida[]>(() =>
+    inicio.perdidas.length && vigente
+      ? [{ titulo: t.perdidasApertura(vigente.version), perdidas: inicio.perdidas }]
+      : [],
   );
   const [signos, setSignos] = useState<SignosTexto>(SIGNOS_VACIOS);
   const nombrePaciente = nombreCompleto(paciente);
   const [firmante, setFirmante] = useState<Firmante>(
     requiereTutor
-      ? { esTutor: true, familiarId: null, nombre: '', ci: '' }
-      : { esTutor: false, familiarId: null, nombre: nombrePaciente, ci: '' },
+      ? FIRMANTE_TUTOR_VACIO
+      : { esTutor: false, familiarId: null, nombre: nombrePaciente, ci: '', ciDelVinculo: false },
   );
   const [firma, setFirma] = useState<string | null>(null);
   const [declaro, setDeclaro] = useState(false);
   const [versionBase, setVersionBase] = useState<number | null>(vigente?.version ?? null);
   const [errores, setErrores] = useState<Errores>({});
   const [errorGeneral, setErrorGeneral] = useState<unknown>(null);
-  const [conflicto, setConflicto] = useState<ErrorConecta | null>(null);
-  const [recargada, setRecargada] = useState<number | null>(null);
-  const [recargando, setRecargando] = useState(false);
+  /** 409 por versión: la versión que guardó otra persona, para comparar. */
+  const [otraVersion, setOtraVersion] = useState<Anamnesis | null>(null);
+  const [revisado, setRevisado] = useState(false);
+  const [errorConflicto, setErrorConflicto] = useState<{
+    error: unknown;
+    reintentar: () => void;
+  } | null>(null);
+  const [avisoCuestionario, setAvisoCuestionario] = useState<string | null>(null);
+  const [trabajando, setTrabajando] = useState(false);
   const [guardando, setGuardando] = useState(false);
   const [tocado, setTocado] = useState(false);
   const [confirmarSalida, setConfirmarSalida] = useState(false);
 
   const tocar = () => setTocado(true);
-  const quitarError = (clave: string) =>
+  const quitarError = (...claves: string[]) =>
     setErrores((e) => {
-      if (!(clave in e)) return e;
+      if (!claves.some((c) => c in e)) return e;
       const resto = { ...e };
-      delete resto[clave];
+      for (const c of claves) delete resto[c];
       return resto;
     });
+
+  const diferencias = otraVersion ? filasDiferencias(preguntas, otraVersion, valores, t) : [];
 
   const sv = vigente?.signosVitales;
   const anteriores: Record<CampoSigno, string | null> = {
@@ -390,18 +508,22 @@ export function FormularioAnamnesis({
     const orden = [
       ...preguntas.map((p) => `r:${p.codigo}`),
       ...CAMPOS_SIGNOS.map((c) => `s:${c}`),
+      'firmante.esTutor',
       'firmante.nombre',
       'firmante.ci',
       'firmaPng',
       'declaracionVeracidad',
+      'revisionDiferencias',
     ];
     const etiquetas: Record<string, string> = {
       ...Object.fromEntries(preguntas.map((p) => [`r:${p.codigo}`, p.texto])),
       ...Object.fromEntries(CAMPOS_SIGNOS.map((c) => [`s:${c}`, etiquetaSigno[c]])),
-      'firmante.nombre': t.nombreTutor,
+      'firmante.esTutor': t.quienFirma,
+      'firmante.nombre': firmante.esTutor ? t.nombreTutor : t.quienFirma,
       'firmante.ci': t.ciTutor,
       firmaPng: t.firmaGenerica,
       declaracionVeracidad: t.declaracion,
+      revisionDiferencias: t.diferenciasEtiqueta,
     };
     const claves = [
       ...orden.filter((c) => c in e),
@@ -419,6 +541,49 @@ export function FormularioAnamnesis({
     setTimeout(() => refResumen.current?.focus(), 0);
   }
 
+  /**
+   * Vuelve a pedir el cuestionario y pasa lo escrito: lo que ya no tiene dónde ir se avisa (con
+   * las alertas que dejaba), no se pierde callado.
+   */
+  async function actualizarCuestionario(motivo: string) {
+    setTrabajando(true);
+    setErrorConflicto(null);
+    try {
+      const nuevo = await recargarPreguntas();
+      const nuevas = preguntasDelFormulario(nuevo.preguntas, paciente.sexo);
+      const r = pasarValores(preguntas, nuevas, valores, t);
+      setCuestionario(nuevo);
+      setValores(r.valores);
+      setErrores({});
+      if (r.perdidas.length) {
+        setAvisosPerdida((a) => [...a, { titulo: t.perdidasActualizacion, perdidas: r.perdidas }]);
+      }
+      setAvisoCuestionario(motivo);
+    } catch (e) {
+      setErrorConflicto({ error: e, reintentar: () => void actualizarCuestionario(motivo) });
+    } finally {
+      setTrabajando(false);
+    }
+  }
+
+  /** 409 por versión: trae la que guardó la otra persona para comparar antes de volver a guardar. */
+  async function traerVersionNueva() {
+    setTrabajando(true);
+    setErrorConflicto(null);
+    try {
+      const n = await recargarVersiones();
+      if (n === null) return;
+      const a = await traerVersion(n);
+      setVersionBase(n);
+      setOtraVersion(a);
+      setRevisado(false);
+    } catch (e) {
+      setErrorConflicto({ error: e, reintentar: () => void traerVersionNueva() });
+    } finally {
+      setTrabajando(false);
+    }
+  }
+
   async function guardar() {
     setErrorGeneral(null);
     const r = armarRespuestas(preguntas, valores, t);
@@ -426,9 +591,11 @@ export function FormularioAnamnesis({
     const nuevos: Errores = {};
     for (const [codigo, m] of Object.entries(r.errores)) nuevos[`r:${codigo}`] = m;
     for (const [campo, m] of Object.entries(s.errores)) if (m) nuevos[`s:${campo}`] = m;
+    if (diferencias.length && !revisado) nuevos['revisionDiferencias'] = t.faltaRevisar;
 
     const cuerpo = {
       versionBase,
+      huellaCatalogo: cuestionario.huella,
       respuestas: r.respuestas,
       signosVitales: s.signos,
       firmante: firmante.esTutor
@@ -456,8 +623,12 @@ export function FormularioAnamnesis({
       onGuardada(a);
     } catch (e) {
       if (e instanceof ErrorConecta && e.codigo === 'conflicto') {
-        setConflicto(e);
-        setRecargada(null);
+        // Los dos 409 se distinguen por el campo: el cuestionario cambió, u otra versión.
+        if (e.detalles[0]?.campo === 'huellaCatalogo') {
+          await actualizarCuestionario(t.cuestionarioCambio);
+        } else {
+          await traerVersionNueva();
+        }
       } else if (e instanceof ErrorConecta && e.detalles.length) {
         const porCampo: Errores = {};
         for (const d of e.detalles) porCampo[claveDeCampo(d.campo)] = d.mensaje;
@@ -468,20 +639,6 @@ export function FormularioAnamnesis({
       }
     } finally {
       setGuardando(false);
-    }
-  }
-
-  async function cargarVersionNueva() {
-    setRecargando(true);
-    try {
-      const nueva = await recargarVersiones();
-      setVersionBase(nueva);
-      setRecargada(nueva);
-      setConflicto(null);
-    } catch (e) {
-      setErrorGeneral(e);
-    } finally {
-      setRecargando(false);
     }
   }
 
@@ -501,8 +658,30 @@ export function FormularioAnamnesis({
           {vigente ? t.tituloActualizar(nombrePaciente) : t.tituloNueva(nombrePaciente)}
         </h2>
         <p>{t.siguienteVersion(siguiente, versionBase)}</p>
-        <p className="w-secundario">{t.pasarTablet}</p>
+        <p className="w-secundario">{modoPaciente ? t.instruccionPaciente : t.pasarTablet}</p>
+        <div>
+          <Boton
+            variante="fantasma"
+            icono="sincronizar"
+            cargando={trabajando && !otraVersion}
+            onClick={() => void unaVez(() => actualizarCuestionario(t.cuestionarioActualizado))}
+          >
+            {t.actualizarCuestionario}
+          </Boton>
+        </div>
       </header>
+
+      {avisoCuestionario ? (
+        <div className="w-aviso-atencion w-aviso-neutro" role="status">
+          <Icono nombre="info" tamano={22} />
+          <div className="w-aviso-atencion__cuerpo">
+            <p className="w-aviso-atencion__titulo">{avisoCuestionario}</p>
+          </div>
+        </div>
+      ) : null}
+      {avisosPerdida.map((a, i) => (
+        <AvisoPerdidas key={i} titulo={a.titulo} perdidas={a.perdidas} />
+      ))}
 
       {SECCIONES_ANAMNESIS.map((s) => {
         const deSeccion = preguntas.filter((p) => p.seccion === s.numero);
@@ -558,21 +737,22 @@ export function FormularioAnamnesis({
         <QuienFirma
           paciente={paciente}
           requiereTutor={requiereTutor}
+          modoPaciente={modoPaciente}
           firmante={firmante}
           errores={errores}
           base={base}
           onCambio={(f) => {
             tocar();
-            quitarError('firmante.nombre');
-            quitarError('firmante.ci');
+            quitarError('firmante.nombre', 'firmante.ci', 'firmante.esTutor', 'firmante');
             setFirmante(f);
           }}
         />
         <div id={idCampo(base, 'firmaPng')} tabIndex={-1}>
+          {/* Siempre dibujada: la firma escrita con el teclado espera la respuesta de P5. */}
           <FirmaManuscrita
             etiqueta={nombreFirma ? t.firma(nombreFirma) : t.firmaGenerica}
             valor={firma}
-            nombreSugerido={nombreFirma}
+            permitirTeclado={false}
             maxCaracteres={400_000}
             onCambio={(png) => {
               tocar();
@@ -597,37 +777,26 @@ export function FormularioAnamnesis({
         </div>
       </SeccionFormulario>
 
-      {conflicto ? (
-        <AvisoPersistente
-          titulo={t.conflictoTitulo}
-          texto={`${conflicto.message} ${t.conflictoTexto}`}
-          accion={
-            <Boton
-              variante="secundario"
-              icono="sincronizar"
-              cargando={recargando}
-              onClick={() => void cargarVersionNueva()}
-            >
-              {t.conflictoCargar}
-            </Boton>
-          }
+      {otraVersion ? (
+        <DiferenciasAnamnesis
+          version={otraVersion}
+          filas={diferencias}
+          revisado={revisado}
+          error={errores['revisionDiferencias']}
+          idRevisado={idCampo(base, 'revisionDiferencias')}
+          onRevisado={(r) => {
+            setRevisado(r);
+            quitarError('revisionDiferencias');
+          }}
+          onUsar={(codigo, valor) => {
+            tocar();
+            quitarError(`r:${codigo}`);
+            setValores((vs) => ({ ...vs, [codigo]: valor }));
+          }}
         />
       ) : null}
-      {recargada !== null ? (
-        <div className="w-aviso-atencion w-aviso-neutro" role="status">
-          <Icono nombre="info" tamano={22} />
-          <div className="w-aviso-atencion__cuerpo">
-            <p className="w-aviso-atencion__titulo">{t.conflictoListo(recargada)}</p>
-            <a
-              className="w-anam-enlace"
-              href={`/pacientes/${paciente.id}/anamnesis?version=${recargada}`}
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              {t.verVersionNueva(recargada)}
-            </a>
-          </div>
-        </div>
+      {errorConflicto ? (
+        <MensajeError error={errorConflicto.error} onReintentar={errorConflicto.reintentar} />
       ) : null}
 
       <div ref={refResumen} tabIndex={-1} className="w-anam-resumen" role="alert">
@@ -658,23 +827,28 @@ export function FormularioAnamnesis({
           </div>
         ) : null}
       </div>
-      {errorGeneral && !conflicto && !lista.length ? <MensajeError error={errorGeneral} /> : null}
+      {errorGeneral && !lista.length ? <MensajeError error={errorGeneral} /> : null}
 
       <div className="w-botonera w-anam-formulario__acciones">
         <Boton
           variante="secundario"
-          onClick={() => (tocado ? setConfirmarSalida(true) : onCancelar())}
+          onClick={() => (tocado || modoPaciente ? setConfirmarSalida(true) : onCancelar())}
         >
           {t.cancelar}
         </Boton>
-        <Boton type="submit" variante="primario" tamano="lg" cargando={guardando}>
+        <Boton
+          type="submit"
+          variante="primario"
+          tamano="lg"
+          cargando={guardando || (trabajando && !!otraVersion)}
+        >
           {t.guardar}
         </Boton>
       </div>
 
       <HojaInferior
         abierta={confirmarSalida}
-        titulo={t.salirTitulo}
+        titulo={modoPaciente ? t.salirTituloPaciente : t.salirTitulo}
         onCerrar={() => setConfirmarSalida(false)}
         acciones={
           <>
@@ -682,12 +856,12 @@ export function FormularioAnamnesis({
               {t.seguir}
             </Boton>
             <Boton variante="peligro" onClick={onCancelar}>
-              {t.salirConfirmar}
+              {modoPaciente ? t.salirConfirmarPaciente : t.salirConfirmar}
             </Boton>
           </>
         }
       >
-        <p>{t.salirTexto}</p>
+        <p>{modoPaciente ? t.salirTextoPaciente : t.salirTexto}</p>
       </HojaInferior>
     </form>
   );

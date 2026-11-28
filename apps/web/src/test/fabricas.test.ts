@@ -124,6 +124,7 @@ describe('fetch falso: rutas del Sprint 4', () => {
     expect(tomarPedidosInvalidos()).toEqual([]);
     await pedir(f.fetch, 'POST', `/pacientes/${IDS.usuario}/anamnesis`, {
       versionBase: null,
+      huellaCatalogo: 'huella-1',
       respuestas: [],
       firmante: { nombre: 'Ana Giménez', esTutor: false },
       firmaPng: 'data:image/png;base64,iVBORw0KGgo=',

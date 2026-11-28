@@ -6,7 +6,7 @@ import { Esqueleto, MensajeError } from '../../componentes/estados.js';
 import { useTextos } from '../../i18n/idioma.js';
 import { useSesionLista } from '../../sesion/ProveedorSesion.js';
 import { usePaciente } from './consultas.js';
-import { enlaceWhatsapp, metaPaciente, nombreCompleto } from './formato.js';
+import { enlaceWhatsapp, metaPaciente, nombreCompleto, textoAlertaMedica } from './formato.js';
 import { ChipsPaciente } from './ListaPacientes.js';
 import { PESTANAS_FICHA, pestanasVisibles } from './pestanas.js';
 import './pacientes.css';
@@ -24,10 +24,11 @@ export function alertasCabecera(
     .filter((a) => a.activa)
     .map((a) => ({ tipo: a.tipo, texto: a.texto }));
   const vistas = new Set(manuales.map((a) => `${a.tipo}|${a.texto.trim().toLowerCase()}`));
+  // El detalle libre llega solo para quien ve la ficha clínica (recepción recibe `null`).
   const derivadas = [...paciente.alertasMedicas]
     .sort((a, b) => (a.gravedad === b.gravedad ? 0 : a.gravedad === 'alta' ? -1 : 1))
-    .filter((a) => !vistas.has(`${a.tipo}|${a.texto.trim().toLowerCase()}`))
-    .map((a) => ({ tipo: a.tipo, texto: a.texto, origen }));
+    .map((a) => ({ tipo: a.tipo, texto: textoAlertaMedica(a), origen }))
+    .filter((a) => !vistas.has(`${a.tipo}|${a.texto.trim().toLowerCase()}`));
   return [...manuales, ...derivadas];
 }
 

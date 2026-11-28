@@ -3,7 +3,9 @@ import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import {
   anamnesisDe,
+  catalogoDe,
   CATALOGO_PRUEBA,
+  HUELLA_CATALOGO,
   IDS_PACIENTES,
   matriz,
   MATEO,
@@ -91,7 +93,9 @@ function escenario(e: Escenario = {}) {
         ? { cuerpo: a }
         : { estado: 404, cuerpo: { codigo: 'no_encontrado', mensaje: 'No está.' } };
     },
-    'GET /anamnesis/preguntas': { cuerpo: { preguntas: CATALOGO_PRUEBA } },
+    'GET /anamnesis/preguntas': {
+      cuerpo: { preguntas: CATALOGO_PRUEBA, huella: 'huella-catalogo-1' },
+    },
     ...e.rutas,
   };
   return { estado, rutas };
@@ -231,7 +235,8 @@ describe('Anamnesis: permisos', () => {
   it('recepción: sin pestaña Anamnesis (y su ruta vuelve a Datos), pero ve la alerta médica', async () => {
     const paciente = pacienteDe({
       conAlerta: true,
-      alertasMedicas: [V2.alertasMedicas[0]!],
+      // Recepción no recibe el detalle libre (contrato): solo el texto de la regla.
+      alertasMedicas: [{ ...V2.alertasMedicas[0]!, detalle: null }],
     });
     const { rutas } = escenario({ paciente });
     const f = montar(rutas, `${RUTA_ANA}/anamnesis`, RECEPCION);
@@ -246,9 +251,9 @@ describe('Anamnesis: permisos', () => {
         .map((l) => l.textContent),
     ).toEqual(['Datos', 'Historial']);
     const alertas = within(screen.getByRole('region', { name: 'Alertas clínicas' }));
-    expect(
-      alertas.getByText(/Alergia a la penicilina \(urticaria con amoxicilina\)/),
-    ).toHaveTextContent('Alergia a la penicilina (urticaria con amoxicilina) · De la anamnesis');
+    expect(alertas.getByRole('listitem')).toHaveTextContent(
+      /^Alergia a la penicilina · De la anamnesis$/,
+    );
     expect(de(f.pedidos, 'GET', `${RUTA_ANA}/anamnesis`)).toHaveLength(0);
     expect(de(f.pedidos, 'GET', '/anamnesis/preguntas')).toHaveLength(0);
   });
@@ -270,6 +275,7 @@ describe('Anamnesis: permisos', () => {
         {
           tipo: 'condicion',
           texto: 'Toma anticoagulantes',
+          detalle: 'acenocumarol',
           gravedad: 'alta',
           grupoAlergia: null,
           codigo: 'anticoagulantes',
@@ -282,7 +288,7 @@ describe('Anamnesis: permisos', () => {
     const items = within(region).getAllByRole('listitem');
     expect(items.map((i) => i.textContent)).toEqual([
       'Alergia al látex',
-      'Toma anticoagulantes · De la anamnesis',
+      'Toma anticoagulantes (acenocumarol) · De la anamnesis',
     ]);
     // Alergias en coral (atención), condiciones en sol: con ícono y texto, no solo color.
     expect(items[0]).toHaveClass('cn-alerta--alergia');
@@ -302,6 +308,37 @@ describe('Anamnesis: permisos', () => {
     montar(rutas, `${RUTA_ANA}/anamnesis`, SOLO_VER_FICHA);
     expect(await screen.findByText('Todavía no hay anamnesis registrada.')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Completar anamnesis' })).toBeNull();
+  });
+});
+
+describe('Anamnesis: caché', () => {
+  it('editar la fecha de nacimiento vuelve a pedir las versiones (requiereTutor) y el historial', async () => {
+    const { estado, rutas } = escenario({
+      rutas: {
+        'PATCH /pacientes/:id': ({ cuerpo }: { url: URL; cuerpo: unknown }) => {
+          const c = cuerpo as { fechaNac?: string };
+          estado.paciente = { ...estado.paciente, fechaNac: c.fechaNac ?? null, edad: 16 };
+          return { cuerpo: estado.paciente };
+        },
+        'GET /pacientes/:id/historial': { cuerpo: { eventos: [], siguienteCursor: null } },
+      },
+    });
+    const f = montar(rutas, `${RUTA_ANA}/anamnesis`, ODONTOLOGO);
+    await screen.findByRole('heading', { name: 'Anamnesis · versión 2', level: 2 });
+    fireEvent.click(screen.getByRole('link', { name: 'Historial' }));
+    await screen.findByText('Todavía no hay eventos en el historial.');
+    fireEvent.click(screen.getByRole('link', { name: 'Datos' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Editar datos' }));
+    const hoja = within(await screen.findByRole('dialog', { name: 'Editar datos del paciente' }));
+    fireEvent.change(hoja.getByLabelText('Fecha de nacimiento'), {
+      target: { value: '2010-03-14' },
+    });
+    fireEvent.click(hoja.getByRole('button', { name: 'Guardar cambios' }));
+    await screen.findByText('Guardamos los cambios.');
+    fireEvent.click(screen.getByRole('link', { name: 'Anamnesis' }));
+    await waitFor(() => expect(de(f.pedidos, 'GET', `${RUTA_ANA}/anamnesis`)).toHaveLength(2));
+    fireEvent.click(screen.getByRole('link', { name: 'Historial' }));
+    await waitFor(() => expect(de(f.pedidos, 'GET', `${RUTA_ANA}/historial`)).toHaveLength(2));
   });
 });
 
@@ -364,6 +401,7 @@ describe('Anamnesis: formulario', () => {
     const [post] = de(f.pedidos, 'POST', `${RUTA_ANA}/anamnesis`);
     expect(post?.cuerpo).toEqual({
       versionBase: null,
+      huellaCatalogo: HUELLA_CATALOGO,
       respuestas: [
         { codigo: 'motivo', texto: 'Me duele una muela' },
         { codigo: 'encias', opciones: ['sangrado'] },
@@ -595,8 +633,61 @@ describe('Anamnesis: formulario', () => {
     expect(de(f.pedidos, 'POST', `/pacientes/${IDS_PACIENTES.mateo}/anamnesis`)).toHaveLength(0);
   });
 
-  it('manda versionBase; ante un 409 lo explica, recarga las versiones y guarda sin perder lo escrito', async () => {
-    const v3 = anamnesisDe({ id: uuid(803), version: 3, registradaPor: 'Dr. Esteban Rojas' });
+  it('409 por versión: trae la nueva, muestra las diferencias por pregunta y exige revisarlas', async () => {
+    // Otra persona guardó la 3: alergia al látex (no a la penicilina) y otro motivo.
+    const v3 = anamnesisDe({
+      id: uuid(803),
+      version: 3,
+      registradaPor: 'Dr. Esteban Rojas',
+      respuestas: [
+        {
+          codigo: 'motivo',
+          pregunta: '¿Cuál es el motivo de tu consulta?',
+          seccion: 1,
+          tipo: 'texto',
+          texto: 'Control anual',
+          etiquetas: [],
+          unidad: null,
+        },
+        {
+          codigo: 'protesis',
+          pregunta: '¿Usás prótesis removible?',
+          seccion: 2,
+          tipo: 'si_no',
+          si: false,
+          etiquetas: [],
+          unidad: null,
+        },
+        {
+          codigo: 'cepillado',
+          pregunta: '¿Cuántas veces por día te cepillás?',
+          seccion: 3,
+          tipo: 'numero',
+          numero: 2,
+          unidad: 'veces',
+          etiquetas: [],
+        },
+        {
+          codigo: 'alergias',
+          pregunta: '¿Tenés alergia a algún medicamento o material?',
+          seccion: 4,
+          tipo: 'multiple',
+          opciones: ['latex'],
+          etiquetas: ['Látex'],
+          unidad: null,
+        },
+      ],
+      alertasMedicas: [
+        {
+          tipo: 'alergia',
+          texto: 'Alergia al látex',
+          detalle: null,
+          gravedad: 'alta',
+          grupoAlergia: null,
+          codigo: 'alergias',
+        },
+      ],
+    });
     const v4 = anamnesisDe({ id: uuid(804), version: 4 });
     let intentos = 0;
     const { estado, rutas } = escenario({
@@ -604,13 +695,13 @@ describe('Anamnesis: formulario', () => {
         'POST /pacientes/:id/anamnesis': () => {
           intentos++;
           if (intentos === 1) {
-            // Otra persona guardó la 3 mientras se completaba.
             estado.versiones = [v3, V2, V1];
             return {
               estado: 409,
               cuerpo: {
                 codigo: 'conflicto',
                 mensaje: 'Otra persona actualizó la anamnesis mientras la completabas.',
+                detalles: [{ campo: 'versionBase', mensaje: 'Hay una versión más nueva.' }],
               },
             };
           }
@@ -625,28 +716,59 @@ describe('Anamnesis: formulario', () => {
     fireEvent.change(motivo, { target: { value: 'Dolor al masticar' } });
     firmarYGuardar();
 
-    expect(
-      await screen.findByText('Otra persona actualizó la anamnesis mientras la completabas'),
-    ).toBeInTheDocument();
+    // Se trae la versión nueva sola y se comparan las respuestas.
+    const panel = within(
+      await screen.findByRole('region', {
+        name: 'Dr. Esteban Rojas guardó la versión 3 mientras se completaba este formulario',
+      }),
+    );
     const posts = () => de(f.pedidos, 'POST', `${RUTA_ANA}/anamnesis`);
     expect((posts()[0]?.cuerpo as { versionBase: number }).versionBase).toBe(2);
-
-    fireEvent.click(screen.getByRole('button', { name: 'Cargar la versión nueva' }));
+    expect(de(f.pedidos, 'GET', `${RUTA_ANA}/anamnesis/3`)).toHaveLength(1);
+    const filas = panel.getAllByRole('listitem');
+    // Primero la que cambia alertas; las que coinciden (prótesis, cepillado) no aparecen.
     expect(
-      await screen.findByText(/^Cargamos la versión 3\. Lo que escribiste sigue igual/),
+      filas.map((li) => li.querySelector('.w-anam-diferencia__pregunta')?.textContent),
+    ).toEqual([
+      '¿Tenés alergia a algún medicamento o material?',
+      '¿Cuál es el motivo de tu consulta?',
+    ]);
+    const alergias = within(filas[0] as HTMLElement);
+    expect(alergias.getByText('Látex')).toBeInTheDocument();
+    expect(alergias.getByText('Alergia al látex')).toBeInTheDocument();
+    expect(alergias.getByText('Penicilina (urticaria con amoxicilina)')).toBeInTheDocument();
+    expect(alergias.getByText('Alergia a la penicilina')).toBeInTheDocument();
+    expect(within(filas[1] as HTMLElement).getByText('Control anual')).toBeInTheDocument();
+    expect(within(filas[1] as HTMLElement).getByText('Dolor al masticar')).toBeInTheDocument();
+    expect(
+      screen.getByText('Se guarda como la versión 4. La versión 3 queda guardada para consultar.'),
     ).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Ver la versión 3 en otra pestaña' })).toHaveAttribute(
-      'href',
-      `${RUTA_ANA}/anamnesis?version=3`,
+
+    // Sin revisar no se vuelve a guardar.
+    fireEvent.click(screen.getByRole('button', { name: 'Guardar anamnesis' }));
+    expect(
+      await screen.findByText(/Diferencias con la otra versión: Revisá las diferencias/),
+    ).toBeInTheDocument();
+    expect(posts()).toHaveLength(1);
+
+    // Se toma la alergia de la versión 3 y se queda con el motivo propio.
+    fireEvent.click(
+      alergias.getByRole('button', {
+        name: 'Usar la respuesta de la versión 3 en «¿Tenés alergia a algún medicamento o material?»',
+      }),
+    );
+    expect(panel.getAllByRole('listitem')).toHaveLength(1);
+    expect(
+      within(pregunta(/alergia a algún medicamento/)).getByRole('checkbox', { name: 'Látex' }),
+    ).toBeChecked();
+    fireEvent.click(
+      panel.getByRole('checkbox', { name: 'Revisé las diferencias con la versión 3' }),
     );
     // Lo escrito, la firma y la declaración siguen ahí.
     expect(motivo).toHaveValue('Dolor al masticar');
     expect(
       screen.getByRole('checkbox', { name: 'Declaro que la información es verdadera' }),
     ).toBeChecked();
-    expect(
-      screen.getByText('Se guarda como la versión 4. La versión 3 queda guardada para consultar.'),
-    ).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Guardar anamnesis' }));
     expect(await screen.findByText('Guardamos la versión 4 de la anamnesis.')).toBeInTheDocument();
@@ -654,8 +776,166 @@ describe('Anamnesis: formulario', () => {
     const segundo = posts()[1]?.cuerpo as { versionBase: number; respuestas: unknown[] };
     expect(segundo.versionBase).toBe(3);
     expect(segundo.respuestas).toContainEqual({ codigo: 'motivo', texto: 'Dolor al masticar' });
-    // La versión 3 de la otra persona no se pidió completa (no hacía falta para guardar).
-    expect(de(f.pedidos, 'GET', `${RUTA_ANA}/anamnesis/3`)).toHaveLength(0);
+    expect(segundo.respuestas).toContainEqual({ codigo: 'alergias', opciones: ['latex'] });
+  });
+
+  it('409 por catálogo: lo vuelve a pedir, pasa lo que sigue valiendo y avisa lo que no', async () => {
+    // El cuestionario nuevo ya no tiene la prótesis ni la opción penicilina.
+    const nuevo = CATALOGO_PRUEBA.filter((p) => p.codigo !== 'protesis').map((p) =>
+      p.codigo === 'alergias'
+        ? { ...p, opciones: p.opciones.filter((o) => o.valor !== 'penicilina') }
+        : p,
+    );
+    let pedidosCatalogo = 0;
+    let intentos = 0;
+    const { estado, rutas } = escenario({
+      rutas: {
+        'GET /anamnesis/preguntas': () => {
+          pedidosCatalogo++;
+          return {
+            cuerpo: pedidosCatalogo === 1 ? catalogoDe() : catalogoDe(nuevo, 'huella-catalogo-2'),
+          };
+        },
+        'POST /pacientes/:id/anamnesis': () => {
+          intentos++;
+          if (intentos === 1) {
+            return {
+              estado: 409,
+              cuerpo: {
+                codigo: 'conflicto',
+                mensaje: 'El cuestionario cambió mientras lo completabas.',
+                detalles: [{ campo: 'huellaCatalogo', mensaje: 'El cuestionario cambió.' }],
+              },
+            };
+          }
+          const v3 = anamnesisDe({ version: 3 });
+          estado.versiones = [v3, V2, V1];
+          return { estado: 201, cuerpo: v3 };
+        },
+      },
+    });
+    const f = montar(rutas, `${RUTA_ANA}/anamnesis`, ODONTOLOGO);
+    await abrirFormulario('Actualizar anamnesis');
+    firmarYGuardar();
+    expect(
+      await screen.findByText(/^El cuestionario cambió mientras se completaba: lo actualizamos/),
+    ).toBeInTheDocument();
+    const aviso = within(
+      screen.getByText('Estas respuestas no se pudieron pasar al cuestionario actualizado:')
+        .parentElement as HTMLElement,
+    );
+    expect(aviso.getByText('«¿Usás prótesis removible?»: No')).toBeInTheDocument();
+    expect(
+      aviso.getByText('«¿Tenés alergia a algún medicamento o material?»: Penicilina'),
+    ).toBeInTheDocument();
+    expect(aviso.getByText('Dejaba la alerta «Alergia a la penicilina»')).toBeInTheDocument();
+    expect(screen.queryByText('¿Usás prótesis removible?')).toBeNull();
+    // Lo que sigue valiendo se pasó.
+    expect(screen.getByRole('textbox', { name: /motivo de tu consulta/ })).toHaveValue(
+      'Control y limpieza',
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Guardar anamnesis' }));
+    expect(await screen.findByText('Guardamos la versión 3 de la anamnesis.')).toBeInTheDocument();
+    const segundo = de(f.pedidos, 'POST', `${RUTA_ANA}/anamnesis`)[1]?.cuerpo as {
+      huellaCatalogo: string;
+      respuestas: { codigo: string }[];
+    };
+    expect(segundo.huellaCatalogo).toBe('huella-catalogo-2');
+    expect(segundo.respuestas.map((x) => x.codigo)).not.toContain('protesis');
+  });
+
+  it('«Actualizar» sobre una vigente con preguntas u opciones que ya no existen avisa qué no pasó', async () => {
+    const actual = CATALOGO_PRUEBA.filter((p) => p.codigo !== 'protesis').map((p) =>
+      p.codigo === 'alergias'
+        ? { ...p, opciones: p.opciones.filter((o) => o.valor !== 'penicilina') }
+        : p,
+    );
+    const { rutas } = escenario({
+      rutas: { 'GET /anamnesis/preguntas': { cuerpo: catalogoDe(actual) } },
+    });
+    montar(rutas, `${RUTA_ANA}/anamnesis`, ODONTOLOGO);
+    await abrirFormulario('Actualizar anamnesis');
+    const aviso = within(
+      screen.getByText(
+        'Estas respuestas de la versión 2 ya no están en el cuestionario y no se pasaron:',
+      ).parentElement as HTMLElement,
+    );
+    expect(aviso.getByText('«¿Usás prótesis removible?»: No')).toBeInTheDocument();
+    expect(
+      aviso.getByText('«¿Tenés alergia a algún medicamento o material?»: Penicilina'),
+    ).toBeInTheDocument();
+    expect(aviso.getByText('Dejaba la alerta «Alergia a la penicilina»')).toBeInTheDocument();
+  });
+
+  it('«Actualizar cuestionario» lo vuelve a pedir sin perder lo escrito', async () => {
+    const { rutas } = escenario({ versiones: [] });
+    const f = montar(rutas, `${RUTA_ANA}/anamnesis`, ODONTOLOGO);
+    await abrirFormulario('Completar anamnesis');
+    fireEvent.change(screen.getByRole('textbox', { name: /motivo de tu consulta/ }), {
+      target: { value: 'Control' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Actualizar cuestionario' }));
+    expect(
+      await screen.findByText(
+        'Actualizamos el cuestionario. Lo que ya estaba respondido sigue acá.',
+      ),
+    ).toBeInTheDocument();
+    expect(de(f.pedidos, 'GET', '/anamnesis/preguntas')).toHaveLength(2);
+    expect(screen.getByRole('textbox', { name: /motivo de tu consulta/ })).toHaveValue('Control');
+  });
+
+  it('«Ninguna» manda opciones vacías; sin marcar nada la obligatoria no deja guardar; sí/no se limpia', async () => {
+    const catalogo = CATALOGO_PRUEBA.map((p) =>
+      p.codigo === 'encias' ? { ...p, obligatoria: true } : p,
+    );
+    const v1 = anamnesisDe({ version: 1 });
+    const { estado, rutas } = escenario({
+      versiones: [],
+      rutas: {
+        'GET /anamnesis/preguntas': { cuerpo: catalogoDe(catalogo) },
+        'POST /pacientes/:id/anamnesis': () => {
+          estado.versiones = [v1];
+          return { estado: 201, cuerpo: v1 };
+        },
+      },
+    });
+    const f = montar(rutas, `${RUTA_ANA}/anamnesis`, ODONTOLOGO);
+    await abrirFormulario('Completar anamnesis');
+    fireEvent.change(screen.getByRole('textbox', { name: /motivo de tu consulta/ }), {
+      target: { value: 'Control' },
+    });
+    // Sí/No tocado por error: «Sin responder» lo limpia.
+    const protesis = within(pregunta('¿Usás prótesis removible?'));
+    fireEvent.click(protesis.getByRole('button', { name: 'Sí' }));
+    fireEvent.click(protesis.getByRole('button', { name: 'Sin responder' }));
+    expect(protesis.getByRole('button', { name: 'Sin responder' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    firmarYGuardar();
+    expect(
+      await screen.findByText(/sangrado o inflamación de encías\?: Elegí al menos una opción\./),
+    ).toBeInTheDocument();
+    expect(de(f.pedidos, 'POST', `${RUTA_ANA}/anamnesis`)).toHaveLength(0);
+
+    const encias = within(pregunta(/sangrado o inflamación de encías\? · obligatoria/));
+    fireEvent.click(encias.getByRole('checkbox', { name: 'Sangrado de encías' }));
+    fireEvent.click(encias.getByRole('checkbox', { name: 'Ninguna' }));
+    expect(encias.getByRole('checkbox', { name: 'Sangrado de encías' })).not.toBeChecked();
+    fireEvent.click(
+      within(pregunta(/alergia a algún medicamento/)).getByRole('checkbox', { name: 'Ninguna' }),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Guardar anamnesis' }));
+    expect(await screen.findByText('Guardamos la versión 1 de la anamnesis.')).toBeInTheDocument();
+    const respuestas = (
+      de(f.pedidos, 'POST', `${RUTA_ANA}/anamnesis`)[0]?.cuerpo as {
+        respuestas: { codigo: string }[];
+      }
+    ).respuestas;
+    expect(respuestas).toContainEqual({ codigo: 'encias', opciones: [] });
+    expect(respuestas).toContainEqual({ codigo: 'alergias', opciones: [] });
+    expect(respuestas.map((x) => x.codigo)).not.toContain('protesis');
   });
 
   it('errores por campo de la API se muestran en la pregunta', async () => {
@@ -667,7 +947,13 @@ describe('Anamnesis: formulario', () => {
           cuerpo: {
             codigo: 'datos_invalidos',
             mensaje: 'Revisá los datos marcados.',
-            detalles: [{ campo: 'respuestas.alergias', mensaje: 'Esa opción ya no existe.' }],
+            detalles: [
+              { campo: 'respuestas.alergias', mensaje: 'Esa opción ya no existe.' },
+              {
+                campo: 'firmante.esTutor',
+                mensaje: 'Es menor de edad: tiene que firmar un tutor o tutora.',
+              },
+            ],
           },
         },
       },
@@ -682,6 +968,12 @@ describe('Anamnesis: formulario', () => {
     expect(pregunta(/alergia a algún medicamento/)).toHaveAccessibleDescription(
       'Esa opción ya no existe.',
     );
+    // El error de quién firma va junto a «Quién firma», no solo en el resumen.
+    const quien = screen.getByRole('heading', { name: 'Quién firma', level: 3 })
+      .parentElement as HTMLElement;
+    expect(
+      within(quien).getByText('Es menor de edad: tiene que firmar un tutor o tutora.'),
+    ).toBeInTheDocument();
   });
 
   it('«Cancelar» con cambios pide confirmación', async () => {
