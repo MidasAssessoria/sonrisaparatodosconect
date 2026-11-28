@@ -27,6 +27,7 @@ import {
   olvidarDeSesion,
   TODAS,
 } from './preferencias.js';
+import { fijarModoPaciente } from './modoPaciente.js';
 
 /** Ruta a la que vuelve el enlace del correo de recuperación. */
 export const RUTA_NUEVA_CLAVE = '/acceso/nueva-clave';
@@ -235,6 +236,8 @@ export function ProveedorSesion({ auth, fetch: fetchImpl, baseApi, children }: P
       refUsuario.current = null;
       enlace.fijarClinica(null);
       olvidarDeSesion(claves.sedesElegidas);
+      // Sin sesión no hay nada que bloquear: para volver a entrar hace falta ingresar.
+      fijarModoPaciente(null);
       consultas.clear();
       setSedeActiva({ tipo: 'ninguna' });
       cambiarEstado({ fase: 'sin_sesion', motivo });

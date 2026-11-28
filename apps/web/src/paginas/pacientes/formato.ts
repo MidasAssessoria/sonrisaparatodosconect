@@ -53,3 +53,8 @@ export function formatoDia(dia: string): string {
 export function enlaceWhatsapp(telefono: string): string {
   return `https://wa.me/${telefono.replace(/\D/g, '')}`;
 }
+
+/** «Alergia a la penicilina (urticaria con amoxicilina)»: el detalle aparte, si llega. */
+export function textoAlertaMedica(a: { texto: string; detalle: string | null }): string {
+  return a.detalle ? `${a.texto} (${a.detalle})` : a.texto;
+}

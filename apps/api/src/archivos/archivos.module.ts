@@ -26,5 +26,7 @@ export function crearAlmacen(config: Config): AlmacenArchivos {
     ArchivosService,
     { provide: ALMACEN_ARCHIVOS, useFactory: crearAlmacen, inject: [CONFIG] },
   ],
+  // La anamnesis (Sprint 4) guarda la firma del paciente en el mismo almacén.
+  exports: [ALMACEN_ARCHIVOS],
 })
 export class ArchivosModule {}

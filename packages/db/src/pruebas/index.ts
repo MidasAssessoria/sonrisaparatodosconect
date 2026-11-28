@@ -16,7 +16,9 @@ export {
 } from './banco.js';
 export {
   crearAlertaDePrueba,
+  crearAnamnesisDePrueba,
   crearArchivoDePrueba,
+  crearFirmaDePrueba,
   crearClinicaDePrueba,
   crearInvitacionDePrueba,
   crearPacienteDePrueba,
@@ -28,5 +30,6 @@ export {
   crearUsuarioDePrueba,
   type ClinicaDePrueba,
   type InvitacionDePrueba,
+  type RespuestaDePrueba,
   type UsuarioDePrueba,
 } from './fabricas.js';

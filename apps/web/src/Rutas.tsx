@@ -1,5 +1,5 @@
 import { Boton, EstadoVacio } from '@conecta/ui';
-import { lazy, Suspense, useEffect } from 'react';
+import { lazy, Suspense, useEffect, type ReactNode } from 'react';
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router';
 import { Armazon, RUTA_SEGURIDAD } from './armazon/Armazon.js';
 import { RutaModulo } from './armazon/RutaModulo.js';
@@ -14,6 +14,8 @@ import { PantallaCarga, PantallaErrorSesion } from './paginas/acceso/PantallasEs
 import { Recuperar } from './paginas/acceso/Recuperar.js';
 import { SegundoFactor } from './paginas/acceso/SegundoFactor.js';
 import { Inicio } from './paginas/Inicio.js';
+import { PantallaModoPaciente } from './paginas/modoPaciente/ModoPaciente.js';
+import { useModoPaciente } from './sesion/modoPaciente.js';
 import {
   RUTA_INVITACION,
   RUTA_NUEVA_CLAVE,
@@ -56,6 +58,9 @@ const ListaPacientes = lazy(() =>
 );
 const FichaPaciente = lazy(() =>
   import('./paginas/pacientes/FichaPaciente.js').then((m) => ({ default: m.FichaPaciente })),
+);
+const Cuestionario = lazy(() =>
+  import('./paginas/cuestionario/Cuestionario.js').then((m) => ({ default: m.Cuestionario })),
 );
 const Tratamientos = lazy(() =>
   import('./paginas/catalogos/Tratamientos.js').then((m) => ({ default: m.Tratamientos })),
@@ -133,6 +138,16 @@ function IrAAcceso() {
   return <Navigate to="/acceso" replace state={estado} />;
 }
 
+/**
+ * Con la tablet en modo paciente, el armazón entero (menú, buscador, rutas) no existe: solo el
+ * formulario o el bloqueo. Se mira antes de mostrar nada, así recargar o ir Atrás no lo saltea.
+ */
+function ConModoPaciente({ children }: { children: ReactNode }) {
+  const modo = useModoPaciente();
+  if (modo) return <PantallaModoPaciente modo={modo} />;
+  return <>{children}</>;
+}
+
 export function Rutas() {
   const t = useTextos();
   const { estado } = useSesion();
@@ -185,110 +200,120 @@ export function Rutas() {
       );
     case 'lista':
       return (
-        <Armazon>
-          <Suspense fallback={<Esqueleto filas={4} etiqueta={t.comun.cargando} />}>
-            <Routes>
-              <Route path="/" element={<RutaRaiz />} />
-              <Route
-                path="/pacientes"
-                element={
-                  <RutaModulo modulo="pacientes">
-                    <ListaPacientes />
-                  </RutaModulo>
-                }
-              />
-              <Route
-                path="/pacientes/:id/:pestana?"
-                element={
-                  <RutaModulo modulo="pacientes">
-                    <FichaPaciente />
-                  </RutaModulo>
-                }
-              />
-              <Route
-                path="/sedes"
-                element={
-                  <RutaModulo modulo="sedes">
-                    <ListaSedes />
-                  </RutaModulo>
-                }
-              />
-              <Route
-                path="/sedes/:id"
-                element={
-                  <RutaModulo modulo="sedes">
-                    <DetalleSede />
-                  </RutaModulo>
-                }
-              />
-              <Route
-                path="/auditoria"
-                element={
-                  <RutaModulo modulo="auditoria">
-                    <Auditoria />
-                  </RutaModulo>
-                }
-              />
-              <Route
-                path="/personal"
-                element={
-                  <RutaModulo modulo="personal">
-                    <ListaPersonal />
-                  </RutaModulo>
-                }
-              />
-              <Route
-                path="/personal/:id"
-                element={
-                  <RutaModulo modulo="personal">
-                    <DetallePersona />
-                  </RutaModulo>
-                }
-              />
-              <Route
-                path="/roles"
-                element={
-                  <RutaModulo modulo="personal">
-                    <Roles />
-                  </RutaModulo>
-                }
-              />
-              <Route
-                path="/profesionales"
-                element={
-                  <RutaModulo modulo="personal">
-                    <ListaProfesionales />
-                  </RutaModulo>
-                }
-              />
-              <Route
-                path="/profesionales/:id"
-                element={
-                  <RutaModulo modulo="personal">
-                    <DetalleProfesional />
-                  </RutaModulo>
-                }
-              />
-              <Route
-                path="/tratamientos"
-                element={
-                  <RutaModulo modulo="configuracion">
-                    <Tratamientos />
-                  </RutaModulo>
-                }
-              />
-              {/* Prueba técnica del Sprint 2 (odontograma 3D): solo en desarrollo. */}
-              {import.meta.env.DEV && PruebaOdontograma ? (
-                <Route path="/experimentos/odontograma" element={<PruebaOdontograma />} />
-              ) : null}
-              {/* Invitación abierta con la app cargada: se acepta fuera del armazón. */}
-              <Route path={RUTA_INVITACION} element={<AbrirInvitacion />} />
-              <Route path={RUTA_SEGURIDAD} element={<Seguridad />} />
-              <Route path="/acceso/*" element={<VolverTrasIngresar />} />
-              <Route path="*" element={<NoEncontrada />} />
-            </Routes>
-          </Suspense>
-        </Armazon>
+        <ConModoPaciente>
+          <Armazon>
+            <Suspense fallback={<Esqueleto filas={4} etiqueta={t.comun.cargando} />}>
+              <Routes>
+                <Route path="/" element={<RutaRaiz />} />
+                <Route
+                  path="/pacientes"
+                  element={
+                    <RutaModulo modulo="pacientes">
+                      <ListaPacientes />
+                    </RutaModulo>
+                  }
+                />
+                <Route
+                  path="/pacientes/:id/:pestana?"
+                  element={
+                    <RutaModulo modulo="pacientes">
+                      <FichaPaciente />
+                    </RutaModulo>
+                  }
+                />
+                <Route
+                  path="/sedes"
+                  element={
+                    <RutaModulo modulo="sedes">
+                      <ListaSedes />
+                    </RutaModulo>
+                  }
+                />
+                <Route
+                  path="/sedes/:id"
+                  element={
+                    <RutaModulo modulo="sedes">
+                      <DetalleSede />
+                    </RutaModulo>
+                  }
+                />
+                <Route
+                  path="/auditoria"
+                  element={
+                    <RutaModulo modulo="auditoria">
+                      <Auditoria />
+                    </RutaModulo>
+                  }
+                />
+                <Route
+                  path="/personal"
+                  element={
+                    <RutaModulo modulo="personal">
+                      <ListaPersonal />
+                    </RutaModulo>
+                  }
+                />
+                <Route
+                  path="/personal/:id"
+                  element={
+                    <RutaModulo modulo="personal">
+                      <DetallePersona />
+                    </RutaModulo>
+                  }
+                />
+                <Route
+                  path="/roles"
+                  element={
+                    <RutaModulo modulo="personal">
+                      <Roles />
+                    </RutaModulo>
+                  }
+                />
+                <Route
+                  path="/profesionales"
+                  element={
+                    <RutaModulo modulo="personal">
+                      <ListaProfesionales />
+                    </RutaModulo>
+                  }
+                />
+                <Route
+                  path="/profesionales/:id"
+                  element={
+                    <RutaModulo modulo="personal">
+                      <DetalleProfesional />
+                    </RutaModulo>
+                  }
+                />
+                <Route
+                  path="/tratamientos"
+                  element={
+                    <RutaModulo modulo="configuracion">
+                      <Tratamientos />
+                    </RutaModulo>
+                  }
+                />
+                <Route
+                  path="/cuestionario"
+                  element={
+                    <RutaModulo modulo="configuracion" accion="editar">
+                      <Cuestionario />
+                    </RutaModulo>
+                  }
+                />
+                {/* Prueba técnica del Sprint 2 (odontograma 3D): solo en desarrollo. */}
+                {import.meta.env.DEV && PruebaOdontograma ? (
+                  <Route path="/experimentos/odontograma" element={<PruebaOdontograma />} />
+                ) : null}
+                {/* Invitación abierta con la app cargada: se acepta fuera del armazón. */}
+                <Route path={RUTA_INVITACION} element={<AbrirInvitacion />} />
+                <Route path={RUTA_SEGURIDAD} element={<Seguridad />} />
+                <Route path="/acceso/*" element={<VolverTrasIngresar />} />
+                <Route path="*" element={<NoEncontrada />} />
+              </Routes>
+            </Suspense>
+          </Armazon>
+        </ConModoPaciente>
       );
   }
 }

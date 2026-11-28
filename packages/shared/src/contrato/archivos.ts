@@ -20,6 +20,12 @@ export const CATEGORIAS_ARCHIVO = {
     tipos: ['image/png', 'image/jpeg', 'image/webp'],
     maxBytes: 2 * 1024 * 1024,
   },
+  /** Trazo de la firma de un paciente o su tutor (anamnesis, consentimientos). La guarda la API. */
+  firma_paciente: {
+    modulo: 'ficha_clinica',
+    tipos: ['image/png'],
+    maxBytes: 300 * 1024,
+  },
   /** Logo de la clínica para documentos impresos. */
   logo_clinica: {
     modulo: 'configuracion',
@@ -43,8 +49,14 @@ export const NOMBRES_CATEGORIA_ARCHIVO = Object.keys(CATEGORIAS_ARCHIVO) as [
  * apenas lo lee, antes de aceptar un solo byte del archivo. SVG no se acepta en ninguna categoría
  * (revisión de seguridad del Sprint 2).
  */
+/** Categorías que guarda la propia API (no se suben por `POST /archivos`). */
+export const CATEGORIAS_ARCHIVO_INTERNAS = ['firma_paciente'] as const;
+export const CATEGORIAS_ARCHIVO_SUBIBLES = NOMBRES_CATEGORIA_ARCHIVO.filter(
+  (c) => !(CATEGORIAS_ARCHIVO_INTERNAS as readonly string[]).includes(c),
+) as [CategoriaArchivo, ...CategoriaArchivo[]];
+
 export const subirArchivoCamposSchema = z.object({
-  categoria: z.enum(NOMBRES_CATEGORIA_ARCHIVO),
+  categoria: z.enum(CATEGORIAS_ARCHIVO_SUBIBLES),
 });
 
 export const archivoSchema = z.object({

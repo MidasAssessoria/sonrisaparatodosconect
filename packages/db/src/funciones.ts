@@ -9,6 +9,9 @@ import { createHash } from 'node:crypto';
 import type {
   Accion,
   AlertaManual,
+  AlertaMedica,
+  Anamnesis,
+  CrearAnamnesis,
   CrearPaciente,
   EditarPaciente,
   EditarRelacion,
@@ -18,8 +21,11 @@ import type {
   Paciente,
   PacienteResumen,
   Persona,
+  Pregunta,
   Relacion,
+  TIPOS_EVENTO_HISTORIAL,
   TipoAlerta,
+  TipoPregunta,
   TipoRelacion,
 } from '@conecta/shared';
 import { sql } from 'drizzle-orm';
@@ -28,6 +34,7 @@ import {
   paciente,
   RESULTADOS_TOCAR_SESION,
   type AccionEvento,
+  type GravedadAlerta,
   type IdiomaPaciente,
   type OrigenPaciente,
   type ResultadoTocarSesion,
@@ -736,7 +743,8 @@ export async function editarPaciente(
 /**
  * La ficha completa con la forma de `Paciente` del contrato, o null si no es de la clínica.
  * `notaInterna` es null si el usuario del contexto no tiene `ficha_clinica:ver` (la base no la
- * deja ver) o si no hay nota. `alertas`: las activas. `relaciones`: los vínculos activos vistos
+ * deja ver) o si no hay nota. `alertas`: las activas. `alertasMedicas`: las derivadas de la
+ * anamnesis vigente (las ve cualquiera de la clínica, ver `alertasMedicas`). `relaciones`: los vínculos activos vistos
  * desde este paciente. NO registra la lectura: la API llama a
  * `registrarEvento(tx, { accion: 'ver', entidad: 'paciente', entidadId })`.
  */
@@ -771,6 +779,7 @@ export async function obtenerPaciente(
   const fila = rows[0];
   if (!fila) return null;
   const alertas = await listarAlertas(tx, pacienteId);
+  const medicas = await alertasMedicas(tx, pacienteId);
   const relaciones = await listarRelaciones(tx, pacienteId, opciones);
   return {
     ...resumen(fila),
@@ -783,6 +792,7 @@ export async function obtenerPaciente(
     origen: fila.origen,
     notaInterna: fila.nota_interna,
     alertas,
+    alertasMedicas: medicas,
     relaciones,
     motivoBaja: fila.motivo_baja,
     creadoEn: fecha(fila.created_at).toISOString(),
@@ -842,6 +852,7 @@ type FilaRelacion = {
   familiar_id: string;
   nombre: string;
   edad: number | null;
+  ci: string | null;
   tipo: TipoRelacion;
   es_tutor_legal: boolean;
   es_responsable_pago: boolean;
@@ -852,7 +863,7 @@ type FilaRelacion = {
 function relacionDe(f: FilaRelacion): Relacion {
   return {
     id: f.id,
-    familiar: { id: f.familiar_id, nombre: f.nombre, edad: f.edad },
+    familiar: { id: f.familiar_id, nombre: f.nombre, edad: f.edad, ci: f.ci },
     tipo: f.tipo,
     esTutorLegal: f.es_tutor_legal,
     esResponsablePago: f.es_responsable_pago,
@@ -864,7 +875,7 @@ function relacionDe(f: FilaRelacion): Relacion {
 function consultaRelaciones(filtro: ReturnType<typeof sql>, ahora: Date | undefined) {
   return sql`
     select r.id, f.id as familiar_id,
-           f.nombres || coalesce(' ' || f.apellidos, '') as nombre, f.edad,
+           f.nombres || coalesce(' ' || f.apellidos, '') as nombre, f.edad, f.ci,
            r.tipo, r.es_tutor_legal, r.es_responsable_pago,
            coalesce(e.es_tutor_legal, false) as familiar_es_tutor_legal,
            coalesce(e.es_responsable_pago, false) as familiar_es_responsable_pago
@@ -1091,4 +1102,440 @@ export async function tienePermisoEnBase(
     sql`select app.tiene_permiso(${modulo}, ${accion}) as tiene`,
   );
   return primera(rows, 'app.tiene_permiso').tiene;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Anamnesis (Sprint 4, migraciones 0028–0030)
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * Lo que la API necesita de un error de la base para responder sin leer el mensaje: el nombre de
+ * regla o restricción (`constraint`) y el campo del contrato (`column`), p. ej.
+ * `respuestas.alergias`, `firmante.ci`, `versionBase`, `preguntas.embarazo`. `codigoPregunta` es
+ * el código de la pregunta cuando el campo es `respuestas.<codigo>` o `preguntas.<codigo>`. Recorre
+ * la cadena de `cause` (Drizzle envuelve el error de `pg`). null si no es un error de Postgres.
+ */
+export interface CampoDeError {
+  codigoPg: string;
+  restriccion: string | null;
+  campo: string | null;
+  codigoPregunta: string | null;
+}
+
+export function campoDeError(error: unknown): CampoDeError | null {
+  let actual: unknown = error;
+  for (let i = 0; i < 5 && actual; i++) {
+    if (typeof actual === 'object' && actual !== null) {
+      const e = actual as {
+        code?: unknown;
+        constraint?: unknown;
+        column?: unknown;
+        severity?: unknown;
+      };
+      if (typeof e.code === 'string' && /^[0-9A-Z]{5}$/.test(e.code) && 'severity' in e) {
+        const campo = typeof e.column === 'string' && e.column !== '' ? e.column : null;
+        const pregunta = campo ? /^(?:respuestas|preguntas)\.([a-z0-9_]{2,40})$/.exec(campo) : null;
+        return {
+          codigoPg: e.code,
+          restriccion: typeof e.constraint === 'string' ? e.constraint : null,
+          campo,
+          codigoPregunta: pregunta?.[1] ?? null,
+        };
+      }
+      actual = (actual as { cause?: unknown }).cause;
+    } else {
+      return null;
+    }
+  }
+  return null;
+}
+
+type FilaPregunta = {
+  codigo: string;
+  seccion: number;
+  orden: number;
+  texto: string;
+  tipo: TipoPregunta;
+  opciones: Pregunta['opciones'];
+  alerta_si: Pregunta['alertaSiSi'];
+  con_detalle: boolean;
+  unidad: string | null;
+  minimo: string | null;
+  maximo: string | null;
+  solo_sexo: 'F' | null;
+  obligatoria: boolean;
+  activa: boolean;
+};
+
+const numeroONulo = (v: string | number | null): number | null => (v === null ? null : Number(v));
+
+function preguntaDe(f: FilaPregunta): Pregunta {
+  return {
+    codigo: f.codigo,
+    seccion: f.seccion,
+    orden: f.orden,
+    texto: f.texto,
+    tipo: f.tipo,
+    opciones: f.opciones,
+    alertaSiSi: f.alerta_si,
+    conDetalle: f.con_detalle,
+    unidad: f.unidad,
+    minimo: numeroONulo(f.minimo),
+    maximo: numeroONulo(f.maximo),
+    soloSexo: f.solo_sexo,
+    obligatoria: f.obligatoria,
+    activa: f.activa,
+  };
+}
+
+/**
+ * El cuestionario de la clínica del contexto con la forma de `preguntaSchema`, por sección, orden
+ * y código. Por defecto solo las activas (`GET /anamnesis/preguntas`); con `incluirInactivas`,
+ * todas, las activas primero (lo que responde el `PUT` y `GET /anamnesis/preguntas/catalogo`). La
+ * tabla la lee cualquiera de la clínica sin permisos especiales en la base (no es dato del
+ * paciente): alcanza con `configuracion:editar`, sin `ficha_clinica:ver`. El permiso de cada ruta
+ * lo pone la API.
+ */
+export async function catalogoPreguntas(
+  tx: TransaccionConecta,
+  opciones: { incluirInactivas?: boolean | undefined } = {},
+): Promise<CatalogoPreguntas> {
+  // Una sola sentencia: las preguntas y la huella salen de la misma instantánea.
+  const { rows } = await tx.execute<{ huella: string } & Partial<FilaPregunta>>(sql`
+    select h.huella, q.*
+    from (select app.huella_catalogo() as huella) h
+    left join lateral (
+      select q.codigo, q.seccion, q.orden, q.texto, q.tipo, q.opciones, q.alerta_si, q.con_detalle,
+             q.unidad, q.minimo::text as minimo, q.maximo::text as maximo, q.solo_sexo,
+             q.obligatoria, q.activa
+      from app.anamnesis_pregunta q
+      where q.clinica_id = app.clinica_actual()
+        and (${opciones.incluirInactivas ?? false}::boolean or q.activa)) q on true
+    order by q.activa desc, q.seccion, q.orden, q.codigo`);
+  const huella = primera(rows, 'app.huella_catalogo').huella;
+  return {
+    preguntas: rows.filter((f) => f.codigo != null).map((f) => preguntaDe(f as FilaPregunta)),
+    huella,
+  };
+}
+
+/** El cuestionario y su huella (`catalogoPreguntasSchema`). */
+export interface CatalogoPreguntas {
+  preguntas: Pregunta[];
+  /**
+   * Huella del cuestionario ACTIVO (`app.huella_catalogo()`): el formulario la manda al guardar
+   * (`huellaCatalogo`). No depende de `incluirInactivas`.
+   */
+  huella: string;
+}
+
+/**
+ * `app.reemplazar_preguntas_anamnesis(preguntas)`: `PUT /anamnesis/preguntas`
+ * (`configuracion:editar`). Crea o actualiza cada pregunta por `codigo` (estable) y deja inactivas
+ * las que no vienen; una inactiva se reactiva mandándola de nuevo. Completa los valores por defecto
+ * del contrato. Devuelve el catálogo completo, incluidas las inactivas (las activas primero), y la
+ * huella nueva. Hasta 500 preguntas en el pedido y en total (activas + inactivas).
+ * Errores (con `column` = `preguntas.<codigo>`, ver `campoDeError`): `configuracion_sin_permiso`
+ * (42501), `anamnesis_catalogo_invalido`, `anamnesis_catalogo_lleno`, `anamnesis_pregunta_invalida`,
+ * `anamnesis_pregunta_repetida` (22023), y los CHECK de la tabla con su nombre (23514, p. ej.
+ * `anamnesis_pregunta_tipo_campos`, `anamnesis_pregunta_opciones_check`).
+ */
+export async function reemplazarPreguntas(
+  tx: TransaccionConecta,
+  preguntas: readonly Pregunta[],
+): Promise<CatalogoPreguntas> {
+  await tx.execute(
+    sql`select app.reemplazar_preguntas_anamnesis(${JSON.stringify(preguntas)}::jsonb)`,
+  );
+  return catalogoPreguntas(tx, { incluirInactivas: true });
+}
+
+/**
+ * Datos de una versión nueva: los de `CrearAnamnesis` del contrato sin el PNG (la API lo guarda
+ * antes como archivo `firma_paciente` de ESTE paciente, con `archivo.paciente_id`) y con el id de
+ * ese archivo.
+ */
+export type DatosAnamnesis = Omit<
+  CrearAnamnesis,
+  'firmaPng' | 'declaracionVeracidad' | 'signosVitales'
+> & {
+  firmaArchivoId: string;
+  declaracionVeracidad: boolean;
+  signosVitales?: CrearAnamnesis['signosVitales'] | undefined;
+};
+
+/**
+ * `app.guardar_anamnesis(...)`: guarda la versión siguiente (`ficha_clinica:crear` y
+ * `ficha_clinica:ver`) con los textos de las preguntas copiados y la alerta médica calculada con
+ * las reglas del catálogo de este momento; esas alertas pasan a ser las vigentes. Devuelve el id y
+ * el número de versión. La API registra después la lectura si devuelve la versión completa.
+ * Errores (nombre en `constraint`, campo en `column`; ver `RESTRICCIONES_ANAMNESIS` y
+ * `campoDeError`): `anamnesis_conflicto_version` (40001, `column = versionBase`: otra versión
+ * guardada en el medio), `anamnesis_conflicto_catalogo` (40001, `column = huellaCatalogo`: el
+ * cuestionario cambió; se compara con el bloqueo del cuestionario tomado, con READ COMMITTED),
+ * `ficha_clinica_sin_permiso` (42501), `paciente_no_encontrado` (P0002),
+ * `anamnesis_paciente_inactivo`, `anamnesis_pregunta_desconocida`, `anamnesis_respuesta_repetida`,
+ * `anamnesis_respuesta_invalida`, `anamnesis_opcion_desconocida`, `anamnesis_numero_fuera_de_rango`,
+ * `anamnesis_obligatoria_sin_responder`, `anamnesis_pregunta_no_aplica` (todas con
+ * `column = respuestas.<codigo>`), `anamnesis_firmante_nombre`, `anamnesis_firmante_ci`,
+ * `anamnesis_tutor_requerido`, `anamnesis_tutor_sin_ci`, `anamnesis_sin_firma`,
+ * `anamnesis_firma_invalida`, `anamnesis_sin_declaracion`, `anamnesis_signos_vitales` (22023).
+ */
+export async function guardarAnamnesis(
+  tx: TransaccionConecta,
+  pacienteId: string,
+  datos: DatosAnamnesis,
+): Promise<{ id: string; version: number }> {
+  const signos = datos.signosVitales ?? {};
+  const { rows } = await tx.execute<{ id: string; version: number }>(sql`
+    select id, version from app.guardar_anamnesis(
+      ${pacienteId}::uuid, ${datos.versionBase}::integer, ${datos.huellaCatalogo}::text,
+      ${JSON.stringify(datos.respuestas)}::jsonb,
+      ${datos.firmante.nombre}::text, ${datos.firmante.ci ?? null}::text,
+      ${datos.firmante.esTutor}::boolean, ${datos.firmaArchivoId}::uuid,
+      ${datos.declaracionVeracidad}::boolean, ${signos.presionSistolica ?? null}::integer,
+      ${signos.presionDiastolica ?? null}::integer, ${signos.pulso ?? null}::integer,
+      ${signos.pesoKg ?? null}::numeric)`);
+  return primera(rows, 'app.guardar_anamnesis');
+}
+
+/** Resumen de una versión (`anamnesisResumenSchema`). */
+export type AnamnesisResumen = Pick<
+  Anamnesis,
+  'version' | 'fecha' | 'registradaPor' | 'alertas'
+> & {
+  firmante: { nombre: string; esTutor: boolean };
+};
+
+/** Una versión completa (`anamnesisSchema`) sin la URL de la firma: la arma la API con el archivo. */
+export type AnamnesisGuardada = Omit<Anamnesis, 'firmaUrl'> & { firmaArchivoId: string };
+
+type FilaAnamnesis = {
+  id: string;
+  paciente_id: string;
+  version: number;
+  created_at: Date | string;
+  registrada_por: string | null;
+  firmante_nombre: string;
+  firmante_ci: string | null;
+  es_tutor: boolean;
+  firma_archivo_id: string;
+  presion_sistolica: number | null;
+  presion_diastolica: number | null;
+  pulso: number | null;
+  peso_kg: string | null;
+  alertas: number;
+  es_vigente: boolean;
+};
+
+const consultaAnamnesis = (filtro: ReturnType<typeof sql>) => sql`
+  select a.id, a.paciente_id, a.version, a.created_at, u.nombre as registrada_por,
+         a.firmante_nombre, a.firmante_ci, a.es_tutor, a.firma_archivo_id, a.presion_sistolica,
+         a.presion_diastolica, a.pulso, a.peso_kg::text as peso_kg,
+         (select count(*)::int from app.anamnesis_alerta d
+          where d.clinica_id = a.clinica_id and d.anamnesis_id = a.id) as alertas,
+         a.version = (select max(o.version) from app.anamnesis o
+                      where o.clinica_id = a.clinica_id and o.paciente_id = a.paciente_id) as es_vigente
+  from app.anamnesis a left join app.usuario u on u.id = a.registrada_por
+  where a.clinica_id = app.clinica_actual() and ${filtro}`;
+
+/**
+ * Versiones de la anamnesis del paciente, de la más nueva a la más vieja (`ficha_clinica:ver`: sin
+ * ese permiso la base no muestra ninguna), y `requiereTutor`: el paciente es menor de
+ * `clinica.edad_tutor` a la fecha de hoy en la zona de la clínica (false sin fecha de nacimiento o
+ * si el paciente no es de la clínica). `ahora` solo cambia esa fecha (para probar bordes).
+ */
+export async function listarAnamnesis(
+  tx: TransaccionConecta,
+  pacienteId: string,
+  opciones: { ahora?: Date | undefined } = {},
+): Promise<{ versiones: AnamnesisResumen[]; requiereTutor: boolean }> {
+  const { rows } = await tx.execute<FilaAnamnesis>(
+    sql`${consultaAnamnesis(sql`a.paciente_id = ${pacienteId}::uuid`)} order by a.version desc`,
+  );
+  const tutor = await tx.execute<{ requiere: boolean }>(sql`
+    select app.requiere_tutor(p.fecha_nac, ${ahoraSql(opciones.ahora)}) as requiere
+    from app.paciente p where p.clinica_id = app.clinica_actual() and p.id = ${pacienteId}::uuid`);
+  return {
+    versiones: rows.map((f) => ({
+      version: f.version,
+      fecha: fecha(f.created_at).toISOString(),
+      registradaPor: f.registrada_por,
+      firmante: { nombre: f.firmante_nombre, esTutor: f.es_tutor },
+      alertas: f.alertas,
+    })),
+    requiereTutor: tutor.rows[0]?.requiere ?? false,
+  };
+}
+
+type FilaRespuesta = {
+  pregunta_codigo: string;
+  seccion: number;
+  pregunta_texto: string;
+  tipo: TipoPregunta;
+  unidad: string | null;
+  respuesta_si: boolean | null;
+  opciones: string[] | null;
+  etiquetas: string[] | null;
+  texto: string | null;
+  numero: string | null;
+  detalle: string | null;
+};
+
+type FilaAlertaMedica = {
+  codigo: string;
+  tipo: TipoAlerta;
+  texto: string;
+  detalle: string | null;
+  gravedad: GravedadAlerta;
+  grupo_alergia: string | null;
+};
+
+function alertaMedicaDe(f: FilaAlertaMedica): AlertaMedica {
+  return {
+    tipo: f.tipo,
+    texto: f.texto,
+    detalle: f.detalle,
+    gravedad: f.gravedad,
+    grupoAlergia: f.grupo_alergia,
+    codigo: f.codigo,
+  };
+}
+
+/**
+ * Una versión completa (`version` = número, o `'vigente'` para la última), o null si no existe, si
+ * el paciente no es de la clínica o si falta `ficha_clinica:ver` (la base no la muestra). Respuestas
+ * por sección y orden de la pregunta al guardar, con las copias del texto y de las etiquetas;
+ * `alertasMedicas`: las que dejó ESA versión. NO registra la lectura: la API llama a
+ * `registrarEvento(tx, { accion: 'ver', entidad: 'anamnesis', entidadId: id })` y arma `firmaUrl`
+ * con `firmaArchivoId`.
+ */
+export async function obtenerAnamnesis(
+  tx: TransaccionConecta,
+  pacienteId: string,
+  version: number | 'vigente',
+): Promise<AnamnesisGuardada | null> {
+  const filtroVersion =
+    version === 'vigente'
+      ? sql`a.version = (select max(o.version) from app.anamnesis o
+                         where o.clinica_id = a.clinica_id and o.paciente_id = a.paciente_id)`
+      : sql`a.version = ${version}::integer`;
+  const { rows } = await tx.execute<FilaAnamnesis>(
+    consultaAnamnesis(sql`a.paciente_id = ${pacienteId}::uuid and ${filtroVersion}`),
+  );
+  const f = rows[0];
+  if (!f) return null;
+  const respuestas = await tx.execute<FilaRespuesta>(sql`
+    select r.pregunta_codigo, r.seccion, r.pregunta_texto, r.tipo, r.unidad, r.respuesta_si, r.opciones,
+           r.etiquetas, r.texto, r.numero::text as numero, r.detalle
+    from app.anamnesis_respuesta r
+    where r.clinica_id = app.clinica_actual() and r.anamnesis_id = ${f.id}::uuid
+    order by r.seccion, r.orden, r.pregunta_codigo`);
+  const alertas = await tx.execute<FilaAlertaMedica>(sql`
+    select codigo, tipo, texto, detalle, gravedad, grupo_alergia
+    from app.alertas_medicas(${pacienteId}::uuid, ${f.id}::uuid)`);
+  return {
+    id: f.id,
+    pacienteId: f.paciente_id,
+    version: f.version,
+    fecha: fecha(f.created_at).toISOString(),
+    registradaPor: f.registrada_por,
+    firmante: { nombre: f.firmante_nombre, ci: f.firmante_ci, esTutor: f.es_tutor },
+    alertas: f.alertas,
+    respuestas: respuestas.rows.map((r) => {
+      const guardada: AnamnesisGuardada['respuestas'][number] = {
+        codigo: r.pregunta_codigo,
+        pregunta: r.pregunta_texto,
+        seccion: r.seccion,
+        tipo: r.tipo,
+        etiquetas: r.etiquetas ?? [],
+        unidad: r.unidad,
+      };
+      if (r.respuesta_si !== null) guardada.si = r.respuesta_si;
+      if (r.opciones !== null) guardada.opciones = r.opciones;
+      if (r.texto !== null) guardada.texto = r.texto;
+      if (r.numero !== null) guardada.numero = Number(r.numero);
+      if (r.detalle !== null) guardada.detalle = r.detalle;
+      return guardada;
+    }),
+    signosVitales: {
+      presionSistolica: f.presion_sistolica,
+      presionDiastolica: f.presion_diastolica,
+      pulso: f.pulso,
+      pesoKg: numeroONulo(f.peso_kg),
+    },
+    alertasMedicas: alertas.rows.map(alertaMedicaDe),
+    firmaArchivoId: f.firma_archivo_id,
+    esVigente: f.es_vigente,
+  };
+}
+
+/**
+ * `app.alertas_medicas(paciente)`: la alerta médica del paciente, derivada de su anamnesis vigente
+ * (vacía si no tiene): texto de la regla, tipo, gravedad, grupo de alergia y código de la
+ * pregunta. La ve cualquiera de la clínica (la API exige `pacientes:ver`). `detalle` (el texto
+ * libre de la respuesta, el mismo en todas las alertas de una pregunta) solo con
+ * `ficha_clinica:ver`; para los demás la base devuelve null (sale de la respuesta, que sin ese
+ * permiso no existe).
+ */
+export async function alertasMedicas(
+  tx: TransaccionConecta,
+  pacienteId: string,
+): Promise<AlertaMedica[]> {
+  const { rows } = await tx.execute<FilaAlertaMedica>(
+    sql`select codigo, tipo, texto, detalle, gravedad, grupo_alergia
+        from app.alertas_medicas(${pacienteId}::uuid)`,
+  );
+  return rows.map(alertaMedicaDe);
+}
+
+/** Tipo de evento del historial (`TIPOS_EVENTO_HISTORIAL` del contrato). */
+export type TipoEventoHistorial = (typeof TIPOS_EVENTO_HISTORIAL)[number];
+
+/** Evento del historial (`eventoHistorialSchema`). */
+export interface EventoHistorial {
+  tipo: TipoEventoHistorial;
+  fecha: string;
+  descripcion: string;
+  autor: string | null;
+  referencia: string | null;
+}
+
+/**
+ * `app.historial_paciente(paciente, cursor, limite)`: línea de tiempo del paciente, del más nuevo
+ * al más viejo (alta, datos editados, baja, reactivación, vínculos agregados y quitados y, solo con
+ * `ficha_clinica:ver`, alertas manuales creadas y desactivadas y versiones de la anamnesis).
+ * `siguienteCursor` es opaco (null si no hay más) y estable aunque lleguen eventos nuevos. Vacío
+ * si el paciente no es de la clínica. `limite` 1..999 (por defecto 30; el contrato admite hasta
+ * 100). Errores: `cursor_invalido`, `historial_limite` (22023).
+ */
+export async function historialPaciente(
+  tx: TransaccionConecta,
+  pacienteId: string,
+  consulta: { cursor?: string | null | undefined; limite?: number | undefined } = {},
+): Promise<{ eventos: EventoHistorial[]; siguienteCursor: string | null }> {
+  const limite = consulta.limite ?? 30;
+  const { rows } = await tx.execute<{
+    tipo: TipoEventoHistorial;
+    fecha: Date | string;
+    descripcion: string;
+    autor: string | null;
+    referencia: string | null;
+    cursor: string;
+  }>(sql`
+    select tipo, fecha, descripcion, autor, referencia, cursor
+    from app.historial_paciente(${pacienteId}::uuid, ${consulta.cursor ?? null}::text,
+                                ${limite + 1}::integer)`);
+  const pagina = rows.slice(0, limite);
+  const ultima = pagina[pagina.length - 1];
+  return {
+    eventos: pagina.map((f) => ({
+      tipo: f.tipo,
+      fecha: fecha(f.fecha).toISOString(),
+      descripcion: f.descripcion,
+      autor: f.autor,
+      referencia: f.referencia,
+    })),
+    siguienteCursor: rows.length > limite && ultima ? ultima.cursor : null,
+  };
 }

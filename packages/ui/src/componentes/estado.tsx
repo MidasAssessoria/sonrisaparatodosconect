@@ -34,12 +34,20 @@ export function Chip({ tono = 'neutro', icono, children, className }: ChipProps)
 
 /* ---------- AlertaClinica ---------- */
 export interface AlertaClinicaProps {
-  alertas: { tipo: 'alergia' | 'condicion'; texto: string }[];
+  /** `origen`: de dónde sale la alerta cuando no es manual, p. ej. «De la anamnesis». */
+  alertas: { tipo: 'alergia' | 'condicion'; texto: string; origen?: string | undefined }[];
   compacta?: boolean | undefined;
+  /** Nombre de la región y título visible (sin `compacta`). Por defecto «Alertas clínicas». */
+  etiqueta?: string | undefined;
   className?: string | undefined;
 }
 
-export function AlertaClinica({ alertas, compacta, className }: AlertaClinicaProps): ReactElement {
+export function AlertaClinica({
+  alertas,
+  compacta,
+  etiqueta = 'Alertas clínicas',
+  className,
+}: AlertaClinicaProps): ReactElement {
   const lista = alertas ?? [];
   if (!lista.length) {
     return (
@@ -52,16 +60,19 @@ export function AlertaClinica({ alertas, compacta, className }: AlertaClinicaPro
   return (
     <section
       className={cx('cn-alertas', compacta && 'cn-alertas--compacta', className)}
-      aria-label="Alertas clínicas"
+      aria-label={etiqueta}
     >
-      {compacta ? null : <span className="cn-alertas__titulo">Alertas clínicas</span>}
+      {compacta ? null : <span className="cn-alertas__titulo">{etiqueta}</span>}
       <ul className="cn-alertas__lista">
         {lista.map((a, i) => {
           const tipo = a.tipo === 'alergia' ? 'alergia' : 'condicion';
           return (
             <li key={i} className={`cn-alerta cn-alerta--${tipo}`}>
               <Icono nombre={tipo === 'alergia' ? 'alerta' : 'info'} tamano={18} />
-              <span>{a.texto}</span>
+              <span>
+                {a.texto}
+                {a.origen ? <span className="cn-alerta__origen"> · {a.origen}</span> : null}
+              </span>
             </li>
           );
         })}

@@ -56,6 +56,11 @@ export {
   type PieMaquetaProps,
 } from './componentes/estado.js';
 export { Campo, type CampoProps } from './componentes/Campo.js';
+export {
+  FirmaManuscrita,
+  type FirmaManuscritaProps,
+  type TextosFirma,
+} from './componentes/FirmaManuscrita.js';
 export { HojaInferior, type HojaInferiorProps } from './componentes/HojaInferior.js';
 export { TablaLista, type Columna, type TablaListaProps } from './componentes/TablaLista.js';
 export {

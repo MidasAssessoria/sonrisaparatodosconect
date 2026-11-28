@@ -109,7 +109,13 @@ describe('rol app_worker', () => {
        join pg_namespace n on n.oid = p.pronamespace
        where n.nspname = 'app' and has_function_privilege('app_worker', p.oid, 'EXECUTE')`,
     );
-    expect(funciones.map((f) => f.funcion)).toEqual(['app.clinica_actual()']);
+    // 0029: la política RESTRICTIVA de archivo (firma del paciente) llama a estas dos; el worker
+    // pasa antes en el OR (CURRENT_USER = 'app_worker'), pero Postgres pide EXECUTE al preparar.
+    expect(funciones.map((f) => f.funcion).sort()).toEqual([
+      'app.clinica_actual()',
+      'app.sesion_del_dueno()',
+      'app.tiene_permiso(text,text)',
+    ]);
   });
 
   it('lee archivo con RLS: sin contexto nada, con contexto solo su clínica', async () => {

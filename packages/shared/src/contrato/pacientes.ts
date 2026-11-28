@@ -105,9 +105,34 @@ export const alertaManualSchema = z.object({
 });
 export type AlertaManual = z.infer<typeof alertaManualSchema>;
 
+/** Alerta médica derivada de la anamnesis vigente (Sprint 4, contrato/anamnesis.ts). */
+export const alertaMedicaSchema = z.object({
+  tipo: z.enum(TIPOS_ALERTA),
+  /** Texto de la regla, sin el detalle libre del paciente: «Alergia a la penicilina». */
+  texto: z.string(),
+  /**
+   * Detalle libre que escribió el paciente en esa pregunta («urticaria con amoxicilina»). Solo
+   * con `ficha_clinica:ver`; para los demás llega `null` (revisión de seguridad del Sprint 4: el
+   * texto libre puede traer cualquier dato de salud). Si la pregunta generó varias alertas, todas
+   * llevan el mismo detalle: es de la pregunta, no de una opción.
+   */
+  detalle: z.string().nullable(),
+  gravedad: z.enum(['alta', 'media']),
+  grupoAlergia: z.string().nullable(),
+  /** Pregunta que la generó. */
+  codigo: z.string(),
+});
+export type AlertaMedica = z.infer<typeof alertaMedicaSchema>;
+
 export const relacionSchema = z.object({
   id: idSchema,
-  familiar: z.object({ id: idSchema, nombre: z.string(), edad: z.number().int().nullable() }),
+  /** `ci` del familiar: la usa la anamnesis para completar al tutor que firma. */
+  familiar: z.object({
+    id: idSchema,
+    nombre: z.string(),
+    edad: z.number().int().nullable(),
+    ci: z.string().nullable(),
+  }),
   tipo: z.enum(TIPOS_RELACION),
   /** Quien está en esta ficha es tutor legal del familiar. */
   esTutorLegal: z.boolean(),
@@ -149,6 +174,8 @@ export const pacienteSchema = pacienteResumenSchema.extend({
   /** Solo si quien pide tiene `ficha_clinica:ver`; si no, null. */
   notaInterna: z.string().nullable(),
   alertas: z.array(alertaManualSchema),
+  /** Derivadas de la anamnesis vigente; vacías si no hay anamnesis. */
+  alertasMedicas: z.array(alertaMedicaSchema),
   relaciones: z.array(relacionSchema),
   motivoBaja: z.string().nullable(),
   creadoEn: fechaHoraSchema,

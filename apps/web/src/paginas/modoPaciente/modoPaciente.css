@@ -1,0 +1,75 @@
+/* Modo paciente: pantalla completa, sin armazón. Mobile-first; pensado para tablet. */
+.w-modo-paciente {
+  min-height: 100vh;
+  min-height: 100dvh;
+  max-width: 880px;
+  margin: 0 auto;
+  padding: var(--espacio-6) var(--espacio-4) var(--espacio-12);
+  background: var(--crema);
+}
+@media (min-width: 768px) {
+  .w-modo-paciente {
+    padding: var(--espacio-8) var(--espacio-6) var(--espacio-12);
+  }
+}
+.w-modo-paciente__cabecera {
+  display: flex;
+  flex-direction: column;
+  gap: var(--espacio-1);
+  margin-bottom: var(--espacio-6);
+}
+.w-modo-paciente__cabecera p {
+  margin: 0;
+}
+.w-modo-paciente__titulo {
+  margin: 0;
+  font: var(--tipo-titulo-pagina-movil);
+}
+@media (min-width: 768px) {
+  .w-modo-paciente__titulo {
+    font: var(--tipo-titulo-pagina);
+  }
+}
+
+/* ---------- Bloqueo ---------- */
+.w-bloqueo {
+  display: flex;
+  flex-direction: column;
+  gap: var(--espacio-8);
+  max-width: 520px;
+  margin: 0 auto;
+}
+.w-bloqueo__mensaje {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--espacio-3);
+  padding-top: var(--espacio-8);
+  text-align: center;
+}
+.w-bloqueo__icono {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 88px;
+  height: 88px;
+  border-radius: 50%;
+  background: var(--turquesa-suave);
+  color: var(--turquesa-texto);
+}
+.w-bloqueo__titulo {
+  margin: 0;
+  font: var(--tipo-titulo-pagina-movil);
+}
+.w-bloqueo__texto {
+  margin: 0;
+  font: var(--tipo-cuerpo);
+}
+.w-bloqueo__equipo {
+  display: flex;
+  flex-direction: column;
+  gap: var(--espacio-3);
+}
+.w-bloqueo__equipo p {
+  margin: 0;
+}

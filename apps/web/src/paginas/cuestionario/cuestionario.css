@@ -1,0 +1,111 @@
+/* Cuestionario de salud (catálogo de la anamnesis). Mobile-first; zonas táctiles de 44 px. */
+.w-cuestionario {
+  display: flex;
+  flex-direction: column;
+  gap: var(--espacio-4);
+}
+.w-cuestionario__texto {
+  margin: 0;
+  max-width: 720px;
+}
+.w-cuest-seccion .w-tarjeta__cabecera {
+  flex-wrap: wrap;
+  gap: var(--espacio-3);
+  margin-bottom: var(--espacio-4);
+}
+.w-cuest-lista {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--espacio-3);
+}
+.w-cuest-fila {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--espacio-3);
+  padding: var(--espacio-3);
+  border-radius: var(--radio-control);
+  background: var(--fondo-suave);
+}
+.w-cuest-fila--inactiva .w-cuest-fila__texto {
+  color: var(--tinta-suave);
+}
+.w-cuest-fila__cuerpo {
+  display: flex;
+  flex-direction: column;
+  gap: var(--espacio-2);
+  flex: 1 1 260px;
+  min-width: 0;
+}
+.w-cuest-fila__cuerpo p {
+  margin: 0;
+}
+.w-cuest-fila__texto {
+  font: var(--tipo-cuerpo-fuerte);
+  overflow-wrap: anywhere;
+}
+.w-cuest-fila__acciones {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--espacio-2);
+}
+.w-cuestionario__pie {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--espacio-3);
+  padding: var(--espacio-3) 0;
+  background: var(--crema);
+}
+@media (max-width: 767.98px) {
+  .w-cuestionario__pie {
+    bottom: calc(var(--barra-inferior) + env(safe-area-inset-bottom, 0px));
+  }
+}
+.w-cuestionario__pie .w-botonera {
+  justify-content: flex-end;
+}
+
+/* ---------- Hoja de una pregunta ---------- */
+.w-cuest-alerta {
+  display: flex;
+  flex-direction: column;
+  gap: var(--espacio-3);
+  padding: var(--espacio-3);
+  border-left: 3px solid var(--coral);
+  border-radius: var(--radio-sm);
+  background: var(--fondo-suave);
+}
+.w-cuest-opciones {
+  display: flex;
+  flex-direction: column;
+  gap: var(--espacio-3);
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.w-cuest-opciones legend {
+  padding: 0;
+  margin-bottom: var(--espacio-1);
+}
+.w-cuest-opciones__lista {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--espacio-3);
+}
+.w-cuest-opcion {
+  display: flex;
+  flex-direction: column;
+  gap: var(--espacio-2);
+  padding: var(--espacio-3);
+  border: 1px solid var(--borde);
+  border-radius: var(--radio-control);
+  background: var(--blanco);
+}

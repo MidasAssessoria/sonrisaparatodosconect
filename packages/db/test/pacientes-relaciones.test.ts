@@ -117,6 +117,7 @@ describe('espejo con el tipo inverso', () => {
         apellidos: 'Giménez',
         sexo: 'F',
         fechaNac: '1992-05-14',
+        ci: '4.123.456',
       })
     ).pacienteId;
     const mateo = (
@@ -151,7 +152,7 @@ describe('espejo con el tipo inverso', () => {
       expect(deMateo).toEqual([
         {
           id: expect.any(String) as string,
-          familiar: { id: ana, nombre: 'Ana Giménez', edad: 34 },
+          familiar: { id: ana, nombre: 'Ana Giménez', edad: 34, ci: '4123456' },
           tipo: 'madre',
           esTutorLegal: false,
           esResponsablePago: false,
@@ -159,7 +160,10 @@ describe('espejo con el tipo inverso', () => {
           familiarEsResponsablePago: true,
         },
       ]);
-      expect((await listarRelaciones(tx, ana, { ahora }))[0]?.familiar.edad).toBe(7);
+      expect((await listarRelaciones(tx, ana, { ahora }))[0]?.familiar).toMatchObject({
+        edad: 7,
+        ci: null,
+      });
       // La baja con el id de cualquiera de los dos lados da de baja el par.
       expect(await bajaRelacion(tx, deMateo[0]!.id)).toBe(true);
       expect(await listarRelaciones(tx, ana)).toEqual([]);

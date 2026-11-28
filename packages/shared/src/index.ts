@@ -11,3 +11,4 @@ export * from './contrato/archivos.js';
 export * from './contrato/rutas.js';
 export * from './documentos.js';
 export * from './contrato/pacientes.js';
+export * from './contrato/anamnesis.js';

@@ -188,8 +188,11 @@ describe('pacientes: permisos y aislamiento', () => {
   ];
 
   it('los casos cubren las 12 rutas de pacientes del contrato, con el permiso declarado', () => {
-    const delContrato = RUTAS_API.filter((r) =>
-      /^(GET|POST|PATCH|DELETE) \/(pacientes|buscar|relaciones|alertas)\b/.test(r),
+    // Las del Sprint 4 bajo /pacientes (anamnesis e historial) las cubre anamnesis-permisos.test.ts.
+    const delContrato = RUTAS_API.filter(
+      (r) =>
+        /^(GET|POST|PATCH|DELETE) \/(pacientes|buscar|relaciones|alertas)\b/.test(r) &&
+        !/\/(anamnesis|historial)\b/.test(r),
     ).map((r) => r.split(' ').slice(0, 2).join(' '));
     expect(CASOS.map((c) => c.ruta).sort()).toEqual([...delContrato].sort());
     expect(delContrato).toHaveLength(12);

@@ -445,7 +445,7 @@ describe('cliente de API: pacientes', () => {
   it('editar las marcas de un vínculo: PATCH /relaciones/:id y responde la relación', async () => {
     const relacion = {
       id: IDS_PACIENTES.relacion,
-      familiar: { id: IDS_PACIENTES.mateo, nombre: 'Mateo Giménez', edad: 7 },
+      familiar: { id: IDS_PACIENTES.mateo, nombre: 'Mateo Giménez', edad: 7, ci: null },
       tipo: 'hijo',
       esTutorLegal: true,
       esResponsablePago: false,

@@ -13,6 +13,7 @@ import {
 import type { ErrorApi as CuerpoErrorApi } from '@conecta/shared';
 import type { DatoRegistro } from '../comun/registro.js';
 import { ErrorApi, errores } from './error-api.js';
+import { MENSAJES_ANAMNESIS_GLOBAL } from './restricciones/anamnesis.js';
 import { MENSAJES_ARCHIVOS } from './restricciones/archivos.js';
 import { MENSAJES_CATALOGOS } from './restricciones/catalogos.js';
 import { MENSAJES_COLA } from './restricciones/cola.js';
@@ -165,6 +166,9 @@ const MENSAJES_RESTRICCION: Record<string, (error: ErrorPostgres) => ErrorApi> =
   // Sprint 3: pacientes, grupo familiar, alertas manuales y nota interna (0019–0027).
   ...MENSAJES_PACIENTES,
   ...MENSAJES_PACIENTES_COLUMNAS,
+  // Sprint 4: anamnesis (0028–0030). Las rutas de anamnesis traducen antes con su contexto
+  // (`errorDeAnamnesis`); esto es la red para cualquier otro camino.
+  ...MENSAJES_ANAMNESIS_GLOBAL,
   sede_nombre_unico: () => errores.conflicto('Ya hay una sede con ese nombre. Elegí otro nombre.'),
   sillon_nombre_unico: () =>
     errores.conflicto('Esa sede ya tiene un sillón activo con ese nombre. Elegí otro nombre.'),

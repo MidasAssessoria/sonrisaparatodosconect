@@ -5,12 +5,18 @@
  * sus tramos en las dos sedes, un catálogo de 12 tratamientos y seis pacientes (los personajes del
  * README del design system): Ana Giménez (34) y su hijo Mateo (7), vinculados como madre e hijo
  * con Ana como tutora legal y responsable de pago, Lucía Benítez, Carlos Ayala, Rosa Duarte y Tomás
- * Villalba.
+ * Villalba. Desde el Sprint 4, dos anamnesis firmadas: la de Ana (alérgica a la penicilina, con el
+ * detalle «urticaria con amoxicilina»: su ficha muestra la alerta médica) y la de Mateo, firmada por
+ * Ana como tutora. Las firmas son solo metadatos de archivo (`firma_paciente`, bucket
+ * `conecta-privado`, ruta `<clinica>/<id>`): el contenido (el PNG de `DEMO.firmaPngBase64`) no se
+ * escribe en ningún almacenamiento, así que la URL de la firma de la demostración no descarga nada
+ * hasta que alguien copie ese PNG a la ruta del almacén local.
  *
  * Es idempotente y completa: si la clínica no existe, la crea entera; si existe (también una creada
  * por una versión anterior de esta semilla, sin profesionales ni catálogo), agrega solo lo que falta,
  * con ids fijos y `ON CONFLICT DO NOTHING` (no duplica nada ni pisa lo que alguien haya cambiado).
  */
+import { createHash } from 'node:crypto';
 import type pg from 'pg';
 import { conContextoCliente } from './contexto.js';
 
@@ -39,6 +45,14 @@ export const DEMO = {
   },
   /** Ana es la madre de Mateo (fila vista desde Ana: Mateo es su hijo). */
   relacionAnaMateo: '00000000-0000-4000-8000-0000000b0001',
+  /** Archivos firma_paciente de las anamnesis de Ana y de Mateo (Sprint 4). */
+  firmas: {
+    ana: '00000000-0000-4000-8000-0000000f1001',
+    mateo: '00000000-0000-4000-8000-0000000f1002',
+  },
+  /** PNG de 1×1 transparente: el «trazo» de las firmas de la demostración. */
+  firmaPngBase64:
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=',
 } as const;
 
 export interface OpcionesSemilla {
@@ -60,6 +74,8 @@ export interface ResultadoSemilla {
     pacientes: number;
     /** Vínculos creados en esta corrida (cada uno con su espejo, que no se cuenta). */
     relaciones: number;
+    /** Anamnesis firmadas creadas en esta corrida (Ana y Mateo). */
+    anamnesis: number;
   };
 }
 
@@ -328,7 +344,14 @@ async function completar(
   duenoId: string,
 ): Promise<ResultadoSemilla['agregados']> {
   await cliente.query("select set_config('app.usuario_id', '', true)");
-  const agregados = { profesionales: 0, tramos: 0, tratamientos: 0, pacientes: 0, relaciones: 0 };
+  const agregados = {
+    profesionales: 0,
+    tramos: 0,
+    tratamientos: 0,
+    pacientes: 0,
+    relaciones: 0,
+    anamnesis: 0,
+  };
 
   // Membresía de la dueña: la del usuario dado; si no, la del primer dueño activo.
   const duena = await cliente.query<{ id: string }>(
@@ -425,7 +448,98 @@ async function completar(
     [DEMO.relacionAnaMateo, DEMO.clinicaId, DEMO.pacientes.ana, DEMO.pacientes.mateo],
   );
   agregados.relaciones += vinculo.rowCount ?? 0;
+  for (const anamnesis of ANAMNESIS) {
+    agregados.anamnesis += await sembrarAnamnesis(cliente, anamnesis);
+  }
   return agregados;
+}
+
+interface AnamnesisDemo {
+  pacienteId: string;
+  firmaId: string;
+  respuestas: Record<string, unknown>[];
+  firmante: { nombre: string; ci: string | null; esTutor: boolean };
+  signos: [number | null, number | null, number | null, number | null];
+}
+
+/** Ana, alérgica a la penicilina; Mateo (7), firmado por Ana como tutora. */
+const ANAMNESIS: AnamnesisDemo[] = [
+  {
+    pacienteId: DEMO.pacientes.ana,
+    firmaId: DEMO.firmas.ana,
+    respuestas: [
+      { codigo: 'motivo', texto: 'Control y limpieza' },
+      { codigo: 'ultima_consulta', texto: 'Hace un año' },
+      { codigo: 'enfermedades', opciones: [] },
+      { codigo: 'medicacion', opciones: [] },
+      { codigo: 'alergias', opciones: ['penicilina'], detalle: 'urticaria con amoxicilina' },
+      { codigo: 'embarazo', si: false },
+    ],
+    firmante: { nombre: 'Ana Giménez', ci: '4123456', esTutor: false },
+    signos: [120, 80, 72, 62],
+  },
+  {
+    pacienteId: DEMO.pacientes.mateo,
+    firmaId: DEMO.firmas.mateo,
+    respuestas: [
+      { codigo: 'motivo', texto: 'Dolor en una muela de abajo' },
+      { codigo: 'desencadenantes', opciones: ['frio', 'dulce'] },
+      { codigo: 'alergias', opciones: [] },
+    ],
+    firmante: { nombre: 'Ana Giménez', ci: '4123456', esTutor: true },
+    signos: [null, null, 90, 24],
+  },
+];
+
+/**
+ * Anamnesis firmada de la demostración, si el paciente existe, está activo, no tiene ninguna y el
+ * cuestionario tiene las preguntas que usa. Pasa por app.guardar_anamnesis (validaciones, copia de
+ * textos y alerta médica). Devuelve 1 si la creó.
+ */
+async function sembrarAnamnesis(cliente: pg.PoolClient, a: AnamnesisDemo): Promise<number> {
+  const listo = await cliente.query<{ ok: boolean }>(
+    `select exists (select 1 from app.paciente where id = $1 and activo)
+        and not exists (select 1 from app.anamnesis where clinica_id = $2 and paciente_id = $1)
+        and (select count(*) from app.anamnesis_pregunta q
+             where q.clinica_id = $2 and q.activa and q.codigo = any ($3::text[]))
+            = cardinality($3::text[]) as ok`,
+    [a.pacienteId, DEMO.clinicaId, a.respuestas.map((r) => String(r['codigo']))],
+  );
+  if (!listo.rows[0]?.ok) return 0;
+  const png = Buffer.from(DEMO.firmaPngBase64, 'base64');
+  await cliente.query(
+    `insert into app.archivo (id, clinica_id, categoria, paciente_id, almacen, bucket, ruta,
+                              nombre_original, tipo, bytes, ancho, alto, sha256)
+     values ($1, $2, 'firma_paciente', $3, 'local', 'conecta-privado', $4,
+             'firma.png', 'image/png', $5, 1, 1, $6)
+     on conflict do nothing`,
+    [
+      a.firmaId,
+      DEMO.clinicaId,
+      a.pacienteId,
+      `${DEMO.clinicaId}/${a.firmaId}`,
+      png.length,
+      createHash('sha256').update(png).digest('hex'),
+    ],
+  );
+  const [sistolica, diastolica, pulso, peso] = a.signos;
+  await cliente.query(
+    `select app.guardar_anamnesis($1, null, app.huella_catalogo(), $2::jsonb, $3, $4, $5, $6, true,
+                                  $7, $8, $9, $10)`,
+    [
+      a.pacienteId,
+      JSON.stringify(a.respuestas),
+      a.firmante.nombre,
+      a.firmante.ci,
+      a.firmante.esTutor,
+      a.firmaId,
+      sistolica,
+      diastolica,
+      pulso,
+      peso,
+    ],
+  );
+  return 1;
 }
 
 /**

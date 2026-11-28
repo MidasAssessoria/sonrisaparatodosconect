@@ -2,6 +2,9 @@ import {
   aceptarInvitacionSchema,
   bajaSchema,
   consultaBuscarSchema,
+  consultaHistorialSchema,
+  crearAnamnesisSchema,
+  reemplazarPreguntasSchema,
   consultaPacientesSchema,
   consultarInvitacionSchema,
   crearAlertaSchema,
@@ -101,6 +104,14 @@ export const ENTRADA_POR_RUTA: Record<string, EntradaRuta> = {
   'DELETE /relaciones/:id': null,
   'POST /pacientes/:id/alertas': crearAlertaSchema,
   'PATCH /alertas/:id': editarAlertaSchema,
+
+  'GET /anamnesis/preguntas': null,
+  'GET /anamnesis/preguntas/catalogo': null,
+  'PUT /anamnesis/preguntas': reemplazarPreguntasSchema,
+  'GET /pacientes/:id/anamnesis': null,
+  'POST /pacientes/:id/anamnesis': crearAnamnesisSchema,
+  'GET /pacientes/:id/anamnesis/:version': null,
+  'GET /pacientes/:id/historial': null,
 };
 
 /**
@@ -111,6 +122,7 @@ export const ENTRADA_POR_RUTA: Record<string, EntradaRuta> = {
 export const CONSULTA_POR_RUTA: Record<string, z.ZodObject> = {
   'GET /pacientes': consultaPacientesSchema,
   'GET /buscar': consultaBuscarSchema,
+  'GET /pacientes/:id/historial': consultaHistorialSchema,
 };
 
 /** Rutas públicas que igual exigen `Authorization` (contrato/personal.ts). */
