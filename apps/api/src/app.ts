@@ -15,6 +15,28 @@ export const PREFIJO_API = 'api/v1';
 export const LIMITE_CUERPO = '64kb';
 
 /**
+ * Límite de las dos rutas del Sprint 4 que mandan más: `POST /pacientes/:id/anamnesis` (la firma
+ * en PNG llega en base64, hasta 420.000 caracteres, más hasta 200 respuestas) y
+ * `PUT /anamnesis/preguntas` (hasta 200 preguntas con sus opciones y alertas). El resto sigue con
+ * `LIMITE_CUERPO`.
+ */
+export const LIMITE_CUERPO_ANAMNESIS = '1mb';
+
+const RUTA_GUARDAR_ANAMNESIS = new RegExp(`^/${PREFIJO_API}/pacientes/[^/]+/anamnesis/?$`);
+const RUTA_CATALOGO_ANAMNESIS = new RegExp(`^/${PREFIJO_API}/anamnesis/preguntas/?$`);
+const ES_JSON = /^application\/json\s*(;|$)/i;
+
+/** ¿Este pedido usa el límite grande? Solo JSON y solo esas dos rutas con su método. */
+function cuerpoDeAnamnesis(req: Request): boolean {
+  const tipo = req.headers['content-type'];
+  if (typeof tipo !== 'string' || !ES_JSON.test(tipo)) return false;
+  return (
+    (req.method === 'POST' && RUTA_GUARDAR_ANAMNESIS.test(req.path)) ||
+    (req.method === 'PUT' && RUTA_CATALOGO_ANAMNESIS.test(req.path))
+  );
+}
+
+/**
  * Opciones para `NestFactory.create` y `createNestApplication`: el parser del cuerpo lo registra
  * `configurarApp` (solo JSON, con límite y con errores en el formato del contrato).
  */
@@ -90,6 +112,12 @@ export function configurarApp(app: NestExpressApplication): NestExpressApplicati
     }),
   );
   app.use(fueraDelPrefijo);
+  // Primero el de las rutas de anamnesis (deja el cuerpo leído y el siguiente no lo vuelve a leer).
+  app.useBodyParser('json', {
+    limit: LIMITE_CUERPO_ANAMNESIS,
+    strict: true,
+    type: (req: unknown) => cuerpoDeAnamnesis(req as Request),
+  });
   app.useBodyParser('json', { limit: LIMITE_CUERPO, strict: true });
   app.use(manejadorErroresExpress(registro));
 
