@@ -185,6 +185,15 @@ describe('Anamnesis: versiones', () => {
     ).toBeInTheDocument();
   });
 
+  it('firma no disponible (firmaUrl null): lo dice, sin imagen rota ni botón de recargar', async () => {
+    const { rutas } = escenario({ versiones: [{ ...V2, firmaUrl: null }, V1] });
+    montar(rutas, `${RUTA_ANA}/anamnesis`, ODONTOLOGO);
+    expect(await screen.findByText(/La imagen de la firma no está disponible/)).toBeInTheDocument();
+    expect(screen.queryByRole('img', { name: 'Firma de Ana Giménez' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Volver a cargar la firma' })).toBeNull();
+    expect(screen.getByText('Firmó Ana Giménez')).toBeInTheDocument();
+  });
+
   it('abre una versión anterior desde el enlace (?version=1)', async () => {
     const { rutas } = escenario();
     montar(rutas, `${RUTA_ANA}/anamnesis?version=1`, ODONTOLOGO);

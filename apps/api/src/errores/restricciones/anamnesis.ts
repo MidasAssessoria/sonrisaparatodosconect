@@ -1,5 +1,5 @@
 import { campoDeError, type CampoDeError, type RestriccionAnamnesis } from '@conecta/db';
-import { errores, type ErrorApi } from '../error-api.js';
+import { ErrorApi, errores } from '../error-api.js';
 
 /**
  * Errores de la anamnesis (Sprint 4, migraciones 0028–0030). La base pone el nombre de la regla
@@ -17,6 +17,14 @@ import { errores, type ErrorApi } from '../error-api.js';
 /** 409 de `versionBase` vieja: dice qué hacer (texto pedido para el Sprint 4). */
 export const MENSAJE_CONFLICTO_VERSION =
   'Alguien guardó otra versión mientras completabas esta. Cargá la versión nueva y revisá tus respuestas.';
+
+/** 409 de `huellaCatalogo` vieja: el cuestionario cambió mientras se completaba. */
+export const MENSAJE_CONFLICTO_CATALOGO =
+  'El cuestionario cambió mientras lo completabas. Actualizá el cuestionario y revisá las respuestas.';
+
+/** 409 con el campo que distingue los dos conflictos del guardado (contrato). */
+const conflictoEn = (campo: string, mensaje: string, detalle: string): ErrorApi =>
+  new ErrorApi(409, 'conflicto', mensaje, [{ campo, mensaje: detalle }]);
 
 export const pacienteNoEncontrado = (): ErrorApi =>
   errores.noEncontrado('No encontramos ese paciente. Volvé a la lista y buscalo de nuevo.');
@@ -41,8 +49,8 @@ export const MENSAJES_ANAMNESIS: Record<
     ),
   anamnesis_catalogo_invalido: enCampo(
     'preguntas',
-    'El cuestionario tiene que tener de 1 a 200 preguntas. Revisalo y guardá de nuevo.',
-    'De 1 a 200 preguntas.',
+    'El cuestionario tiene que tener de 1 a 500 preguntas. Revisalo y guardá de nuevo.',
+    'De 1 a 500 preguntas.',
   ),
   anamnesis_pregunta_invalida: enCampo(
     'preguntas',
@@ -54,7 +62,19 @@ export const MENSAJES_ANAMNESIS: Record<
     'Hay dos preguntas con el mismo código. Cambiá el código de una de las dos.',
     'Código repetido.',
   ),
-  anamnesis_conflicto_version: () => errores.conflicto(MENSAJE_CONFLICTO_VERSION),
+  anamnesis_conflicto_version: () =>
+    conflictoEn('versionBase', MENSAJE_CONFLICTO_VERSION, 'Hay una versión más nueva.'),
+  anamnesis_conflicto_catalogo: () =>
+    conflictoEn('huellaCatalogo', MENSAJE_CONFLICTO_CATALOGO, 'El cuestionario cambió.'),
+  anamnesis_catalogo_lleno: enCampo(
+    'preguntas',
+    'El cuestionario llegó al máximo de 500 preguntas, contando las inactivas. Reusá una pregunta inactiva en lugar de crear otra.',
+    'Hasta 500 preguntas, contando las inactivas.',
+  ),
+  archivo_firma_en_uso: () =>
+    errores.conflicto(
+      'Ese archivo es la firma de una anamnesis y no se puede dar de baja: la versión firmada tiene que conservarla.',
+    ),
   anamnesis_paciente_inactivo: () =>
     errores.datosInvalidos(
       'Este paciente está inactivo. Reactivá su ficha para cargarle la anamnesis.',

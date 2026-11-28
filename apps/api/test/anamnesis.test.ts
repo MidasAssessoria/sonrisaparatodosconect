@@ -8,6 +8,8 @@
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
+import { deflateSync } from 'node:zlib';
+import { DEMO } from '@conecta/db';
 import { crearRolDePrueba, crearUsuarioDePrueba } from '@conecta/db/pruebas';
 import {
   anamnesisSchema,
@@ -21,13 +23,22 @@ import {
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { ALMACEN_ARCHIVOS, type AlmacenArchivos } from '../src/archivos/almacen.js';
 import { verificarToken } from '../src/archivos/firma.js';
+import { ServicioBd } from '../src/base/servicio-bd.js';
 import type { DatoRegistro, Registro } from '../src/comun/registro.js';
 import {
   ALERGIA_PENICILINA,
+  bloquePng,
   cuerpoAnamnesis,
+  FIRMA_BYTES_PNG,
+  ihdr,
+  pngRgba,
   firmaDataUrl,
   firmasDe,
   guardarApi,
+  huellaDe,
+  pngRuido,
+  pngTransparente,
+  pngTrazo,
   tokenDeUrl,
   vencimientoDe,
   versionesDe,
@@ -39,6 +50,7 @@ import {
   jpeg,
   png,
   SECRETO_PRUEBA,
+  subir,
   SVG_LIMPIO,
   trabajosDe,
 } from './archivos-ayudas.js';
@@ -71,6 +83,8 @@ let odontologo: Persona;
 let recepcion: Persona;
 let asistente: Persona;
 let tOdo: string;
+/** Huella del cuestionario de A (no cambia en este archivo). */
+let huellaA: string;
 
 const ADULTA = { fechaNac: '1990-05-01', sexo: 'F' as const };
 
@@ -86,6 +100,7 @@ beforeAll(async () => {
     crearPersona(prueba, A.clinicaId, { rol: 'asistente' }),
   ]);
   tOdo = await odontologo.token();
+  huellaA = await huellaDe(prueba, tOdo);
 });
 
 afterAll(async () => {
@@ -99,7 +114,7 @@ const almacen = (): AlmacenArchivos =>
 const guardar = (pacienteId: string, extra: Record<string, unknown> = {}, token = tOdo) =>
   prueba.pedir('post', `/pacientes/${pacienteId}/anamnesis`, {
     token,
-    cuerpo: cuerpoAnamnesis(extra),
+    cuerpo: cuerpoAnamnesis(huellaA, extra),
   });
 
 /** 400 `datos_invalidos` con un detalle en `campo`. */
@@ -127,6 +142,8 @@ async function vistasDe(entidad: string, entidadId: string): Promise<number> {
   );
   return Number(rows[0]?.n ?? 0);
 }
+
+const texto0 = (cuerpo: unknown): string => JSON.stringify(cuerpo);
 
 async function idDeVersion(pacienteId: string, version: number): Promise<string> {
   const { rows } = await comoSistema<{ id: string }>(
@@ -321,7 +338,8 @@ describe('guardar una versión', () => {
       alertasMedicas: [
         {
           tipo: 'alergia',
-          texto: 'Alergia a la penicilina (urticaria con amoxicilina)',
+          texto: 'Alergia a la penicilina',
+          detalle: 'urticaria con amoxicilina',
           gravedad: 'alta',
           grupoAlergia: 'penicilina',
           codigo: 'alergias',
@@ -426,10 +444,45 @@ describe('guardar una versión', () => {
     );
   });
 
+  it('el límite grande solo con un token válido: sin sesión el cuerpo no pasa de 64 KB', async () => {
+    const pid = await paciente(prueba, A.clinicaId, ADULTA);
+    const cuerpo = cuerpoAnamnesis(huellaA, { firmaPng: firmaDataUrl(pngRuido(170, 170)) });
+    expect(JSON.stringify(cuerpo).length).toBeGreaterThan(100 * 1024);
+    const ruta = `/pacientes/${pid}/anamnesis`;
+    // Sin token o con uno inválido: ni se lee más de 64 KB.
+    await esperarError(prueba.pedir('post', ruta, { cuerpo }), 413, 'datos_invalidos');
+    await esperarError(
+      prueba.pedir('post', ruta, { cuerpo }).set('Authorization', 'Bearer no.es.un-token'),
+      413,
+      'datos_invalidos',
+    );
+    const vencido = await odontologo.token(undefined, { venceEn: -60 });
+    await esperarError(
+      prueba.pedir('post', ruta, { token: vencido, cuerpo }),
+      413,
+      'datos_invalidos',
+    );
+    await esperarError(
+      prueba.pedir('put', '/anamnesis/preguntas', {
+        cuerpo: { preguntas: [], relleno: 'x'.repeat(100 * 1024) },
+      }),
+      413,
+      'datos_invalidos',
+    );
+    // Chico y sin token: lo responde el guard.
+    await esperarError(
+      prueba.pedir('post', ruta, { cuerpo: cuerpoAnamnesis(huellaA) }),
+      401,
+      'no_autenticado',
+    );
+    // Con token válido el mismo cuerpo grande sí se lee.
+    expect((await prueba.pedir('post', ruta, { token: tOdo, cuerpo })).status).toBe(201);
+  });
+
   it('sin firma: 400 en firmaPng y no queda nada', async () => {
     const pid = await paciente(prueba, A.clinicaId, ADULTA);
     const antes = await archivosEnDisco(directorio, A.clinicaId);
-    const sinCampo = cuerpoAnamnesis();
+    const sinCampo = cuerpoAnamnesis(huellaA);
     delete sinCampo['firmaPng'];
     const cuerpo = await esperarCampo(
       prueba.pedir('post', `/pacientes/${pid}/anamnesis`, { token: tOdo, cuerpo: sinCampo }),
@@ -472,22 +525,70 @@ describe('guardar una versión', () => {
     await sinRastro(pid, antes);
   });
 
+  it('firma vacía (lienzo transparente o el PNG 1×1 de la demo): 400 «Falta la firma.»', async () => {
+    const pid = await paciente(prueba, A.clinicaId, ADULTA);
+    const antes = await archivosEnDisco(directorio, A.clinicaId);
+    for (const vacia of [
+      firmaDataUrl(pngTransparente(900, 200)),
+      `data:image/png;base64,${DEMO.firmaPngBase64}`,
+    ]) {
+      const cuerpo = await esperarCampo(guardar(pid, { firmaPng: vacia }), 'firmaPng');
+      expect(cuerpo.mensaje).toContain('Falta la firma.');
+    }
+    await sinRastro(pid, antes);
+    // Un trazo sobre fondo transparente, como exporta la web, sí es una firma.
+    expect((await guardar(pid, { firmaPng: firmaDataUrl(pngTrazo()) })).status).toBe(201);
+  });
+
+  it('PNG peligroso: bomba de 8000 × 8000, APNG, bloque privado, IDAT que no es zlib → 400', async () => {
+    const pid = await paciente(prueba, A.clinicaId, ADULTA);
+    const antes = await archivosEnDisco(directorio, A.clinicaId);
+    // 8000 × 8000 declarado (256 MB al descomprimir) en unos pocos KB de ceros comprimidos.
+    const bomba = Buffer.concat([
+      FIRMA_BYTES_PNG,
+      ihdr(8000, 8000),
+      bloquePng('IDAT', deflateSync(Buffer.alloc(16 * 1024 * 1024), { level: 9 })),
+      bloquePng('IEND', Buffer.alloc(0)),
+    ]);
+    // Declarado chico, pero el IDAT se infla mucho más de lo que exige el IHDR.
+    const inflado = pngRgba(10, 10, () => [0, 0, 0, 255], {
+      idat: deflateSync(Buffer.alloc(8 * 1024 * 1024), { level: 9 }),
+    });
+    const actl = Buffer.alloc(8);
+    actl.writeUInt32BE(1, 0);
+    const apng = pngRgba(60, 20, () => [0, 0, 0, 255], { antesDeIdat: [bloquePng('acTL', actl)] });
+    const privado = pngRgba(60, 20, () => [0, 0, 0, 255], {
+      antesDeIdat: [bloquePng('prVt', Buffer.from('cualquier cosa'))],
+    });
+    const texto = pngRgba(60, 20, () => [0, 0, 0, 255], {
+      antesDeIdat: [bloquePng('tEXt', Buffer.from('Comment\u0000hola'))],
+    });
+    const noZlib = pngRgba(60, 20, () => [0, 0, 0, 255], { idat: Buffer.from('esto no es zlib') });
+    for (const contenido of [bomba, inflado, apng, privado, texto, noZlib]) {
+      expect(contenido.length).toBeLessThan(300 * 1024);
+      const cuerpo = await esperarCampo(
+        guardar(pid, { firmaPng: firmaDataUrl(contenido) }),
+        'firmaPng',
+      );
+      expect(cuerpo.mensaje).toContain('PNG');
+    }
+    await sinRastro(pid, antes);
+  });
+
   it('PNG grande: más de 300 KB es 400 en firmaPng (y más de lo que admite el contrato, también)', async () => {
     const pid = await paciente(prueba, A.clinicaId, ADULTA);
     const antes = await archivosEnDisco(directorio, A.clinicaId);
-    const grande = png(10, 10, 305 * 1024);
+    // PNG válido (ruido opaco, no se comprime) de unos 306 KB: pasa el contrato, no la API.
+    const grande = pngRuido(302, 302);
+    expect(grande.length).toBeGreaterThan(300 * 1024);
     expect(firmaDataUrl(grande).length).toBeLessThan(420_000);
     const cuerpo = await esperarCampo(guardar(pid, { firmaPng: firmaDataUrl(grande) }), 'firmaPng');
     expect(cuerpo.mensaje).toContain('300 KB');
-    await esperarCampo(
-      guardar(pid, { firmaPng: firmaDataUrl(png(10, 10, 330 * 1024)) }),
-      'firmaPng',
-    );
-    // Justo en el límite sí entra.
-    const justo = png(10, 10);
-    const limite = png(10, 10, 300 * 1024 - justo.length - 12);
-    expect(limite.length).toBe(300 * 1024);
-    expect((await guardar(pid, { firmaPng: firmaDataUrl(limite) })).status).toBe(201);
+    await esperarCampo(guardar(pid, { firmaPng: firmaDataUrl(pngRuido(320, 320)) }), 'firmaPng');
+    // Por debajo del límite sí entra.
+    const chico = pngRuido(270, 270);
+    expect(chico.length).toBeLessThan(300 * 1024);
+    expect((await guardar(pid, { firmaPng: firmaDataUrl(chico) })).status).toBe(201);
     expect(antes.length + 1).toBe((await archivosEnDisco(directorio, A.clinicaId)).length);
   });
 
@@ -580,13 +681,72 @@ describe('guardar una versión', () => {
     const discoAntes = await archivosEnDisco(directorio, A.clinicaId);
     for (const base of [1, null]) {
       const respuesta = await esperarError(guardar(pid, { versionBase: base }), 409, 'conflicto');
-      expect(segun(errorApiSchema, respuesta.body).mensaje).toBe(
+      const cuerpo = segun(errorApiSchema, respuesta.body);
+      expect(cuerpo.mensaje).toBe(
         'Alguien guardó otra versión mientras completabas esta. Cargá la versión nueva y revisá tus respuestas.',
       );
+      expect(cuerpo.detalles?.map((d) => d.campo)).toEqual(['versionBase']);
     }
     expect(await firmasDe(prueba, A.clinicaId, pid)).toEqual(firmasAntes);
     expect(await archivosEnDisco(directorio, A.clinicaId)).toEqual(discoAntes);
     expect(await versionesDe(prueba, A.clinicaId, pid)).toEqual([1, 2]);
+  });
+
+  it('el cuestionario cambió mientras se completaba: 409 en huellaCatalogo, sin rastro', async () => {
+    const D = await crearClinica(prueba, { sedes: 1 });
+    const tDueno = await D.dueno.token();
+    const pid = await paciente(prueba, D.clinicaId, ADULTA);
+    const vieja = await huellaDe(prueba, tDueno);
+    const catalogo = segun(
+      catalogoPreguntasSchema,
+      (await prueba.pedir('get', '/anamnesis/preguntas/catalogo', { token: tDueno }).expect(200))
+        .body,
+    );
+    expect(catalogo.huella).toBe(vieja);
+    const put = await prueba
+      .pedir('put', '/anamnesis/preguntas', {
+        token: tDueno,
+        cuerpo: {
+          preguntas: catalogo.preguntas.map((p) =>
+            p.codigo === 'motivo' ? { ...p, texto: '¿Qué lo trae hoy por la clínica?' } : p,
+          ),
+        },
+      })
+      .expect(200);
+    const nueva = segun(catalogoPreguntasSchema, put.body).huella;
+    expect(nueva).not.toBe(vieja);
+    const antes = await archivosEnDisco(directorio, D.clinicaId);
+    const respuesta = await esperarError(
+      prueba.pedir('post', `/pacientes/${pid}/anamnesis`, {
+        token: tDueno,
+        cuerpo: cuerpoAnamnesis(vieja),
+      }),
+      409,
+      'conflicto',
+    );
+    const cuerpo = segun(errorApiSchema, respuesta.body);
+    expect(cuerpo.mensaje).toBe(
+      'El cuestionario cambió mientras lo completabas. Actualizá el cuestionario y revisá las respuestas.',
+    );
+    expect(cuerpo.detalles?.map((d) => d.campo)).toEqual(['huellaCatalogo']);
+    expect(await firmasDe(prueba, D.clinicaId, pid)).toEqual([]);
+    expect(await archivosEnDisco(directorio, D.clinicaId)).toEqual(antes);
+    // Con la huella nueva, guarda.
+    const ok = await prueba.pedir('post', `/pacientes/${pid}/anamnesis`, {
+      token: tDueno,
+      cuerpo: cuerpoAnamnesis(nueva),
+    });
+    expect(ok.status, JSON.stringify(ok.body)).toBe(201);
+  });
+
+  it('sin huella del cuestionario: 400 en huellaCatalogo (contrato)', async () => {
+    const pid = await paciente(prueba, A.clinicaId, ADULTA);
+    const sinHuella = cuerpoAnamnesis(huellaA);
+    delete sinHuella['huellaCatalogo'];
+    await esperarCampo(
+      prueba.pedir('post', `/pacientes/${pid}/anamnesis`, { token: tOdo, cuerpo: sinHuella }),
+      'huellaCatalogo',
+    );
   });
 
   it('dos guardados simultáneos con la misma versión base: uno 201 y el otro 409', async () => {
@@ -638,6 +798,42 @@ describe('guardar una versión', () => {
     }
     expect(escrito).not.toBeNull();
     await sinRastro(pid, antes);
+  });
+
+  it('falla el COMMIT después de subir: el objeto NO se borra (puede estar confirmado) y queda registrado', async () => {
+    const pid = await paciente(prueba, A.clinicaId, ADULTA);
+    const antes = await archivosEnDisco(directorio, A.clinicaId);
+    const bd = prueba.app.get(ServicioBd);
+    const original = bd.enContexto.bind(bd);
+    const destino = almacen();
+    const guardarOriginal = destino.guardar.bind(destino);
+    let subido = false;
+    const espiaAlmacen = vi.spyOn(destino, 'guardar').mockImplementation(async (u, c, t) => {
+      await guardarOriginal(u, c, t);
+      subido = true;
+    });
+    // La transacción del guardado termina bien (subida incluida) y lo que falla es lo de después:
+    // para el servicio, el COMMIT. Las demás transacciones del pedido (el guard) no se tocan.
+    const espia = vi.spyOn(bd, 'enContexto').mockImplementation((ctx, fn) =>
+      original(ctx, async (tx) => {
+        const resultado = await fn(tx);
+        if (subido) throw new Error('se cortó la conexión en el COMMIT');
+        return resultado;
+      }),
+    );
+    const lineasAntes = lineas.length;
+    try {
+      await esperarError(guardar(pid), 500, 'error_interno');
+    } finally {
+      espia.mockRestore();
+      espiaAlmacen.mockRestore();
+    }
+    expect(subido).toBe(true);
+    // La base revirtió (en esta simulación), pero el objeto quedó: no se borra en la duda.
+    expect(await firmasDe(prueba, A.clinicaId, pid)).toEqual([]);
+    expect((await archivosEnDisco(directorio, A.clinicaId)).length).toBe(antes.length + 1);
+    const dudoso = lineas.slice(lineasAntes).find((l) => l.evento === 'firma_commit_dudoso');
+    expect(dudoso?.datos).toEqual({ archivo: expect.any(String) as string });
   });
 
   it('sin ficha_clinica:ver no guarda aunque tenga crear (403, sin rastro)', async () => {
@@ -692,7 +888,7 @@ describe('ver una versión', () => {
       (await prueba.pedir('get', `/pacientes/${pid}/anamnesis/1`, { token: tOdo }).expect(200))
         .body,
     );
-    const token = tokenDeUrl(a.firmaUrl);
+    const token = tokenDeUrl(a.firmaUrl ?? '');
     const vence = vencimientoDe(token);
     const ahora = Math.floor(Date.now() / 1000);
     expect(vence - ahora).toBeGreaterThan(250);
@@ -718,6 +914,58 @@ describe('ver una versión', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('firma dada de baja (corrección de datos): la versión sale igual, con firmaUrl null', async () => {
+    const pid = await paciente(prueba, A.clinicaId, ADULTA);
+    await guardarApi(prueba, tOdo, pid);
+    const [firma] = await firmasDe(prueba, A.clinicaId, pid);
+    if (!firma) throw new Error('Falta la firma.');
+    // Ni por la API ni como dueño de las tablas se puede (trigger archivo_firma_en_uso): se
+    // simula una corrección a mano apagando el trigger DENTRO de una transacción (el cambio de
+    // DDL no se ve fuera de ella y vuelve a quedar prendido al confirmar).
+    await comoSistema(
+      prueba.admin,
+      A.clinicaId,
+      `alter table app.archivo disable trigger archivo_firma_en_uso;
+       update app.archivo set deleted_at = now(), motivo_baja = 'Corrección de prueba'
+       where id = '${firma.id}';
+       alter table app.archivo enable trigger archivo_firma_en_uso;`,
+    );
+    const id = await idDeVersion(pid, 1);
+    const vistas = await vistasDe('anamnesis', id);
+    const vistasArchivo = await vistasDe('archivo', firma.id);
+    const respuesta = await prueba.pedir('get', `/pacientes/${pid}/anamnesis/1`, { token: tOdo });
+    expect(respuesta.status, JSON.stringify(respuesta.body)).toBe(200);
+    const a = segun(anamnesisSchema, respuesta.body);
+    expect(a.firmaUrl).toBeNull();
+    expect(a.version).toBe(1);
+    // La lectura de la versión queda; no se entregó URL del archivo.
+    expect(await vistasDe('anamnesis', id)).toBe(vistas + 1);
+    expect(await vistasDe('archivo', firma.id)).toBe(vistasArchivo);
+    expect(lineas.some((l) => l.evento === 'anamnesis_firma_no_disponible')).toBe(true);
+  });
+
+  it('POST /archivos no acepta la categoría firma_paciente: 400 sin subir nada', async () => {
+    const contar = async () => {
+      const { rows } = await comoSistema<{ n: string }>(
+        prueba.admin,
+        A.clinicaId,
+        'select count(*) as n from app.archivo where clinica_id = $1',
+        [A.clinicaId],
+      );
+      return Number(rows[0]?.n);
+    };
+    const antes = await archivosEnDisco(directorio, A.clinicaId);
+    const filasAntes = await contar();
+    const respuesta = await esperarError(
+      subir(prueba, tOdo, 'firma_paciente', png(40, 20)),
+      400,
+      'datos_invalidos',
+    );
+    expect(segun(errorApiSchema, respuesta.body).detalles?.[0]?.campo).toBe('categoria');
+    expect(await archivosEnDisco(directorio, A.clinicaId)).toEqual(antes);
+    expect(await contar()).toBe(filasAntes);
   });
 
   it('404: versión que no existe, versión mal escrita, y vigente sin ninguna', async () => {
@@ -757,10 +1005,21 @@ describe('alerta médica en la ficha y en la lista', () => {
     const respuesta = await prueba.pedir('get', `/pacientes/${pid}`, { token: tRecepcion });
     expect(respuesta.status).toBe(200);
     const ficha = segun(pacienteSchema, respuesta.body);
-    expect(ficha.alertasMedicas.map((x) => x.texto)).toEqual([
-      'Alergia a la penicilina (urticaria con amoxicilina)',
-      'Embarazo / lactancia',
+    // Recepción ve el texto de la regla; el detalle libre del paciente no (null).
+    expect(ficha.alertasMedicas.map((x) => [x.texto, x.detalle])).toEqual([
+      ['Alergia a la penicilina', null],
+      ['Embarazo / lactancia', null],
     ]);
+    expect(texto0(respuesta.body)).not.toContain('urticaria');
+    // Quien ve la ficha clínica recibe el detalle aparte.
+    const clinica = segun(
+      pacienteSchema,
+      (await prueba.pedir('get', `/pacientes/${pid}`, { token: tOdo }).expect(200)).body,
+    );
+    expect(clinica.alertasMedicas[0]).toMatchObject({
+      texto: 'Alergia a la penicilina',
+      detalle: 'urticaria con amoxicilina',
+    });
     expect(ficha.conAlerta).toBe(true);
     expect(ficha.alertas).toEqual([]);
     expect(ficha.notaInterna).toBeNull();

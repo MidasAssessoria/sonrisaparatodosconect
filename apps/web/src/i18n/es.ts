@@ -273,6 +273,8 @@ export const es = {
       declaro: 'Declaró que la información es verdadera.',
       firma: 'Firma y declaración',
       firmaAlt: (nombre: string) => `Firma de ${nombre}`,
+      firmaNoDisponible:
+        'La imagen de la firma no está disponible. La versión firmada sigue siendo válida; avisá a la administración de la clínica.',
       firmaNoCarga: 'No pudimos mostrar la firma: el enlace vence a los pocos minutos.',
       recargarFirma: 'Volver a cargar la firma',
       alertasVersion: 'Alertas médicas de esta versión',

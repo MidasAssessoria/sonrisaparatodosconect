@@ -74,12 +74,19 @@ function ImagenFirma({
   nombre,
   onRecargar,
 }: {
-  url: string;
+  url: string | null;
   nombre: string;
   onRecargar: () => void;
 }) {
   const t = useTextos().pacientes.anamnesis;
   const [fallo, setFallo] = useState<string | null>(null);
+  if (url === null) {
+    return (
+      <div className="w-anam-firma__fallo">
+        <p className="w-secundario">{t.firmaNoDisponible}</p>
+      </div>
+    );
+  }
   if (fallo === url) {
     return (
       <div className="w-anam-firma__fallo">

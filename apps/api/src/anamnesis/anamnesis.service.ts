@@ -20,12 +20,12 @@
  *       revierte entera: ni archivo, ni versión, ni número de versión gastado.
  *     - No antes de abrir la transacción: los rechazos frecuentes (validación, 409 de versión,
  *       permisos, paciente de otra clínica) ocurren en la base, y así no tocan el almacén.
- *     - Lo que queda: si el COMMIT falla después de subir, el objeto se borra (compensación) solo
- *       si es seguro que la base no lo registró; ante un COMMIT ambiguo (se cortó la conexión) se
- *       comprueba en otra transacción y, si no se puede saber, el objeto queda: un objeto sin fila
- *       es inalcanzable (no hay URL sin fila) y solo ocupa lugar, mientras que borrar el PNG de una
- *       versión que sí quedó guardada sería perder la firma. Lo mismo si el proceso muere entre la
- *       subida y el COMMIT. Costo: el bloqueo del paciente (`FOR NO KEY UPDATE` de
+ *     - Compensación: el objeto se borra solo si el error saltó ANTES del COMMIT (la base seguro no
+ *       registró nada). Si falla el COMMIT mismo, el objeto queda y se registra
+ *       (`firma_commit_dudoso`, solo ids): la versión puede haber quedado guardada (o estar
+ *       confirmándose), y borrar su PNG sería perder la firma; un objeto sin fila, en cambio, es
+ *       inalcanzable (no hay URL sin fila) y solo ocupa lugar. Lo mismo si el proceso muere entre
+ *       la subida y el COMMIT. Costo: el bloqueo del paciente (`FOR NO KEY UPDATE` de
  *       `guardar_anamnesis`) dura también lo que tarda la subida (un PNG de hasta 300 KB).
  *
  * Lectura: la versión completa (`GET …/anamnesis/:version` y la respuesta del POST) deja `ver`
@@ -81,6 +81,9 @@ const versionNoEncontrada = () =>
 
 const NOMBRE_FIRMA = 'firma.png';
 
+/** `firmaUrl` cuando la imagen de la firma no se puede entregar (ver `vista`). */
+export const FIRMA_NO_DISPONIBLE = null;
+
 function errorDeFirma(error: FirmaInvalida): ErrorApi {
   switch (error.motivo) {
     case 'vacia':
@@ -124,10 +127,10 @@ export class AnamnesisService {
     ctx: ContextoPedido,
     incluirInactivas: boolean,
   ): Promise<z.infer<typeof catalogoPreguntasSchema>> {
-    const preguntas = await this.bd.enContexto(ctx, (tx) =>
+    const catalogo = await this.bd.enContexto(ctx, (tx) =>
       catalogoPreguntas(tx, { incluirInactivas }),
     );
-    return catalogoPreguntasSchema.parse({ preguntas });
+    return catalogoPreguntasSchema.parse(catalogo);
   }
 
   async reemplazarPreguntas(
@@ -136,7 +139,7 @@ export class AnamnesisService {
   ): Promise<z.infer<typeof catalogoPreguntasSchema>> {
     try {
       const catalogo = await this.bd.enContexto(ctx, (tx) => reemplazarPreguntas(tx, preguntas));
-      return catalogoPreguntasSchema.parse({ preguntas: catalogo });
+      return catalogoPreguntasSchema.parse(catalogo);
     } catch (error) {
       throw traducido(error);
     }
@@ -191,6 +194,7 @@ export class AnamnesisService {
     // El PNG no va a la base: va como archivo, y la base recibe su id.
     const resto: Omit<CrearAnamnesis, 'firmaPng'> = {
       versionBase: datos.versionBase,
+      huellaCatalogo: datos.huellaCatalogo,
       respuestas: datos.respuestas,
       signosVitales: datos.signosVitales,
       firmante: datos.firmante,
@@ -243,7 +247,7 @@ export class AnamnesisService {
       });
       return creada;
     } catch (error) {
-      if (intentoSubir) await this.compensar(ctx, archivoId, ubicacion, terminado);
+      if (intentoSubir) await this.compensar(archivoId, ubicacion, terminado);
       throw traducido(error);
     }
   }
@@ -273,7 +277,14 @@ export class AnamnesisService {
 
   // -------------------------------------------------------------------------------------------
 
-  /** La versión con la URL firmada de la firma, y `ver` (anamnesis y archivo) en la auditoría. */
+  /**
+   * La versión con la URL firmada de la firma, y `ver` (anamnesis y archivo) en la auditoría.
+   *
+   * Si el archivo de la firma no se puede entregar (dado de baja por una corrección de datos, la
+   * base ya no deja hacerlo por la API: `archivo_firma_en_uso`; o guardado en otro almacén), la
+   * versión sale igual con `firmaUrl` = `null` (FIRMA_NO_DISPONIBLE): nunca una URL que da 404. El
+   * contrato exige una cadena; la web muestra «la firma no carga» (ver el reporte del Sprint 4).
+   */
   private async vista(
     tx: TransaccionConecta,
     ctx: ContextoPedido,
@@ -287,17 +298,25 @@ export class AnamnesisService {
         bucket: archivo.bucket,
         ruta: archivo.ruta,
         nombreOriginal: archivo.nombreOriginal,
+        deletedAt: archivo.deletedAt,
       })
       .from(archivo)
       .where(and(eq(archivo.clinicaId, ctx.clinicaId), eq(archivo.id, guardada.firmaArchivoId)));
-    // La base exige que la firma exista (FK) y sea de este paciente: si falta, es un error nuestro.
-    if (!fila || fila.almacen !== this.almacen.nombre) {
-      this.registro.error('anamnesis_firma_inaccesible', {
+    await registrarEvento(tx, { accion: 'ver', entidad: 'anamnesis', entidadId: guardada.id });
+    const motivo = !fila
+      ? 'sin_fila'
+      : fila.deletedAt
+        ? 'dada_de_baja'
+        : fila.almacen !== this.almacen.nombre
+          ? 'otro_almacen'
+          : null;
+    if (!fila || motivo) {
+      this.registro.advertencia('anamnesis_firma_no_disponible', {
         anamnesis: guardada.id,
         archivo: guardada.firmaArchivoId,
-        motivo: fila ? 'otro_almacen' : 'sin_fila',
+        motivo,
       });
-      throw errores.interno();
+      return anamnesisSchema.parse({ ...guardada, firmaUrl: FIRMA_NO_DISPONIBLE });
     }
     // Segundos enteros: el vencimiento firmado es el mismo que en `GET /archivos/:id/url`.
     const venceEn = new Date((Math.floor(Date.now() / 1000) + VIGENCIA_URL_SEGUNDOS) * 1000);
@@ -312,7 +331,6 @@ export class AnamnesisService {
       },
       venceEn,
     );
-    await registrarEvento(tx, { accion: 'ver', entidad: 'anamnesis', entidadId: guardada.id });
     await registrarEvento(tx, {
       accion: 'ver',
       entidad: 'archivo',
@@ -324,33 +342,21 @@ export class AnamnesisService {
   }
 
   /**
-   * Después de una transacción fallida que llegó a subir la firma. Si el error saltó antes del
-   * COMMIT (`terminado` = false) la base no registró nada y el objeto se borra. Si saltó en el
-   * COMMIT, puede que la base sí lo haya guardado: se borra solo si otra transacción confirma que
-   * el archivo no existe; si no se puede saber, queda (ver la cabecera).
+   * Después de una transacción fallida que llegó a subir la firma. Solo si el error saltó ANTES
+   * del COMMIT (`terminado` = false) es seguro que la base no registró nada, y el objeto se borra.
+   * Si saltó en el COMMIT, no se borra: puede que la versión sí haya quedado (o se esté
+   * confirmando, y una consulta de control todavía no la vería). Queda en el registro, sin datos
+   * clínicos, para revisarlo a mano.
    */
   private async compensar(
-    ctx: ContextoPedido,
     archivoId: string,
     ubicacion: Ubicacion,
     terminado: boolean,
   ): Promise<void> {
-    let borrar = !terminado;
     if (terminado) {
-      try {
-        const filas = await this.bd.enContexto(ctx, (tx) =>
-          tx
-            .select({ id: archivo.id })
-            .from(archivo)
-            .where(and(eq(archivo.clinicaId, ctx.clinicaId), eq(archivo.id, archivoId))),
-        );
-        borrar = filas.length === 0;
-      } catch {
-        this.registro.advertencia('firma_compensacion_omitida', { archivo: archivoId });
-        return;
-      }
+      this.registro.advertencia('firma_commit_dudoso', { archivo: archivoId });
+      return;
     }
-    if (!borrar) return;
     await this.almacen.borrar(ubicacion).catch((error: unknown) => {
       this.registro.error('archivo_compensacion_fallida', {
         archivo: archivoId,

@@ -225,8 +225,8 @@ export const anamnesisSchema = anamnesisResumenSchema.extend({
   respuestas: z.array(respuestaGuardadaSchema),
   signosVitales: signosVitalesSchema,
   alertasMedicas: z.array(alertaMedicaSchema),
-  /** URL firmada de la imagen de la firma (vence en 5 minutos). */
-  firmaUrl: z.string(),
+  /** URL firmada de la imagen de la firma (vence en 5 minutos); null si la imagen no está disponible. */
+  firmaUrl: z.string().nullable(),
   esVigente: z.boolean(),
 });
 export type Anamnesis = z.infer<typeof anamnesisSchema>;

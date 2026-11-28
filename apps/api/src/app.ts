@@ -2,6 +2,7 @@ import type { NestApplicationOptions } from '@nestjs/common';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import type { NextFunction, Request, Response } from 'express';
 import helmet from 'helmet';
+import { VERIFICADOR_JWT, tokenDeCabecera, type VerificadorJwt } from './auth/verificador-jwt.js';
 import { CONFIG, type Config } from './config.js';
 import { limitePedidos } from './comun/limite-pedidos.js';
 import { asignarIdPedido } from './comun/pedido.js';
@@ -17,8 +18,10 @@ export const LIMITE_CUERPO = '64kb';
 /**
  * Límite de las dos rutas del Sprint 4 que mandan más: `POST /pacientes/:id/anamnesis` (la firma
  * en PNG llega en base64, hasta 420.000 caracteres, más hasta 200 respuestas) y
- * `PUT /anamnesis/preguntas` (hasta 200 preguntas con sus opciones y alertas). El resto sigue con
- * `LIMITE_CUERPO`.
+ * `PUT /anamnesis/preguntas` (hasta 500 preguntas con sus opciones y alertas). Solo para pedidos
+ * con un token VÁLIDO (revisión del Sprint 4): sin token, o con uno que no verifica, el cuerpo
+ * pasa por el parser común de `LIMITE_CUERPO` (413 si es grande; si es chico, el guard responde
+ * 401). Así nadie sin sesión hace leer a la API un megabyte.
  */
 export const LIMITE_CUERPO_ANAMNESIS = '1mb';
 
@@ -26,14 +29,50 @@ const RUTA_GUARDAR_ANAMNESIS = new RegExp(`^/${PREFIJO_API}/pacientes/[^/]+/anam
 const RUTA_CATALOGO_ANAMNESIS = new RegExp(`^/${PREFIJO_API}/anamnesis/preguntas/?$`);
 const ES_JSON = /^application\/json\s*(;|$)/i;
 
-/** ¿Este pedido usa el límite grande? Solo JSON y solo esas dos rutas con su método. */
-function cuerpoDeAnamnesis(req: Request): boolean {
-  const tipo = req.headers['content-type'];
-  if (typeof tipo !== 'string' || !ES_JSON.test(tipo)) return false;
+/** Pedidos a esas dos rutas cuyo token ya verificó (`autenticarCuerpoGrande`). */
+const cuerposGrandes = new WeakSet<Request>();
+
+function rutaDeCuerpoGrande(req: Request): boolean {
   return (
     (req.method === 'POST' && RUTA_GUARDAR_ANAMNESIS.test(req.path)) ||
     (req.method === 'PUT' && RUTA_CATALOGO_ANAMNESIS.test(req.path))
   );
+}
+
+/**
+ * Antes de leer el cuerpo de esas rutas: verifica el token con el mismo verificador del guard
+ * (JWKS). Si no verifica, no responde nada acá: el pedido sigue con el límite común y el guard
+ * responde lo que corresponda (401, 503…). El guard vuelve a verificarlo igual (membresía,
+ * sesión, permiso).
+ */
+function autenticarCuerpoGrande(verificador: VerificadorJwt) {
+  return (req: Request, _res: Response, next: NextFunction): void => {
+    if (!rutaDeCuerpoGrande(req)) {
+      next();
+      return;
+    }
+    let token: string;
+    try {
+      token = tokenDeCabecera(req.headers.authorization);
+    } catch {
+      next();
+      return;
+    }
+    verificador.verificar(token).then(
+      () => {
+        cuerposGrandes.add(req);
+        next();
+      },
+      () => next(),
+    );
+  };
+}
+
+/** ¿Este pedido usa el límite grande? Solo JSON, solo esas dos rutas y con token válido. */
+function cuerpoDeAnamnesis(req: Request): boolean {
+  const tipo = req.headers['content-type'];
+  if (typeof tipo !== 'string' || !ES_JSON.test(tipo)) return false;
+  return cuerposGrandes.has(req) && rutaDeCuerpoGrande(req);
 }
 
 /**
@@ -112,6 +151,7 @@ export function configurarApp(app: NestExpressApplication): NestExpressApplicati
     }),
   );
   app.use(fueraDelPrefijo);
+  app.use(autenticarCuerpoGrande(app.get<VerificadorJwt>(VERIFICADOR_JWT)));
   // Primero el de las rutas de anamnesis (deja el cuerpo leído y el siguiente no lo vuelve a leer).
   app.useBodyParser('json', {
     limit: LIMITE_CUERPO_ANAMNESIS,

@@ -17,7 +17,7 @@ import {
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { z } from 'zod';
 import { configLocal } from './archivos-ayudas.js';
-import { cuerpoAnamnesis } from './anamnesis-ayudas.js';
+import { cuerpoAnamnesis, huellaDe } from './anamnesis-ayudas.js';
 import {
   crearClinica,
   crearPersona,
@@ -123,7 +123,7 @@ const CASOS: Caso[] = [
     metodo: 'post',
     preparar: async (c) => ({
       ruta: `/pacientes/${await paciente(prueba, c)}/anamnesis`,
-      cuerpo: cuerpoAnamnesis(),
+      cuerpo: cuerpoAnamnesis(await huellaDe(prueba, tokens.dueno)),
     }),
     estadoOk: 201,
     esquema: anamnesisSchema,
